@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Reality Room</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🍄</text></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <!-- Everything below is DOM chrome. It is deliberately minimal: the world is
+         the interface, and any panel that stays on screen during a trip becomes a
+         reference frame the eye can hold onto. -->
+    <div id="ui">
+      <div id="crosshair" aria-hidden="true"></div>
+
+      <div id="prompt" class="prompt" hidden></div>
+
+      <div id="phase" class="phase" hidden>
+        <span id="phase-label"></span>
+        <div id="phase-bar"><i></i></div>
+      </div>
+
+      <div id="toast" class="toast" hidden></div>
+
+      <!-- The jukebox's paste-a-link box. Same shape as the chat form below —
+           appears only while typing, gone otherwise. See src/ui/jukebox-input.js. -->
+      <form id="jukebox-form" class="jukebox-form" hidden autocomplete="off">
+        <input id="jukebox-input" type="url" inputmode="url" placeholder="paste a youtube link…" />
+      </form>
+
+      <!-- The social layer. Every part of it is transient by design: the log
+           fades on its own, the roster exists only while Tab is held, and the
+           share bar is drawn only when there is something to say. See the
+           header of src/ui/social.js for why that rule is not negotiable. -->
+      <div id="social">
+        <div id="chat-log" aria-live="polite"></div>
+        <form id="chat-form" hidden autocomplete="off">
+          <input id="chat-input" type="text" placeholder="say something…" />
+        </form>
+        <div id="share-bar" hidden></div>
+      </div>
+
+      <div id="roster" hidden>
+        <div id="roster-head"></div>
+        <div id="roster-body"></div>
+      </div>
+
+      <!-- Filled by src/ui/hud.js from src/core/keys.js, and deliberately not
+           written out here. It used to be, with fourteen items on one nowrap
+           line — a sixth hand-maintained copy of facts that live in five other
+           files, which had already drifted from all of them: it named `~` for a
+           panel that opens on backtick and never mentioned Space, Q, X, C, the
+           scroll wheel or dropping a film in. The full list is a page of the
+           settings menu now; what stays on the glass is the four or five keys
+           you need in the first ten seconds. -->
+      <div id="help" class="help"></div>
+    </div>
+
+    <!-- The main menu.
+
+         WRITTEN OUT HERE RATHER THAN BUILT BY ITS MODULE, which is the opposite
+         of every other panel in this project — the settings menu, the debug
+         panel and the stats overlay all build their own DOM. The difference is
+         that this one is the first thing anybody sees. Markup in the document
+         paints on the first frame the browser manages, before a single module
+         has been fetched; markup built in JavaScript cannot appear until its
+         module has run, and the module next to it builds an entire forest during
+         evaluation. That is a title card sitting empty for several hundred
+         milliseconds, on the one screen where there is nothing else to look at.
+
+         `#gate` and `#enter` keep their ids and their jobs. Some thirty scripts
+         in scripts/ click `#enter` and wait for `#gate.gone`, and every default
+         below is chosen so that a bare click still means exactly what it used
+         to: your saved name, no room, this world, whatever hour it happens to
+         be. See src/ui/menu.js. -->
+    <div id="gate" class="gate">
+      <div class="gate-inner">
+        <header class="gate-head">
+          <h1>Reality&nbsp;Room</h1>
+          <p class="sub">A forest, a jukebox, and whatever happens next.</p>
+        </header>
+
+        <div class="menu">
+          <section class="menu-card">
+            <h2>You</h2>
+
+            <label class="menu-field" for="menu-name">
+              <span class="menu-label">Name</span>
+              <span class="menu-inline">
+                <input
+                  id="menu-name"
+                  type="text"
+                  maxlength="20"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="quiet fern"
+                />
+                <button id="menu-name-roll" type="button" class="menu-ghost" title="Another name">
+                  ⟳
+                </button>
+              </span>
+            </label>
+
+            <div class="menu-field">
+              <span class="menu-label">Dye</span>
+              <div id="menu-dyes" class="menu-dyes"></div>
+              <p id="menu-dye-note" class="menu-note"></p>
+            </div>
+
+            <!-- The same body the room will see, dyed by the same one number.
+                 Drawn rather than rendered: a second WebGL context for a preview
+                 would compile its own copy of every program on the one screen
+                 whose whole job is to stay still while the real ones compile.
+                 See the note in src/ui/menu.js. -->
+            <div class="menu-figure" aria-hidden="true">
+              <svg id="menu-avatar" viewBox="0 0 80 120">
+                <defs>
+                  <!-- The aura is a fresnel in the real thing: brightest at the
+                       silhouette, invisible through the middle, so it reads as
+                       light leaving a head rather than as a ball painted over
+                       one. A flat disc would read as the second. The stop
+                       colours are written by menu.js along with everything
+                       else. -->
+                  <radialGradient id="mav-aura-fill">
+                    <stop id="mav-aura-in" offset="54%" stop-opacity="0" />
+                    <stop id="mav-aura-mid" offset="88%" stop-opacity="0.45" />
+                    <stop id="mav-aura-out" offset="100%" stop-opacity="0" />
+                  </radialGradient>
+                </defs>
+                <ellipse id="mav-shadow" cx="40" cy="113" rx="18" ry="4" />
+                <circle cx="40" cy="23" r="21" fill="url(#mav-aura-fill)" />
+                <rect id="mav-leg-l" x="31" y="66" width="8" height="43" rx="4" />
+                <rect id="mav-leg-r" x="41" y="66" width="8" height="43" rx="4" />
+                <rect id="mav-arm-l" x="22" y="41" width="7" height="33" rx="3.5" />
+                <rect id="mav-arm-r" x="51" y="41" width="7" height="33" rx="3.5" />
+                <rect id="mav-torso" x="26" y="35" width="28" height="38" rx="14" />
+                <!-- Hood behind head, so what you see is a face inside a dark
+                     opening — which is the cue the real one is built around, and
+                     it is a VALUE difference rather than a hue one, so it
+                     survives every dye on the chart. Offset upward, so the ring
+                     is thick over the crown and thin under the chin: a hood, not
+                     a helmet. -->
+                <circle id="mav-hood" cx="40" cy="21.6" r="14.6" />
+                <circle id="mav-head" cx="40" cy="23" r="11.4" />
+              </svg>
+            </div>
+          </section>
+
+          <section class="menu-card">
+            <h2>Where</h2>
+
+            <div class="menu-field">
+              <span class="menu-label">Company</span>
+              <div id="menu-company" class="menu-segment">
+                <button type="button" data-mode="alone">On your own</button>
+                <button type="button" data-mode="host">Open a lobby</button>
+                <button type="button" data-mode="join">Join a lobby</button>
+              </div>
+            </div>
+
+            <!-- One field, two jobs: the code you were given, or the code you
+                 are giving out. They are the same nine characters and putting
+                 them in the same place is what makes that obvious. -->
+            <label class="menu-field" id="menu-code-field" for="menu-code" hidden>
+              <span class="menu-label" id="menu-code-label">Lobby code</span>
+              <span class="menu-inline">
+                <input
+                  id="menu-code"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="11"
+                  placeholder="pxk-mwe-q7t"
+                />
+                <button id="menu-code-copy" type="button" class="menu-ghost" hidden>Copy</button>
+              </span>
+            </label>
+            <p id="menu-company-note" class="menu-note"></p>
+
+            <label class="menu-field" for="menu-seed">
+              <span class="menu-label">Wood</span>
+              <span class="menu-inline">
+                <input
+                  id="menu-seed"
+                  type="text"
+                  maxlength="64"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <button id="menu-seed-roll" type="button" class="menu-ghost" title="Somewhere else">
+                  ⟳
+                </button>
+              </span>
+            </label>
+            <p id="menu-seed-note" class="menu-note"></p>
+
+            <div class="menu-field">
+              <span class="menu-label">Arrive at</span>
+              <div id="menu-arrivals" class="menu-segment"></div>
+              <p id="menu-arrival-note" class="menu-note"></p>
+            </div>
+          </section>
+        </div>
+
+        <div class="gate-go">
+          <button id="enter" type="button">Enter the forest</button>
+          <button id="menu-settings" type="button" class="menu-ghost menu-wide">Settings</button>
+        </div>
+
+        <p class="fine">
+          Headphones recommended. Contains slow motion, colour shift and low-frequency sound.
+          Press <kbd>N</kbd> at any time to come straight back.
+          <kbd>Esc</kbd> opens the settings, and every key is listed under Controls.
+        </p>
+      </div>
+    </div>
+
+    <!-- BEFORE main.js, deliberately.
+
+         main.js builds the whole forest during module evaluation, so anything
+         loaded after it waits for that. The menu has to be usable while the
+         world is being made — that is the entire point of a title screen — so
+         its wiring goes first. It costs nothing to put it there: this module
+         imports `core/identity.js` and `core/world-seed.js` and nothing else,
+         neither of which pulls in three or touches the scene. -->
+    <script type="module" src="/src/ui/menu.js"></script>
+    <script type="module" src="/src/main.js"></script>
+    <!-- Module scripts run in document order, so this sees a fully evaluated
+         main.js and the `window.RR` handle it publishes.
+
+         The menu is loaded here rather than imported by main.js so that it
+         cannot be on the critical path to a first frame: the two meet in
+         src/core/quality.js, which is a module singleton and therefore the same
+         registry object in both. main.js claims every knob before this runs. -->
+    <script type="module" src="/src/ui/settings.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+dist-perf/
+.shots/
+# Measurements, but NOT .perf/baseline.json — see the negation below. A baseline
+# is a claim about how fast this game is, and a claim like that belongs in the
+# history next to the code it describes; everything else in here is one run's
+# working out.
+.perf/*
+!.perf/baseline.json
+.vite.log
+*.local
+
+# The TURN API token lives here. It is long-lived and can mint unlimited relay
+# credentials on your account, so it must never be committed — see .env.example,
+# which is the file that IS committed.
+.env
+.env.*
+!.env.example

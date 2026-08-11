@@ -1,0 +1,1386 @@
+:root {
+  --ink: #f2ece0;
+  --dim: rgba(242, 236, 224, 0.55);
+  --panel: rgba(12, 16, 13, 0.62);
+  --edge: rgba(242, 236, 224, 0.14);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #05070a;
+  color: var(--ink);
+  font: 400 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---- crosshair ----------------------------------------------------------
+   A dot rather than a cross. A cross is a hard cluster of straight lines in the
+   exact centre of the frame, which is the one place a trip must not have a fixed
+   man-made reference. */
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+body.locked #crosshair {
+  opacity: 1;
+}
+
+.prompt {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(6px);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.prompt kbd {
+  font: inherit;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 12%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(6px);
+  font-size: 13px;
+  max-width: min(78ch, 92vw);
+  text-align: center;
+  transition: opacity 0.5s ease;
+}
+.toast[hidden] {
+  display: none;
+}
+.toast.fading {
+  opacity: 0;
+}
+
+.jukebox-form {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.jukebox-form[hidden] {
+  display: none;
+}
+#jukebox-input {
+  width: min(52ch, 80vw);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(242, 236, 224, 0.3);
+  background: rgba(12, 16, 13, 0.82);
+  color: var(--ink);
+  backdrop-filter: blur(8px);
+  text-align: center;
+}
+#jukebox-input:focus {
+  outline: none;
+  border-color: rgba(242, 236, 224, 0.55);
+}
+
+/* ---- phase readout ------------------------------------------------------ */
+.phase {
+  position: absolute;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  width: 200px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: opacity 0.8s ease;
+}
+#phase-bar {
+  margin-top: 6px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+#phase-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Five items, drawn from src/core/keys.js — see the block comment in
+   src/ui/hud.js. It stays `nowrap` because a second line of persistent chrome
+   is twice the reference frame the trip must not be given, and it is now short
+   enough that nowrap is a promise rather than a hope; the clip is the belt to
+   that braces, so a narrow window loses the end of the line instead of painting
+   over the whole bottom edge of the world. */
+.help {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 28px);
+  font-size: 11px;
+  color: rgba(242, 236, 224, 0.34);
+  letter-spacing: 0.01em;
+  transition: opacity 0.6s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.locked .help {
+  opacity: 0.35;
+}
+.help kbd {
+  font: inherit;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.help .key-or {
+  font-style: normal;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+
+/* ---- entry gate, which is also the main menu -----------------------------
+   The one panel in this project allowed to be a full page of chrome, and for the
+   same reason the settings menu is: you are not looking at the forest while it
+   is up, and the instant it goes it is `visibility: hidden` and out of the
+   hit-testing entirely. See the header of src/ui/menu.js. */
+.gate {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /* Scrollable rather than clipped: this is a two-column panel now, and a short
+     laptop window in landscape is a real machine somebody will open it on. The
+     padding is what keeps the panel off the edges once it does scroll. */
+  overflow: auto;
+  padding: 24px 16px;
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(24, 40, 28, 0.55), rgba(4, 6, 8, 0.94)),
+    #05070a;
+  z-index: 10;
+  transition: opacity 0.9s ease, visibility 0.9s;
+}
+.gate.gone {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.gate-inner {
+  text-align: center;
+  width: min(720px, 100%);
+}
+.gate-head {
+  margin-bottom: 22px;
+}
+.gate h1 {
+  margin: 0 0 6px;
+  font-size: clamp(28px, 5.4vw, 48px);
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.gate .sub {
+  margin: 0;
+  color: var(--dim);
+}
+#enter {
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  padding: 12px 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.3);
+  background: rgba(242, 236, 224, 0.06);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
+}
+#enter:hover {
+  background: rgba(242, 236, 224, 0.13);
+  border-color: rgba(242, 236, 224, 0.5);
+  transform: translateY(-1px);
+}
+.gate-go {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 22px;
+}
+.gate .fine {
+  margin: 20px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: rgba(242, 236, 224, 0.42);
+}
+.gate .fine kbd {
+  font: inherit;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* ---- the menu itself ----------------------------------------------------- */
+.menu {
+  display: grid;
+  /* Two cards where there is room, one where there is not. `auto-fit` rather
+     than a media query so the breakpoint is a property of the content — the
+     cards stop being readable somewhere under 260px and that is where they
+     stack, whatever the device happens to call itself. */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  text-align: left;
+}
+.menu-card {
+  padding: 16px 18px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--edge);
+  background: rgba(10, 14, 12, 0.5);
+  backdrop-filter: blur(8px);
+}
+.menu-card h2 {
+  margin: 0 0 14px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.menu-field {
+  display: block;
+  margin-bottom: 14px;
+}
+.menu-field[hidden] {
+  display: none;
+}
+.menu-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: rgba(242, 236, 224, 0.62);
+}
+.menu-inline {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.menu input[type='text'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 236, 224, 0.22);
+  background: rgba(4, 6, 8, 0.55);
+  color: var(--ink);
+}
+.menu input[type='text']:focus {
+  outline: none;
+  border-color: rgba(242, 236, 224, 0.5);
+}
+.menu input[type='text']:read-only {
+  color: rgba(242, 236, 224, 0.8);
+  letter-spacing: 0.08em;
+}
+.menu input[type='text']::placeholder {
+  color: rgba(242, 236, 224, 0.26);
+}
+.menu-note {
+  margin: 6px 0 0;
+  min-height: 1.5em;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(242, 236, 224, 0.42);
+}
+/* A note that is a sibling of the fields rather than inside one has to carry the
+   gap the field it belongs to would have carried. Without it the lobby and wood
+   notes butt straight into the next label, which reads as the note belonging to
+   the thing BELOW it — precisely backwards. The reserved `min-height` above
+   means the gap does not appear and disappear as notes come and go. */
+.menu-card > .menu-note {
+  margin-bottom: 14px;
+}
+
+/* A quiet button: the roll-again arrows, Copy, and the way through to the
+   settings. Nothing here competes with `#enter`, which is the one thing on this
+   screen anybody has to find. */
+.menu-ghost {
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 236, 224, 0.2);
+  background: rgba(242, 236, 224, 0.04);
+  color: rgba(242, 236, 224, 0.72);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.menu-ghost:hover {
+  background: rgba(242, 236, 224, 0.1);
+  border-color: rgba(242, 236, 224, 0.4);
+  color: var(--ink);
+}
+.menu-ghost[hidden] {
+  display: none;
+}
+.menu-wide {
+  padding: 11px 20px;
+  border-radius: 999px;
+}
+
+.menu-segment {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.menu-segment button {
+  font: inherit;
+  font-size: 12px;
+  flex: 1 1 auto;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 236, 224, 0.16);
+  background: rgba(242, 236, 224, 0.03);
+  color: rgba(242, 236, 224, 0.62);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.menu-segment button:hover {
+  background: rgba(242, 236, 224, 0.09);
+  color: var(--ink);
+}
+.menu-segment button.on {
+  background: rgba(242, 236, 224, 0.16);
+  border-color: rgba(242, 236, 224, 0.42);
+  color: var(--ink);
+}
+
+.menu-dyes {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.menu-dye {
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  padding: 0;
+  /* The ring is drawn with a shadow rather than a border so that choosing a
+     colour does not move the other eleven by a pixel. */
+  box-shadow: none;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.menu-dye:hover {
+  transform: translateY(-1px);
+}
+.menu-dye.on {
+  box-shadow: 0 0 0 2px rgba(242, 236, 224, 0.85);
+}
+
+/* The body, drawn rather than rendered. See `_paintFigure` in src/ui/menu.js. */
+.menu-figure {
+  display: grid;
+  place-items: center;
+  margin-top: 4px;
+  padding: 10px 0 2px;
+}
+#menu-avatar {
+  width: 84px;
+  height: auto;
+  /* The contact shadow underneath is a flat ellipse and the aura is additive
+     light; a soft drop shadow on the whole figure is what stops it reading as a
+     sticker on the panel. */
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+}
+
+/* ---- debug panel ---------------------------------------------------------
+   A five-page panel rather than one column of sixty sliders. The layout is a
+   fixed header (title + search), a tab strip, ONE scrolling body, and a fixed
+   footer of the numbers you always want — so the thing you are reading never
+   scrolls away from the thing you are dragging.
+
+   The dead-control styling is the load-bearing part: a row that cannot matter
+   right now is dimmed, its input is disabled, and the reason prints underneath
+   it in amber. See the header of src/ui/debug.js. */
+#debug {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  width: 344px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: rgba(8, 11, 10, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  font: 400 11.5px/1.45 ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  color: #d7e4d9;
+  z-index: 20;
+  pointer-events: auto;
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
+}
+#debug[hidden] {
+  display: none;
+}
+
+#debug .dbg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+#debug h2 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #8fb89a;
+  font-weight: 600;
+}
+#debug #dbg-filter {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e8f3ea;
+}
+#debug #dbg-filter::placeholder {
+  color: #5f7367;
+}
+#debug #dbg-filter:focus {
+  outline: none;
+  border-color: rgba(127, 216, 160, 0.6);
+}
+
+#debug .dbg-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* While the search box has anything in it the tab strip is not what decides
+   what you can see, and saying so is one line. */
+#debug .dbg-tabs.searching {
+  opacity: 0.4;
+}
+
+#debug .dbg-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 4px 12px 10px;
+}
+
+#debug .dbg-section {
+  padding: 8px 0 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+#debug .dbg-section:first-child {
+  border-top: 0;
+}
+#debug .dbg-section > h3,
+#debug .dbg-section > summary,
+#debug .dbg-subfold > summary {
+  margin: 0 0 5px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7f9a88;
+  font-weight: 600;
+}
+#debug summary {
+  cursor: pointer;
+  list-style: none;
+}
+#debug summary::before {
+  content: '▸ ';
+  color: #5f7367;
+}
+#debug details[open] > summary::before {
+  content: '▾ ';
+}
+#debug .dbg-subfold {
+  margin: 4px 0 2px;
+}
+
+#debug .dbg-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 3px 0;
+}
+#debug .dbg-row > label {
+  flex: 0 0 104px;
+  color: #93a89a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#debug .dbg-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #7fd8a0;
+}
+#debug .dbg-val {
+  flex: 0 0 62px;
+  text-align: right;
+  color: #e8f3ea;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A sound knob away from the value in tuning.js. The panel is the only place
+   the two can disagree, so it is the only place that has to say so. */
+#debug .dbg-val.changed {
+  color: #ffd479;
+  font-weight: 600;
+}
+/* Readouts are sentences, not numbers: they get the whole width and they wrap.
+   Ellipsis on a readout hides the end of the one line in the panel whose entire
+   job is to tell you something. */
+#debug .dbg-readout .dbg-val {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  color: #cfe0d4;
+  white-space: normal;
+  overflow: visible;
+}
+
+#debug .dbg-bar {
+  flex: 1;
+  height: 6px;
+  min-width: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+#debug .dbg-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4f9e78, #7fd8a0);
+}
+
+#debug .dbg-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 3), 1fr);
+  gap: 3px;
+  margin: 5px 0;
+}
+#debug button {
+  font: inherit;
+  padding: 5px 4px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d7e4d9;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#debug button:hover:not(:disabled) {
+  background: rgba(127, 216, 160, 0.16);
+  border-color: rgba(127, 216, 160, 0.5);
+}
+#debug button.on {
+  background: rgba(127, 216, 160, 0.24);
+  border-color: rgba(127, 216, 160, 0.7);
+  color: #eafff0;
+}
+/* A layer with nothing in it right now — see `dim` in _ensureLayers. Neither on
+   nor off, because there is nothing there to be either. */
+#debug button.dim {
+  opacity: 0.42;
+}
+#debug .dbg-toggle {
+  flex: 0 0 46px;
+}
+#debug .dbg-segment {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+}
+#debug .dbg-segment > button {
+  flex: 1;
+  padding: 4px 2px;
+}
+
+#debug .dbg-note {
+  margin: 0 0 6px;
+  color: #6f8577;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* ---- a control that cannot matter right now ------------------------------
+   Disabled rather than merely faded: a greyed control you can still click is
+   the exact bug this styling exists to describe. */
+#debug .dbg-row.dead > label,
+#debug .dbg-row.dead .dbg-val {
+  color: #5f7367;
+}
+#debug .dbg-row.dead input[type='range'] {
+  accent-color: #52655a;
+}
+/* The reason a control is dead, under it and indented to the control's own
+   column. PADDING rather than a margin: a 100% flex basis plus a left margin is
+   wider than the row, and the end of every sentence fell off the panel. */
+#debug .dbg-why {
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  margin: 0 0 3px;
+  padding-left: 110px;
+  color: #b89a5e;
+  font-size: 10px;
+  line-height: 1.4;
+}
+#debug .dbg-why:empty {
+  display: none;
+}
+/* The same caption under a row of BUTTONS. It is a child of the grid, so it has
+   to span every column, and it has no label column to indent past. */
+#debug .dbg-grid > .dbg-why {
+  grid-column: 1 / -1;
+  padding-left: 0;
+  margin: 1px 0 0;
+}
+
+#debug .dbg-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.25);
+  color: #9fbcaa;
+  font-size: 10.5px;
+}
+#debug .dbg-foot em {
+  font-style: normal;
+  color: #7fd8a0;
+}
+
+/* ---- performance stats ---------------------------------------------------
+   Opt-in from Settings → Stats, off by default. The only other piece of
+   chrome that is allowed to sit on screen for the length of a session is the
+   debug panel, and this is styled as its sibling — same glass, same
+   monospace — but it lives in the opposite corner and shows far less, because
+   unlike the debug panel a player is meant to leave this one up while they
+   play rather than open it to look something up. */
+#stats {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(8, 11, 10, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  font: 400 11.5px/1.4 ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  color: #d7e4d9;
+  z-index: 20;
+  /* A pure readout, same as the phase bar and the crosshair — nothing here is
+     clickable and it must not steal a click meant for the canvas beneath it. */
+  pointer-events: none;
+}
+#stats[hidden] {
+  display: none;
+}
+#stats .stats-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+#stats .stats-row b {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8f3ea;
+}
+#stats .stats-row span {
+  color: #6f8577;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-right: 7px;
+}
+#stats .stats-row span:last-child {
+  margin-right: 0;
+}
+#stats canvas {
+  display: block;
+  border-radius: 5px;
+}
+
+/* ---- settings menu -------------------------------------------------------
+   The one piece of chrome in this project that is allowed to be a full panel,
+   because it is modal and transient — while it is up you are not looking at
+   the forest, and `[hidden]` takes it out of the document entirely the instant
+   it closes. There is no persistent settings button anywhere.
+
+   It is styled as the entry gate rather than as the debug panel: same ink,
+   same edge, same pill buttons, same uppercase letter-spaced headings, the
+   same sans face. The player should read them as two states of one object,
+   and the debug panel as something else that belongs to somebody else. */
+#settings {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  font: inherit;
+}
+#settings[hidden] {
+  display: none;
+}
+/* The HUD goes with it. The crosshair is a bright dot in the exact centre of
+   the frame and the scrim is only partly opaque, so leaving it up puts a
+   man-made point of light in the middle of a dialog for no reason. */
+body.settings-open #ui {
+  opacity: 0;
+}
+/* Lighter than the gate's scrim on purpose. The gate is a door and hides what
+   is behind it; this is a pause, and leaving the wood dimly legible behind it
+   is what keeps it feeling like an overlay rather than a second screen. */
+.set-scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 50% 45%, rgba(10, 18, 13, 0.62), rgba(4, 6, 8, 0.86));
+  backdrop-filter: blur(7px);
+}
+.set-panel {
+  position: relative;
+  /* 560 of content plus the 26 of padding either side. The body is one
+     column now, so anything wider is dead panel to the right of every
+     value — which reads as a layout that lost something. */
+  width: min(614px, calc(100vw - 32px));
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  padding: 22px 26px 18px;
+  border-radius: 16px;
+  background: rgba(10, 14, 12, 0.72);
+  border: 1px solid var(--edge);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  outline: none;
+}
+
+.set-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.set-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 300;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.set-close {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.24);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.set-close:hover {
+  color: var(--ink);
+  border-color: rgba(242, 236, 224, 0.5);
+}
+
+/* ---- the tab strip -------------------------------------------------------
+   Four rooms, not five headings on one scroll. See the PAGES comment in
+   src/ui/settings.js for the argument; what the CSS has to add is that the
+   selected tab is marked by a LINE UNDER IT rather than by a fill. The preset
+   row directly below is five pill buttons of which one is filled green, and two
+   rows of pills with a different one lit in each is a genuinely confusing
+   thing to look at — the eye reads them as one control with two selections. */
+.set-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+.set-tab {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  padding: 7px 13px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: rgba(242, 236, 224, 0.42);
+  cursor: pointer;
+  transition: color 0.16s ease, border-color 0.16s ease;
+  /* The strip must not reflow when the selection moves, and it would: the
+     selected tab is brighter, and on most faces brighter is not the same
+     width. */
+  margin-bottom: -1px;
+}
+.set-tab:hover {
+  color: rgba(242, 236, 224, 0.8);
+}
+.set-tab.on {
+  color: #eafff0;
+  border-bottom-color: rgba(160, 214, 176, 0.75);
+}
+
+.set-body {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-right: 4px;
+}
+.set-page[hidden] {
+  display: none;
+}
+/* One column and a readable measure. The old two-column grid put Sound beside
+   Graphics because there were nineteen rows to fit; with four pages there are
+   never more than seven, and a settings row whose label, control and value are
+   440 px apart is harder to read than one where they are not. */
+.set-page {
+  max-width: 560px;
+}
+
+/* ---- the Advanced fold ---------------------------------------------------
+   Shut by default and styled as quiet as a control can be while still being
+   obviously clickable. Everything behind it still works, still persists and is
+   still reachable in one click — this is about what the panel says FIRST. */
+.set-advanced {
+  margin-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 4px;
+}
+.set-advanced[hidden] {
+  display: none;
+}
+.set-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(242, 236, 224, 0.42);
+}
+.set-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.set-advanced > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 7px;
+  letter-spacing: 0;
+  transition: transform 0.16s ease;
+}
+.set-advanced[open] > summary::before {
+  transform: rotate(90deg);
+}
+.set-advanced > summary:hover {
+  color: rgba(242, 236, 224, 0.78);
+}
+
+.set-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: rgba(242, 236, 224, 0.38);
+  max-width: 46em;
+}
+.set-note kbd {
+  font: inherit;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* ---- the preset row and the Auto readout --------------------------------
+   "Which mode is active" and "what Auto has currently chosen" are two
+   different questions and they get two different lines, because the whole
+   failure mode of an adaptive setting is a player who cannot tell whether the
+   machine or their last click is responsible for what they are looking at. */
+.set-presets {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.set-preset {
+  font: inherit;
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+  padding: 8px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.2);
+  background: rgba(242, 236, 224, 0.04);
+  color: var(--dim);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.set-preset:hover {
+  background: rgba(242, 236, 224, 0.1);
+  color: var(--ink);
+}
+.set-preset.on {
+  background: rgba(160, 214, 176, 0.18);
+  border-color: rgba(160, 214, 176, 0.6);
+  color: #eafff0;
+}
+.set-mode {
+  margin: 11px 0 14px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.set-mode.custom {
+  color: rgba(242, 236, 224, 0.72);
+}
+/* The governor's own decision variables, filed with the knobs you would be
+   reading them in order to move rather than under the buttons a player came
+   here to press. See _paintStatus in src/ui/settings.js. */
+.set-detail {
+  margin: 12px 0 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(242, 236, 224, 0.38);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.4em;
+}
+
+/* ---- one control -------------------------------------------------------- */
+.set-row {
+  display: grid;
+  grid-template-columns: 118px 1fr 54px;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+.set-label {
+  font-size: 12.5px;
+  color: rgba(242, 236, 224, 0.72);
+}
+.set-control {
+  display: flex;
+  min-width: 0;
+}
+.set-value {
+  font-size: 11.5px;
+  text-align: right;
+  color: rgba(242, 236, 224, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+.set-row input[type='range'] {
+  width: 100%;
+  min-width: 0;
+  accent-color: #a0d6b0;
+  cursor: pointer;
+}
+.set-toggle,
+.set-segment button {
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.18);
+  background: rgba(242, 236, 224, 0.04);
+  color: var(--dim);
+  cursor: pointer;
+}
+.set-toggle:hover,
+.set-segment button:hover {
+  color: var(--ink);
+  border-color: rgba(242, 236, 224, 0.4);
+}
+.set-toggle.on,
+.set-segment button.on {
+  background: rgba(160, 214, 176, 0.18);
+  border-color: rgba(160, 214, 176, 0.55);
+  color: #eafff0;
+}
+.set-segment {
+  gap: 5px;
+}
+
+/* A knob nobody registered, and a knob whose dependency is switched off. Two
+   different states with the same visual weight: neither is broken, both are
+   simply not able to matter right now. `unwired` keeps its cursor as a
+   help cursor so the tooltip explaining why is discoverable. */
+.set-row.unwired .set-label,
+.set-row.unwired .set-value {
+  color: rgba(242, 236, 224, 0.24);
+}
+.set-row.unwired {
+  cursor: help;
+}
+.set-row.inert {
+  opacity: 0.42;
+}
+.set-row input:disabled,
+.set-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+/* Opacity alone is not enough on a range input: the accent colour survives it
+   and a disabled slider still reads as a filled green bar, which is exactly the
+   thing it must not look like. */
+.set-row input[type='range']:disabled {
+  filter: grayscale(1);
+}
+
+/* ---- the controls reference ----------------------------------------------
+   Rendered from src/core/keys.js, never typed. The key column is fixed so the
+   caps line up down the page: a list of shortcuts whose left edge moves with
+   the length of each binding is a list you have to read rather than scan, and
+   scanning is the entire reason somebody opened this page. */
+.set-keys-list {
+  margin-top: 20px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.set-keys-head {
+  margin: 20px 0 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(242, 236, 224, 0.42);
+}
+.set-keys-head:first-child {
+  margin-top: 10px;
+}
+.set-keys-row {
+  display: grid;
+  /* Wide enough for the widest cap group — `W` `A` `S` `D` — and no wider. The
+     gap between a key and what it does is the thing the eye has to jump, and
+     30 px of it for the sake of a row that no longer exists is 30 px of jump on
+     every other row. */
+  grid-template-columns: 124px 1fr;
+  align-items: baseline;
+  gap: 12px;
+  padding: 3px 0;
+}
+.set-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+.set-keys kbd {
+  font: inherit;
+  font-size: 11px;
+  min-width: 1.55em;
+  padding: 2px 5px;
+  text-align: center;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom-width: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(242, 236, 224, 0.86);
+}
+/* "any of these" versus "these together". W A S D is one gesture; Enter or T
+   is two ways to make the same one, and drawing both as a bare row of caps is
+   what made the strip this replaced read as fourteen unrelated letters. */
+.key-or {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: rgba(242, 236, 224, 0.3);
+  padding: 0 1px;
+}
+.set-keys-what {
+  font-size: 12.5px;
+  color: rgba(242, 236, 224, 0.78);
+}
+.set-keys-note {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(242, 236, 224, 0.36);
+}
+
+/* ---- focus, which this panel had none of --------------------------------
+   It is opened by a key, at a moment when pointer lock has just been broken
+   and the mouse is somewhere the player was not looking. Tabbing through it
+   worked the whole time and was completely invisible. */
+#settings :is(button, input, summary):focus-visible {
+  outline: 2px solid rgba(160, 214, 176, 0.85);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.set-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: rgba(242, 236, 224, 0.34);
+}
+.set-foot button {
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(242, 236, 224, 0.2);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.set-foot button:hover {
+  color: var(--ink);
+  border-color: rgba(242, 236, 224, 0.45);
+}
+.set-foot kbd {
+  font: inherit;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+/* ---- the social layer ---------------------------------------------------
+   Chat, the roster and the share bar.
+
+   THE RULE THIS OBEYS is the one at the top of src/ui/hud.js: persistent chrome
+   is a stable man-made rectangle welded to the glass, which is the reference
+   frame a trip must not be given. So nothing here is persistent. The log fades
+   line by line, the roster exists only while Tab is held, and the share bar
+   hides itself when there is nothing to say. On a solitary walk this whole
+   layer is empty and invisible, which is the state the original rule protects.
+
+   Everything is bottom-left, away from the crosshair, the prompt and the phase
+   readout — and away from the centre of the frame, which is where the eye is
+   during a trip. */
+#social {
+  position: absolute;
+  left: 22px;
+  bottom: 76px;
+  width: min(46ch, 44vw);
+  transition: opacity 0.8s ease;
+}
+
+#chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* Newest at the bottom, growing upward, so the line you are reading never
+     moves — the alternative pushes everything down as messages arrive, which
+     makes a busy room unreadable. */
+  justify-content: flex-end;
+}
+
+.chat-line {
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(12, 16, 13, 0.5);
+  border: 1px solid rgba(242, 236, 224, 0.08);
+  backdrop-filter: blur(5px);
+  font-size: 13px;
+  line-height: 1.45;
+  /* A long message wraps rather than stretching the log across the world. */
+  overflow-wrap: anywhere;
+  transition: opacity 0.4s linear;
+  width: fit-content;
+  max-width: 100%;
+}
+.chat-line b {
+  font-weight: 600;
+}
+/* A note is something that happened rather than something somebody said, so it
+   is set the way a stage direction is. */
+.chat-note {
+  font-style: italic;
+  color: var(--dim);
+}
+.chat-system {
+  color: rgba(242, 236, 224, 0.42);
+  font-size: 12px;
+}
+
+#chat-form {
+  margin-top: 6px;
+  pointer-events: auto;
+}
+#chat-form[hidden] {
+  display: none;
+}
+#chat-input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 236, 224, 0.3);
+  background: rgba(12, 16, 13, 0.82);
+  color: var(--ink);
+  backdrop-filter: blur(8px);
+}
+#chat-input:focus {
+  outline: none;
+  border-color: rgba(242, 236, 224, 0.55);
+}
+
+#share-bar {
+  margin-top: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  width: fit-content;
+  max-width: 100%;
+  background: rgba(12, 16, 13, 0.55);
+  border: 1px solid rgba(242, 236, 224, 0.12);
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  color: var(--dim);
+}
+#share-bar[hidden] {
+  display: none;
+}
+#share-bar kbd {
+  font: inherit;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--ink);
+}
+
+/* ---- roster -------------------------------------------------------------
+   Held, not toggled. It is the densest thing on screen while it is up, which is
+   fine because it is up for as long as a finger is down. */
+#roster {
+  position: absolute;
+  right: 22px;
+  top: 22px;
+  width: 260px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(12, 16, 13, 0.72);
+  border: 1px solid var(--edge);
+  backdrop-filter: blur(9px);
+  font-size: 12.5px;
+}
+#roster[hidden] {
+  display: none;
+}
+#roster-head {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(242, 236, 224, 0.42);
+  padding-bottom: 7px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.roster-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.roster-self .roster-name {
+  color: var(--dim);
+}
+.roster-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  /* The same hue as that person's clothes — see the note in src/ui/social.js.
+     It is the only thing tying a name to a body, because avatars refuse
+     nameplates. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.roster-dot.speaking {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 9px 2px currentColor;
+}
+.roster-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.roster-state {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: rgba(242, 236, 224, 0.4);
+}

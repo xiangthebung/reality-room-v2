@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "reality-room",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite"],
+      "port": 5180
+    },
+    {
+      "name": "reality-room-perf",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/perf/build.mjs", "--serve"],
+      "port": 5182
+    },
+    {
+      "name": "reality-room-shipping",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview"],
+      "port": 5183
+    }
+  ]
+}

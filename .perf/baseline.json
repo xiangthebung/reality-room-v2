@@ -1,0 +1,265 @@
+{
+  "recordedAt": "2026-08-10T14:12:26.910Z",
+  "identity": {
+    "seed": "grove-01",
+    "gpu": "ANGLE (AMD, AMD Radeon RX 9070 XT (0x00007550) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "hidden": false,
+    "url": "http://127.0.0.1:5180/",
+    "passes": 5
+  },
+  "level": 5.1058200000000005,
+  "structural": {
+    "programs": 42,
+    "geometries": 137,
+    "textures": 44,
+    "instances": {
+      "trunk": {
+        "submitted": 7156,
+        "resident": 47424
+      },
+      "leaf": {
+        "submitted": 7188,
+        "resident": 23712
+      },
+      "grass": {
+        "submitted": 24191,
+        "resident": 51845
+      },
+      "ferns": {
+        "submitted": 1842,
+        "resident": 3374
+      },
+      "rocks": {
+        "submitted": 63,
+        "resident": 138
+      },
+      "logs": {
+        "submitted": 24,
+        "resident": 52
+      },
+      "shroom-stem": {
+        "submitted": 21,
+        "resident": 62
+      },
+      "shroom-cap": {
+        "submitted": 21,
+        "resident": 62
+      },
+      "meadow": {
+        "submitted": 1398,
+        "resident": 2715
+      },
+      "bramble": {
+        "submitted": 101,
+        "resident": 428
+      },
+      "bushes": {
+        "submitted": 224,
+        "resident": 475
+      },
+      "saplings": {
+        "submitted": 98,
+        "resident": 188
+      },
+      "sticks": {
+        "submitted": 632,
+        "resident": 1160
+      },
+      "flowers": {
+        "submitted": 174,
+        "resident": 542
+      },
+      "litter": {
+        "submitted": 132,
+        "resident": 254
+      },
+      "reeds": {
+        "submitted": 20,
+        "resident": 364
+      },
+      "stumps": {
+        "submitted": 13,
+        "resident": 21
+      }
+    },
+    "sceneObjects": 355,
+    "sectors": {
+      "forest": 71,
+      "ground": 39,
+      "pending": 0
+    }
+  },
+  "scenarios": {
+    "clearing.sober": {
+      "ratio": 0.8134735621963431,
+      "ratioSpread": 0.1200871447005325,
+      "ms": 4.154320833333333,
+      "msRange": [
+        4.144392083333334,
+        4.364140833333333
+      ],
+      "counters": {
+        "calls": {
+          "value": 160,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 13173567,
+          "spread": 0
+        }
+      }
+    },
+    "clearing.peak": {
+      "ratio": 0.9498126131462318,
+      "ratioSpread": 0.10097674897451775,
+      "ms": 4.924991666666666,
+      "msRange": [
+        4.661075416666667,
+        5.120680416666667
+      ],
+      "counters": {
+        "calls": {
+          "value": 160,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 13173567,
+          "spread": 0
+        }
+      }
+    },
+    "deep.sober": {
+      "ratio": 0.8545732288512585,
+      "ratioSpread": 0.13035596172121067,
+      "ms": 4.313280833333333,
+      "msRange": [
+        4.248867083333333,
+        4.56528375
+      ],
+      "counters": {
+        "calls": {
+          "value": 130,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 12218548,
+          "spread": 0
+        }
+      }
+    },
+    "deep.peak": {
+      "ratio": 1.2028117001923428,
+      "ratioSpread": 0.0926508662526578,
+      "ms": 6.15611375,
+      "msRange": [
+        5.6857,
+        6.6486075
+      ],
+      "counters": {
+        "calls": {
+          "value": 130,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 12218548,
+          "spread": 0
+        }
+      }
+    },
+    "canopy.sober": {
+      "ratio": 0.7372369505126828,
+      "ratioSpread": 0.09560403866722605,
+      "ms": 3.913396666666667,
+      "msRange": [
+        3.7641991666666663,
+        4.080361666666667
+      ],
+      "counters": {
+        "calls": {
+          "value": 128,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 9513066,
+          "spread": 0
+        }
+      }
+    },
+    "canopy.peak": {
+      "ratio": 1.0051080229364595,
+      "ratioSpread": 0.07588940606738981,
+      "ms": 5.257112083333333,
+      "msRange": [
+        5.06406875,
+        5.83350625
+      ],
+      "counters": {
+        "calls": {
+          "value": 128,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 9513066,
+          "spread": 0
+        }
+      }
+    },
+    "canopy.egodeath": {
+      "ratio": 1.16132365015927,
+      "ratioSpread": 0.08447838137365118,
+      "ms": 5.959951666666666,
+      "msRange": [
+        5.56992,
+        6.26099
+      ],
+      "counters": {
+        "calls": {
+          "value": 128,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 9513066,
+          "spread": 0
+        }
+      }
+    },
+    "ridge.onset": {
+      "ratio": 1,
+      "ratioSpread": 0.06341235742338203,
+      "ms": 5.298048333333333,
+      "msRange": [
+        4.861461666666666,
+        5.80386
+      ],
+      "counters": {
+        "calls": {
+          "value": 131,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 12713318,
+          "spread": 0
+        }
+      }
+    },
+    "canopy.peak.still": {
+      "ratio": 1.0292565473278443,
+      "ratioSpread": 0.049448908045874075,
+      "ms": 5.4986395833333335,
+      "msRange": [
+        5.00369125,
+        5.859900833333334
+      ],
+      "counters": {
+        "calls": {
+          "value": 128,
+          "spread": 0
+        },
+        "triangles": {
+          "value": 9473022,
+          "spread": 0
+        }
+      }
+    }
+  }
+}
