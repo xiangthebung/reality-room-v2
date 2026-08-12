@@ -181,6 +181,21 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
   const musicListeners = new Set();
   /** Subscribers to a mushroom being eaten. Same boundary argument again. */
   const eatListeners = new Set();
+  /** Subscribers to the animals arriving, and to who is in charge of them. */
+  const faunaListeners = new Set();
+  const hostListeners = new Set();
+
+  /**
+   * Who is simulating the animals, and whether it is us.
+   *
+   * `null` means nobody has said — which is the whole of single player, and is
+   * why `isHost` reports TRUE for it. A page with no room is not a guest waiting
+   * to be told; it is the only machine there is, and its animals are its own.
+   * Collapsing that into "not the host" would leave a solitary walk in a wood
+   * where nothing moves, which is the same three-state mistake the jukebox made
+   * (see `emitMusic`) in the one place it would be most obvious.
+   */
+  let hostId = null;
   const emitSpeakers = (at) => {
     for (const fn of speakerListeners) {
       try {
@@ -205,6 +220,37 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
         fn(id);
       } catch (err) {
         console.warn('[net] eat listener threw', err);
+      }
+    }
+  };
+  const emitFauna = (msg) => {
+    for (const fn of faunaListeners) {
+      try {
+        fn(msg);
+      } catch (err) {
+        console.warn('[net] fauna listener threw', err);
+      }
+    }
+  };
+  /**
+   * Tell anybody who cares whether the animals are theirs now.
+   *
+   * Deduped on the resolved boolean rather than on `hostId`, because that is the
+   * only part the world can act on and the identity of some other host changing
+   * is not news to it. `fauna.setHosting` clears every interpolation buffer, so
+   * a redundant call is not free.
+   */
+  let wasHost = true;
+  const emitHost = (id) => {
+    hostId = id ?? null;
+    const mine = hostId === null || hostId === socket?.selfId;
+    if (mine === wasHost) return;
+    wasHost = mine;
+    for (const fn of hostListeners) {
+      try {
+        fn(mine);
+      } catch (err) {
+        console.warn('[net] host listener threw', err);
       }
     }
   };
@@ -490,6 +536,15 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
     mic?.close();
     mic = null;
     micRequested = false;
+    /**
+     * And the wood is yours again.
+     *
+     * Walking out of a room — or the server dying under you, which ends here
+     * too — must hand the animals back, or a player who was a guest is left in
+     * a forest where nothing moves and nothing will ever move again. `null` is
+     * "nobody has said", which `emitHost` resolves to hosting. See `hostId`.
+     */
+    emitHost(null);
   }
 
   // ------------------------------------------------------------------ people
@@ -911,6 +966,19 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
          */
         emitEat(null);
       }
+
+      /**
+       * And whether the animals are ours.
+       *
+       * Not gated on the seed, unlike the mushrooms directly above, and the
+       * difference is worth saying because the two look alike. A patch id is a
+       * place in a particular wood and means nothing in another one; "you are
+       * the host" is a fact about the ROOM, and somebody in the wrong forest
+       * still has to know whether to simulate — they are as entitled to be the
+       * oldest person in the room as anybody, and their animals still have to
+       * move.
+       */
+      emitHost(msg.host);
       /**
        * Null means the room is on the true wall clock, and `setDayOrigin(0)` is
        * how that is expressed — not "leave it alone". A guest who picked dusk
@@ -946,6 +1014,22 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
 
     /** Somebody ate a mushroom. `main.js` owns which one that is. */
     socket.on('eat', (msg) => emitEat(msg.id));
+
+    /**
+     * The host left and the animals are somebody else's now — possibly ours.
+     * Sent on that and on nothing else; see the `close` handler in signaling.js.
+     */
+    socket.on('host', (msg) => emitHost(msg.id));
+
+    /**
+     * Where all the animals are, from whoever is simulating them.
+     *
+     * Forwarded straight through without being looked at. This layer knows the
+     * message arrives six times a second and knows nothing else about it — the
+     * numbers are `world/fauna.js`'s at both ends, and a net module that could
+     * read them would be one that has to be kept in step with the wood.
+     */
+    socket.on('fauna', (msg) => emitFauna(msg));
 
     socket.on('join', (msg) => {
       remember(msg.peer);
@@ -1370,6 +1454,14 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
           /** Resolved: what they chose, or what their id gave them. See `hueOf`. */
           hue: entry.avatar.hue,
           position: entry.avatar.position,
+          /**
+           * Which way they are facing. Interpolated, like the position beside
+           * it — so it is where they were looking a tick or two ago, which is
+           * what the animals want to know as well: whether a recycle would
+           * happen in somebody's view is a question about the frame they are
+           * being shown, and that is the frame this describes.
+           */
+          yaw: entry.avatar.yaw,
           speaking: entry.avatar.speaking,
           trip: entry.avatar.trip,
           /** The raw pose bits, so a test can ask whether somebody is sitting. */
@@ -1466,6 +1558,42 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
     onEat(fn) {
       eatListeners.add(fn);
       return () => eatListeners.delete(fn);
+    },
+
+    /**
+     * Where all the animals are. Only the host may say, and the server enforces
+     * it — see the `fauna` case in signaling.js.
+     *
+     * Silently a no-op outside a room, like everything else here, which is what
+     * lets main.js call it unconditionally on a solitary walk.
+     */
+    sendFauna(data) {
+      return socket?.connected ? socket.sendFauna(data) : false;
+    },
+
+    /** Subscribe to the animals arriving. Returns an unsubscribe. */
+    onFauna(fn) {
+      faunaListeners.add(fn);
+      return () => faunaListeners.delete(fn);
+    },
+
+    /**
+     * TRUE IF THE ANIMALS ARE THIS MACHINE'S TO SIMULATE.
+     *
+     * True on a solitary walk, true for exactly one person in a room. Fires on
+     * the welcome and again if the host leaves; deduped, so a listener is only
+     * told when the answer actually changes.
+     */
+    onHost(fn) {
+      hostListeners.add(fn);
+      return () => hostListeners.delete(fn);
+    },
+    get isHost() {
+      return hostId === null || hostId === socket?.selfId;
+    },
+    /** Who is simulating, or null for "nobody has said". Mostly for the checks. */
+    get hostId() {
+      return hostId;
     },
 
     /**

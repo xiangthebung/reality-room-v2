@@ -580,9 +580,6 @@ export class Ambience {
    */
   _plop(position) {
     if (!this.built || this.voices > VOICE_CEILING) return;
-    const ctx = this.ctx;
-    const rng = this.rng;
-    const t0 = ctx.currentTime + 0.01;
     const spatial = this.engine.createSpatial(position, {
       refDistance: 5,
       rolloff: 1.6,
@@ -594,27 +591,244 @@ export class Ambience {
     spatial.setDistance(
       Math.hypot(position.x - ears.x, position.y - ears.y, position.z - ears.z)
     );
+    // The sweep itself is `_waterPlop`, because the fishing events needed the
+    // same twenty milliseconds inside a source they already owned and this is
+    // the one piece of synthesis here with a physical argument behind it worth
+    // having in exactly one place.
+    this._waterPlop(spatial.input, this.ctx.currentTime + 0.01);
+    setTimeout(() => {
+      try {
+        spatial.dispose();
+      } catch {
+        /* already gone */
+      }
+    }, 350);
+  }
 
+  /**
+   * The angler's noises, all six of them, from `player/fishing.js`.
+   *
+   * WHY THEY LIVE HERE. Every one of them happens at a point on the water, which
+   * is the thing this file already knows how to be — it owns the plop, the noise
+   * buffer, the voice ceiling and the `_ears` trick, and a second module
+   * synthesising water sounds would need all four of those handed to it. So
+   * `fishing.js` is given a callback and knows nothing about WebAudio, exactly
+   * as it is given `say` and knows nothing about the HUD.
+   *
+   * WHY ONE SWITCH AND NOT SIX METHODS. They are one family: the same spatial
+   * source, the same bus, the same gate, differing only in what is hung off the
+   * front of it. Six near-identical setups would be six places to get the
+   * distance cue wrong.
+   *
+   * ALL OF IT ON `sfxBus`, without exception. The header's rule is that the
+   * beds — properties of the place — stay on `worldBus` and discrete physical
+   * events go to sfx. Nothing about a rod is a property of the river: the river
+   * sounds the same whether or not somebody is standing in it, and a player who
+   * has turned the wood down to talk over it has not asked to stop hearing their
+   * own reel.
+   *
+   * The cost of the loudest of them is nine nodes for under half a second. The
+   * one called most often by far is `reel`, at up to thirteen a second while
+   * winding, and it is deliberately the cheapest thing in the file — a single
+   * grain, no oscillator, no spatial of its own beyond the shared setup.
+   *
+   * @param {'cast'|'knock'|'bite'|'strike'|'reel'|'strain'|'snap'|'splash'} kind
+   * @param {{x: number, y: number, z: number}} at
+   * @param {number} [strength] 0..1, and it means something different per kind
+   */
+  fishing(kind, at, strength = 1) {
+    if (!this.built || this.voices > VOICE_CEILING) return;
+    const ctx = this.ctx;
+    const rng = this.rng;
+    const t0 = ctx.currentTime + 0.01;
+    const spatial = this.engine.createSpatial(at, {
+      refDistance: 5,
+      rolloff: 1.6,
+      maxDistance: 55,
+      bus: this.engine.sfxBus,
+    });
+    const ears = this._ears();
+    spatial.setDistance(Math.hypot(at.x - ears.x, at.y - ears.y, at.z - ears.z));
+    const dest = spatial.input;
+    let life = 0.5;
+
+    switch (kind) {
+      /**
+       * A cast: the line going out, then the float arriving.
+       *
+       * The WHIR is the half that sells it and it is nearly free — one wide
+       * grain played fast and long, which is what a spool of monofilament
+       * running off a rod is. The plop lands 180 ms later because that is how
+       * long the float is in the air, and hearing the gap is the difference
+       * between throwing something and pressing a button.
+       */
+      case 'cast': {
+        this._grain(dest, t0, { freq: 1900, q: 0.35, decay: 0.19, gain: 0.05 * strength, rate: 2.2 });
+        this._waterPlop(dest, t0 + 0.18, 0.9 * strength);
+        life = 0.6;
+        break;
+      }
+
+      /**
+       * A knock. The same event as a bite and quieter, which is the point: the
+       * ear must NOT be able to tell them apart, or the eye never has to learn
+       * to. The float is the only honest witness.
+       */
+      case 'knock': {
+        this._waterPlop(dest, t0, 0.35 * strength);
+        life = 0.3;
+        break;
+      }
+
+      /** The take. Lower and wetter than a knock — something pulled it under. */
+      case 'bite': {
+        this._waterPlop(dest, t0, 0.75 * strength, 0.62);
+        this._grain(dest, t0 + 0.02, { freq: 520, q: 0.6, decay: 0.13, gain: 0.05 });
+        break;
+      }
+
+      /** The rod sweeping up: air, and the line coming tight. */
+      case 'strike': {
+        this._grain(dest, t0, { freq: 1250, q: 0.4, decay: 0.11, gain: 0.06, rate: 2.6 });
+        this._grain(dest, t0 + 0.06, { freq: 2600, q: 0.9, decay: 0.05, gain: 0.035, rate: 1.4 });
+        break;
+      }
+
+      /**
+       * One click of the reel. `strength` is the load on it, and it opens the
+       * click up rather than making it louder: a ratchet under strain is a
+       * lower, fatter noise, and rate is the cue the player is actually reading
+       * anyway because `fishing.js` throttles these by how hard it is going.
+       */
+      case 'reel': {
+        this._grain(dest, t0, {
+          freq: 3100 - strength * 900,
+          q: 1.1,
+          decay: 0.022 + strength * 0.014,
+          gain: 0.026 + strength * 0.02,
+          rate: 1.8,
+        });
+        life = 0.15;
+        break;
+      }
+
+      /**
+       * The line singing. A short tone, and it is the ONE resonant thing this
+       * file makes — the header forbids narrow bands in the continuous beds, and
+       * this is thirty milliseconds of a sound that only exists when something
+       * is about to break, which is the case the rule was never about.
+       *
+       * Pitch climbs with the load. That is the entire warning and it needs no
+       * explaining to anybody who has ever pulled on a string.
+       */
+      case 'strain': {
+        const osc = ctx.createOscillator();
+        osc.type = 'triangle';
+        const f = 380 + strength * 520;
+        osc.frequency.setValueAtTime(f, t0);
+        osc.frequency.linearRampToValueAtTime(f * 1.12, t0 + 0.08);
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(0.0001, t0);
+        env.gain.exponentialRampToValueAtTime(0.03 + strength * 0.045, t0 + 0.006);
+        env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+        osc.connect(env).connect(dest);
+        osc.start(t0);
+        osc.stop(t0 + 0.12);
+        osc.onended = () => {
+          try {
+            env.disconnect();
+          } catch {
+            /* already gone */
+          }
+        };
+        life = 0.25;
+        break;
+      }
+
+      /** It parts. A crack, and the recoil hissing back through the rings. */
+      case 'snap': {
+        this._grain(dest, t0, { freq: 2800, q: 0.5, decay: 0.035, gain: 0.14, rate: 2.4 });
+        this._grain(dest, t0 + 0.015, { freq: 900, q: 0.4, decay: 0.14, gain: 0.07, rate: 1.6 });
+        break;
+      }
+
+      /**
+       * Water thrown about: a surge at the surface, or the fish coming out of
+       * it. Broadband and short, scaled by how much fish there is — the whole
+       * difference between a roach coming in and a pike rolling is how much
+       * river gets moved, so `strength` drives the low end and the length rather
+       * than the volume alone.
+       */
+      case 'splash':
+      default: {
+        const s = clamp01(strength);
+        this._grain(dest, t0, {
+          freq: 900 + (1 - s) * 1400,
+          q: 0.3,
+          decay: 0.1 + s * 0.16,
+          gain: 0.07 + s * 0.1,
+          rate: 1.5 - s * 0.5,
+        });
+        this._grain(dest, t0 + 0.03, {
+          freq: 3200,
+          q: 0.4,
+          decay: 0.07 + s * 0.08,
+          gain: 0.03 + s * 0.04,
+          rate: 1.9,
+        });
+        if (s > 0.45) this._waterPlop(dest, t0 + 0.05 + rng() * 0.05, s * 0.8, 0.75);
+        life = 0.7;
+        break;
+      }
+    }
+
+    setTimeout(() => {
+      try {
+        spatial.dispose();
+      } catch {
+        /* already gone */
+      }
+    }, life * 1000);
+  }
+
+  /**
+   * The rising sine of `_plop`, but into a destination somebody else owns.
+   *
+   * `_plop` builds its own spatial source because it is called from the ambient
+   * clock with nothing but a point; the fishing events already have one and want
+   * several sounds inside it. Rather than duplicate the sweep — which is the one
+   * piece of synthesis in this file that has a real physical argument behind it,
+   * see `_plop` — it moved down here and `_plop` calls it too.
+   *
+   * @param {AudioNode} dest
+   * @param {number} when
+   * @param {number} level
+   * @param {number} [pitch] multiplies the whole sweep; under 1 is a heavier
+   *   thing going in, because a bigger cavity resonates lower.
+   */
+  _waterPlop(dest, when, level = 1, pitch = 1) {
+    if (this.voices > VOICE_CEILING) return;
+    const ctx = this.ctx;
+    const rng = this.rng;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    const from = rngRange(rng, 220, 340);
-    const length = rngRange(rng, 0.045, 0.08);
-    osc.frequency.setValueAtTime(from, t0);
-    osc.frequency.exponentialRampToValueAtTime(from * rngRange(rng, 2.6, 4.2), t0 + length);
+    const from = rngRange(rng, 220, 340) * pitch;
+    const length = rngRange(rng, 0.045, 0.08) / pitch;
+    osc.frequency.setValueAtTime(from, when);
+    osc.frequency.exponentialRampToValueAtTime(from * rngRange(rng, 2.6, 4.2), when + length);
     const env = ctx.createGain();
-    env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(rngRange(rng, 0.1, 0.19), t0 + 0.004);
-    env.gain.exponentialRampToValueAtTime(0.0001, t0 + length);
-    osc.connect(env).connect(spatial.input);
-    osc.start(t0);
-    osc.stop(t0 + length + 0.02);
+    env.gain.setValueAtTime(0.0001, when);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0002, rngRange(rng, 0.1, 0.19) * level), when + 0.004);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + length);
+    osc.connect(env).connect(dest);
+    osc.start(when);
+    osc.stop(when + length + 0.02);
     // The splash: one bright grain over the top of it, very short. Without it
     // the plop is a synthesiser blip; with it there is water involved.
-    this._grain(spatial.input, t0, { freq: 3400, q: 0.5, decay: 0.045, gain: 0.05, rate: 1.7 });
+    this._grain(dest, when, { freq: 3400, q: 0.5, decay: 0.045, gain: 0.05 * level, rate: 1.7 });
     osc.onended = () => {
       try {
         env.disconnect();
-        spatial.dispose();
       } catch {
         /* already gone */
       }

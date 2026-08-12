@@ -261,6 +261,8 @@ export class AudioEngine {
     this.caveReturn.gain.value = 0;
     /** 0 is the wood, 1 is underground. See `setRoom`. */
     this._room = 0;
+    /** …and how big the underground place is. 0 is a crawl, 1 is a chamber. */
+    this._size = 1;
 
     /**
      * The player's trims, one per bus, inserted between the bus and everything
@@ -623,16 +625,40 @@ export class AudioEngine {
    * file is ramped: 45 ms is under a frame at walking pace and long enough that
    * no zero crossing is stepped over.
    */
-  setRoom(t) {
+  /**
+   * @param {number} t    0 the wood, 1 underground
+   * @param {number} size 0 a crawl, 1 a chamber
+   *
+   * SIZE IS A WETNESS, NOT A SECOND ROOM, and that distinction is the whole of
+   * why this is two numbers on one method rather than a third convolver.
+   *
+   * A tight passage and a big chamber are not different reverbs in any way this
+   * graph could afford — they are the same rock, the same absorption, the same
+   * total lack of anything soft. What differs is the RATIO of reflected to
+   * direct sound, because in a crawl the walls are close enough that the early
+   * energy has already died before the tail could build, and in a chamber there
+   * is a hundred metres of path length to fill first. So a crawl gets the same
+   * IR at a much lower send, and it reads as dead the way a real one does.
+   *
+   * It must NOT be spent on `t`. Turning the crawl down by lowering the cave
+   * crossfade brings the FOREST reverb back up underneath it, which is a wood
+   * you can hear through ten metres of rock — the one thing this crossfade
+   * exists to prevent.
+   *
+   * The size default is 1, so every caller that predates this is bit-identical.
+   */
+  setRoom(t, size = 1) {
     if (!this.ready) return;
     const v = clamp01(t);
-    if (Math.abs(v - this._room) < 1e-3) return;
+    const s = clamp01(size);
+    if (Math.abs(v - this._room) < 1e-3 && Math.abs(s - this._size) < 1e-3) return;
     this._room = v;
+    this._size = s;
     const when = this.ctx.currentTime;
     const angle = v * Math.PI * 0.5;
     this.roomReturn.gain.setTargetAtTime(0.85 * Math.cos(angle), when, 0.045);
-    this.caveReturn.gain.setTargetAtTime(0.95 * Math.sin(angle), when, 0.045);
-    this.roomSend.gain.setTargetAtTime(0.3 + 0.22 * v, when, 0.045);
+    this.caveReturn.gain.setTargetAtTime(0.95 * Math.sin(angle) * (0.34 + 0.66 * s), when, 0.045);
+    this.roomSend.gain.setTargetAtTime((0.3 + 0.22 * v) * (0.48 + 0.52 * s), when, 0.045);
   }
 
   /**

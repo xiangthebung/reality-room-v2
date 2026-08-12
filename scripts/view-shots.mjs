@@ -201,6 +201,74 @@ const pixels = await page.evaluate(async (gain) => {
 }, GAIN);
 
 /**
+ * WALKING STANDS IT DOWN, and a teleport does not.
+ *
+ * The second half is the one worth a gate. Every `arrive` in the perf harness
+ * and every debug seek moves the camera tens of metres between two updates, and
+ * read as a velocity that is a stand-down that lasts about a second — so the
+ * perf rig would time a damped effect and report the feature as cheaper than it
+ * is, and a player would find the wood stopped breathing whenever the world
+ * recentred. Neither failure looks like a bug from the outside.
+ */
+const walking = await page.evaluate(() => {
+  const R = window.RR;
+  /**
+   * Returns the STILLNESS FACTOR, not uViewWarp.
+   *
+   * uViewWarp is that factor times the level curve times the surge, and the
+   * surge is a 19-second carrier — so two readings 2.5 s apart differ by more
+   * than the thing being tested, and the settled arm came back at 112% of the
+   * still arm for reasons that had nothing to do with standing still. The
+   * factor is the quantity under test and it is bounded 0..1 by construction.
+   */
+  const step = (n, move) => {
+    for (let i = 0; i < n; i++) {
+      // Drive the body the way the loop does: seat, then let the director see
+      // where it ended up. `move` is metres along +x per frame.
+      R.controller.position.x += move;
+      R.controller.applyToCamera();
+      R.director.update(1 / 60, { camera: R.camera, audioLevels: null });
+    }
+    return R.director._stillness;
+  };
+  R.director.state.override = 1;
+  /**
+   * Let the ENVELOPE converge before the first reading, not just the stillness.
+   *
+   * `override` pins the target; `eased` damps toward it over seconds, so a
+   * reading taken too early is against a trip that is still coming up, and
+   * every later row then looks larger than it is. The first version of this
+   * reported the settled arm at 115% of the still arm — which reads as the
+   * stand-down overshooting and was in fact uLevel climbing 0.88 to 1.0
+   * underneath it.
+   */
+  step(400, 0);
+  const still = step(150, 0);
+  // 4.4 m/s is WALK in player/controller.js.
+  const walk = step(150, 4.4 / 60);
+  const settled = step(150, 0);
+  // A jump of 40 m in one frame, then held still.
+  R.controller.position.x += 40;
+  R.controller.applyToCamera();
+  R.director.update(1 / 60, { camera: R.camera, audioLevels: null });
+  const afterJump = step(20, 0);
+  R.director.state.override = null;
+  return { still, walk, settled, afterJump };
+});
+const stillPct = (v) => `${(v * 100).toFixed(0)}%`;
+const standsDown = walking.walk < 0.1 && walking.settled > 0.9;
+const jumpOk = walking.afterJump > 0.9;
+console.log(
+  `\nwalking: stillness  standing ${stillPct(walking.still)} → walking at 4.4 m/s ` +
+    `${stillPct(walking.walk)} → standing again ${stillPct(walking.settled)}  ` +
+    `${standsDown ? '— stands down and comes back' : 'DOES NOT STAND DOWN'}`
+);
+console.log(
+  `         after a 40 m jump in one frame: ${stillPct(walking.afterJump)}  ` +
+    `${jumpOk ? '— a teleport is not a speed' : 'TELEPORT READ AS MOTION'}`
+);
+
+/**
  * THE CLAIM THE WHOLE DESIGN RESTS ON: THE FIELD IS ANCHORED TO THE WORLD.
  *
  * If a piece of the wood keeps its place in the field as it crosses the frame,

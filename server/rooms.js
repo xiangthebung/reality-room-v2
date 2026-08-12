@@ -381,6 +381,30 @@ export function sanitizePatchId(raw) {
   return PATCH_ID.test(raw) ? raw : null;
 }
 
+/**
+ * A ROW OF NUMBERS THE SERVER DELIBERATELY CANNOT READ.
+ *
+ * `world/fauna.js` owns what an animal snapshot means at both ends; this checks
+ * that it is an array of finite numbers and that there are not too many of them,
+ * and forwards it. That is the same relationship this process has with an SDP
+ * offer, and it is on purpose: the server has never known what a forest is (it
+ * imports nothing from `src/` and not even `three`), and animals are not the
+ * thing to change that for. A schema here would be a second copy of the wire
+ * format to keep in step, on the one side that gains nothing from knowing it.
+ *
+ * The bound is a memory bound, not a validation. 23 animals × 8 fields is 184
+ * and the coats are 18 more; 512 leaves room for the population to grow without
+ * this needing a thought, and stops a modified client posting a megabyte of
+ * numbers six times a second for the room to fan out.
+ */
+const MAX_FAUNA_NUMBERS = 512;
+
+export function sanitizeNumbers(raw, limit = MAX_FAUNA_NUMBERS) {
+  if (!Array.isArray(raw) || raw.length > limit) return null;
+  for (const n of raw) if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  return raw;
+}
+
 export function sanitizePresent(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const { x, y, z, yaw, w } = raw;
@@ -694,6 +718,27 @@ export class Room {
 
   get size() {
     return this.players.size;
+  }
+
+  /**
+   * WHO SIMULATES THE ANIMALS: whoever has been here longest, or null.
+   *
+   * A `Map` iterates in insertion order and `add` appends, so the first key is
+   * the earliest arrival and this needs no bookkeeping, no timestamps and no
+   * tie-break. It is derived rather than stored for the same reason the seed is
+   * not recomputed: there is nothing to keep in step with anything.
+   *
+   * LONGEST-SERVING RATHER THAN BEST-CONNECTED, and that is a deliberate trade
+   * of quality for stability. Picking the lowest latency or the fastest machine
+   * would give better animals on average and would also mean the job moves
+   * whenever the measurement wobbles — and every move is a visible snap for
+   * everyone, because two woods that have been simulating separately do not
+   * agree about where a deer is. This changes exactly once per host departure,
+   * which is the least often it can possibly change.
+   */
+  get hostId() {
+    for (const id of this.players.keys()) return id;
+    return null;
   }
 
   get isFull() {

@@ -943,7 +943,193 @@ if (victim) {
   );
 }
 
-// ------------------------------------------------- 9. leaving, and no server
+// --------------------------------------------------------------- 9. animals
+
+/**
+ * ONE MACHINE DECIDES WHAT THE ANIMALS DO AND THE REST WATCH.
+ *
+ * The last thing in the wood that was still private. The clock, the hour, the
+ * wind, the speakers, the record and the mushrooms all travel now; the deer did
+ * not, so two people standing side by side watched different animals in the same
+ * clearing — and worse than different, INDEPENDENT: one of them could walk up to
+ * a stag, watch it bolt, and the person beside them would see nothing happen at
+ * all. Nothing errors, and each half is individually correct.
+ *
+ * The assertion that matters is the boring one below — that A's animals and B's
+ * are in the same places. Two unsynchronised simulations of this system do not
+ * drift slowly apart, they are immediately unrelated: the recycler rehomes
+ * animals around wherever each player has walked, so after a few minutes of two
+ * people moving separately the same deer is a hundred metres apart in the two
+ * woods. A tolerance of three metres against that is not a tight bound on a
+ * noisy quantity, it is the difference between synchronised and not.
+ */
+console.log('\nanimals');
+
+const hostOf = (page) => ev(page, () => ({
+  isHost: window.RR.net.isHost,
+  hostId: window.RR.net.hostId,
+  hosting: window.RR.fauna.hosting,
+  self: window.RR.net.me?.id ?? null,
+}));
+const [hostA, hostB] = await Promise.all([hostOf(a), hostOf(b)]);
+
+check(
+  'exactly one of them is simulating',
+  hostA.hosting !== hostB.hosting,
+  `A ${hostA.hosting} / B ${hostB.hosting}`
+);
+/**
+ * And it is A, who arrived first. Not an arbitrary tie-break being pinned down
+ * — the rule is "longest in the room" precisely so that the job does not move
+ * while everybody stays, and a run where B won would mean it moves on something
+ * else. See `Room.hostId`.
+ */
+check('the one who got there first is the one deciding', hostA.hosting === true, `host ${hostA.hostId}`);
+check('and both pages agree who that is', hostA.hostId === hostB.hostId, `${hostA.hostId} / ${hostB.hostId}`);
+
+/** Every ground animal, in the wire order both pages share. See `everyone`. */
+const animals = (page) =>
+  ev(page, () =>
+    window.RR.fauna.everyone.map((m) => ({
+      x: Number(m.pos.x.toFixed(2)),
+      z: Number(m.pos.z.toFixed(2)),
+      state: m.state,
+    }))
+  );
+
+const gapBetween = (one, two) => {
+  let worst = 0;
+  let total = 0;
+  for (let i = 0; i < one.length; i++) {
+    const d = Math.hypot(one[i].x - two[i].x, one[i].z - two[i].z);
+    worst = Math.max(worst, d);
+    total += d;
+  }
+  return { worst, mean: total / one.length };
+};
+
+const [herdA1, herdB1] = await Promise.all([animals(a), animals(b)]);
+check('both pages have the same population', herdA1.length === herdB1.length, `${herdA1.length} animals`);
+
+const gap1 = gapBetween(herdA1, herdB1);
+check(
+  "B's animals are standing where A's are",
+  gap1.mean < 3,
+  `mean ${gap1.mean.toFixed(2)} m, worst ${gap1.worst.toFixed(2)} m`
+);
+
+/**
+ * AND THEY ARE STILL THERE A FEW SECONDS LATER, WHICH IS THE HALF THAT CATCHES A
+ * FROZEN GUEST.
+ *
+ * The single comparison above would pass on a B whose animals stopped dead the
+ * moment it became a guest, because both pages built the same wood from the same
+ * seed and start it in the same places. Two samples catches it: A's animals
+ * demonstrably move between them, so a B that is not being driven falls behind
+ * by exactly that much.
+ */
+await new Promise((r) => setTimeout(r, 4000));
+const [herdA2, herdB2] = await Promise.all([animals(a), animals(b)]);
+
+const moved = gapBetween(herdA1, herdA2);
+check(
+  "the host's animals actually moved in those seconds",
+  moved.mean > 0.05,
+  `mean ${moved.mean.toFixed(2)} m, worst ${moved.worst.toFixed(2)} m`
+);
+const gap2 = gapBetween(herdA2, herdB2);
+check(
+  "and B's followed them",
+  gap2.mean < 3,
+  `mean ${gap2.mean.toFixed(2)} m, worst ${gap2.worst.toFixed(2)} m`
+);
+
+/**
+ * The states too, which is a different claim from the positions.
+ *
+ * A grazing animal and a bolting one can be in the same place for a frame; what
+ * says the two pages are showing the same creature is that they agree it is
+ * running. This is also the field that drives the pose and the bark, so a
+ * mismatch here is two people watching the same deer do different things.
+ *
+ * Not all twenty-three, because the guest is a third of a second behind by
+ * design and a state that changed inside that window is legitimately different
+ * on the two machines. Eighty per cent is far below what agreement produces and
+ * far above the two-in-five you would get from unrelated simulations.
+ */
+const sameState = herdA2.filter((m, i) => m.state === herdB2[i].state).length;
+check(
+  'and are doing the same thing',
+  sameState >= herdA2.length * 0.8,
+  `${sameState}/${herdA2.length} states match`
+);
+
+/**
+ * WHAT HAPPENS WHEN THE HOST WALKS OUT, tested against the server directly.
+ *
+ * Two raw sockets rather than two more browser pages, and that is the point: the
+ * election is eleven lines of `server/signaling.js` and none of it needs a
+ * forest. Driving it here would mean closing page A — which the section below
+ * needs alive — and would spend thirty seconds of WebGL to test a Map's
+ * insertion order.
+ */
+const sock = (name) =>
+  new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${SERVER_PORT}/ws?room=hst-hst-hst&name=${name}`);
+    ws.inbox = [];
+    ws.addEventListener('message', (e) => ws.inbox.push(JSON.parse(e.data)));
+    ws.addEventListener('open', () => resolve(ws));
+    ws.addEventListener('error', reject);
+  });
+const welcomeOf = async (ws) => {
+  for (let i = 0; i < 50 && !ws.inbox.some((m) => m.t === 'welcome'); i++) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return ws.inbox.find((m) => m.t === 'welcome') ?? null;
+};
+
+const first = await sock('first');
+const wFirst = await welcomeOf(first);
+const second = await sock('second');
+const wSecond = await welcomeOf(second);
+
+check('the first person in is told they are the host', wFirst?.host === wFirst?.id, `${wFirst?.host}`);
+check(
+  'and the second is told it is the first, not themselves',
+  wSecond?.host === wFirst?.id && wSecond?.host !== wSecond?.id,
+  `${wSecond?.host}`
+);
+
+second.inbox.length = 0;
+first.close();
+for (let i = 0; i < 50 && !second.inbox.some((m) => m.t === 'host'); i++) {
+  await new Promise((r) => setTimeout(r, 100));
+}
+const handover = second.inbox.find((m) => m.t === 'host');
+check(
+  'the host leaving hands the animals to whoever is left',
+  handover?.id === wSecond?.id,
+  `${handover?.id ?? 'nothing arrived'}`
+);
+/**
+ * And a departure that is NOT the host's says nothing at all. A room that
+ * announced a host on every `leave` would hand every remaining client a reset —
+ * `setHosting` drops every interpolation buffer — for somebody at the back of
+ * the queue leaving.
+ */
+const third = await sock('third');
+await welcomeOf(third);
+second.inbox.length = 0;
+third.close();
+await new Promise((r) => setTimeout(r, 700));
+check(
+  'and somebody else leaving says nothing about it',
+  !second.inbox.some((m) => m.t === 'host'),
+  second.inbox.map((m) => m.t).join(',') || 'silence'
+);
+second.close();
+
+// ------------------------------------------------ 10. leaving, and no server
 
 console.log('\nfailure modes');
 await b.close();

@@ -78,6 +78,9 @@ export class CaveAudio {
     this.built = false;
     this.mix = 0;
     this.depth = 0;
+    /** How constricted the passage is here, and how near running water. */
+    this.tight = 0;
+    this.water = 0;
     this._next = 3;
     this.rng = makeRng('cave-audio');
     /** Counters, so a probe can prove any of this fired. */
@@ -134,6 +137,69 @@ export class CaveAudio {
     this.airGain.connect(engine.trims.world);
     src.start();
     this.airSource = src;
+
+    /**
+     * THE DRAUGHT, and it is the best exploration cue this game has.
+     *
+     * Caves breathe. A system with two entrances moves air between them all
+     * year, and where the passage narrows that air speeds up and the constriction
+     * whistles. Cavers find new cave by following it — cold air on your face out
+     * of a crack means there is more, and no other signal in the world tells you
+     * that about a place you cannot see into.
+     *
+     * Here it is a bandpass on the same pink noise, and BOTH its gain and its
+     * centre frequency track how tight the passage is. The frequency is the half
+     * that matters: a squeeze does not merely get louder, it goes UP, and that
+     * rising pitch as the walls close in is a thing people react to before they
+     * have worked out what they are hearing. A gain-only version was the first
+     * attempt and it read as the volume knob moving.
+     *
+     * Straight to the bus rather than through the room, for the reason the bed
+     * is — see above. It is the sound of the space, not a sound in it.
+     */
+    const wind = ctx.createBufferSource();
+    wind.buffer = this.noiseBuffer;
+    wind.loop = true;
+    this.windFilter = ctx.createBiquadFilter();
+    this.windFilter.type = 'bandpass';
+    this.windFilter.frequency.value = 420;
+    this.windFilter.Q.value = 3.2;
+    this.windGain = ctx.createGain();
+    this.windGain.gain.value = 0;
+    wind.connect(this.windFilter).connect(this.windGain).connect(engine.trims.world);
+    wind.start();
+    this.windSource = wind;
+
+    /**
+     * WATER YOU CAN HEAR BEFORE YOU CAN SEE IT.
+     *
+     * `caves.js` precomputes, per ring, how near a stream run is — smeared over
+     * a dozen rings either side — so this rises as you approach and falls as you
+     * leave, and it does it around corners, because the measure is distance
+     * along the passage rather than line of sight. That is exactly right: sound
+     * goes round a bend and light does not, and a noise ahead of you that has no
+     * visible source is the single strongest reason anybody has ever kept
+     * walking into a cave.
+     *
+     * Two poles and a highpass. The low end has to come out or it fights the
+     * bed, which owns everything under 140 Hz and cost seventeen decibels to
+     * find out about — see `update`.
+     */
+    const stream = ctx.createBufferSource();
+    stream.buffer = this.noiseBuffer;
+    stream.loop = true;
+    stream.playbackRate.value = 0.8;
+    const streamHp = ctx.createBiquadFilter();
+    streamHp.type = 'highpass';
+    streamHp.frequency.value = 240;
+    const streamLp = ctx.createBiquadFilter();
+    streamLp.type = 'lowpass';
+    streamLp.frequency.value = 1700;
+    this.streamGain = ctx.createGain();
+    this.streamGain.gain.value = 0;
+    stream.connect(streamHp).connect(streamLp).connect(this.streamGain).connect(engine.trims.world);
+    stream.start();
+    this.streamSource = stream;
 
     /** Drips and footsteps DO go through the room. That is the point of them. */
     this.wetBus = ctx.createGain();
@@ -291,14 +357,38 @@ export class CaveAudio {
    * @param {number} mix   0..1, how far into a cave the listener is
    * @param {number} depth metres along the passage, for the drip rate
    */
-  update(dt, mix = 0, depth = 0) {
+  update(dt, mix = 0, depth = 0, tight = 0, room = 1, water = 0) {
     if (!this.built) return;
     this.mix = clamp01(mix);
     this.depth = depth;
+    this.tight = clamp01(tight);
+    this.water = clamp01(water);
     const ctx = this.ctx;
+    const now = ctx.currentTime;
 
-    this.engine.setRoom(this.mix);
+    /**
+     * The reverb now knows how big the room is, and that is the largest single
+     * change to what this file sounds like since it was written.
+     *
+     * One tail for every passage meant a crawl and a chamber were acoustically
+     * the same place, so the shape work in `caves.js` — the whole of it — was
+     * inaudible. `setRoom`'s second argument is a wetness rather than a second
+     * IR; see the note there for why it cannot be spent on the crossfade.
+     *
+     * Floored at 0.25 rather than 0: even a squeeze in rock is wetter than a
+     * wood, and a passage that went fully dry would sound like headphones.
+     */
+    this.engine.setRoom(this.mix, 0.25 + 0.75 * clamp01(room));
     this.engine.setOcclusion(this.mix);
+
+    /**
+     * The draught, on the SQUARE of tightness, so it is genuinely absent in the
+     * open and arrives as the walls close rather than following you around.
+     */
+    const squeeze = this.tight * this.tight;
+    this.windGain.gain.setTargetAtTime(0.034 * this.mix * squeeze, now, 0.45);
+    this.windFilter.frequency.setTargetAtTime(360 + 980 * this.tight, now, 0.6);
+    this.streamGain.gain.setTargetAtTime(0.052 * this.mix * this.water, now, 0.3);
     /**
      * The bed comes up on the SQUARE of the mix, so it is inaudible in the
      * entrance and arrives with the darkness rather than before it.
@@ -341,7 +431,8 @@ export class CaveAudio {
     this._next -= dt;
     if (this._next > 0) return;
     this._drip();
-    const mean = 5.2 - 2.4 * clamp01(depth / 90);
+    // Wetter where there is water: the drips and the stream are the same water.
+    const mean = (5.2 - 2.4 * clamp01(depth / 90)) * (1 - 0.45 * this.water);
     this._next = Math.min(DRIP_MAX, DRIP_MIN + -Math.log(1 - this.rng() * 0.999) * mean);
   }
 
@@ -349,6 +440,10 @@ export class CaveAudio {
     try {
       this.airSource?.stop();
       this.airGain?.disconnect();
+      this.windSource?.stop();
+      this.windGain?.disconnect();
+      this.streamSource?.stop();
+      this.streamGain?.disconnect();
       this.wetBus?.disconnect();
     } catch {
       /* already gone */

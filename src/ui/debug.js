@@ -4,7 +4,7 @@ import { LEVELS, quality } from '../core/quality.js';
 import { worldHearsKey } from '../core/keys.js';
 import { AUTHORED_PHASE, dayInfo, dayScale, setDayPhase, setDayScale } from '../world/daylight.js';
 import { tripUniforms } from '../trip/living.js';
-import { groundUnder } from '../world/terrain.js';
+import { caveAxisPoint, cavesNear, groundUnder } from '../world/terrain.js';
 import * as tuning from '../audio/tuning.js';
 import * as presets from '../audio/presets.js';
 
@@ -1268,6 +1268,31 @@ export class DebugPanel {
                 at: () => this.gathering?.sites?.viewpoints?.[0],
               },
               {
+                /**
+                 * The one landmark you cannot navigate to by knowing the plan.
+                 *
+                 * Every other button here goes to something `gathering.js`
+                 * chose and can therefore be looked up by name. A cave belongs
+                 * to the ridge and the seed, so the only way to answer "where is
+                 * the nearest one" has always been to fly along the mountain
+                 * until you saw a gully — which is exactly the complaint this
+                 * exists to answer.
+                 *
+                 * It lands you in the gully rather than at the mouth: fourteen
+                 * metres down the approach, looking up it, because arriving
+                 * inside the doorway skips the part that tells you it is a cave.
+                 */
+                label: 'cave',
+                title: 'the approach to the nearest cave mouth on this seed',
+                at: () => {
+                  const c = ctrl();
+                  const from = c ? c.position : { x: 0, z: 0 };
+                  const near = cavesNear(from.x, from.z, 1600);
+                  if (!near.length) return null;
+                  return caveAxisPoint(near[0], near[0].aHold - 14, 0);
+                },
+              },
+              {
                 label: '+40 m',
                 title: 'straight up, for a look at the canopy',
                 run: () => {
@@ -1295,6 +1320,36 @@ export class DebugPanel {
               const c = ctrl();
               if (!c) return '–';
               return `${c.position.x.toFixed(1)}, ${c.position.y.toFixed(1)}, ${c.position.z.toFixed(1)}`;
+            },
+          },
+          {
+            /**
+             * Which way the nearest cave is, and how far.
+             *
+             * A compass point rather than a bearing in degrees, because the
+             * question this answers is "which way do I walk" and nobody holds a
+             * protractor. The distance is to the MOUTH — the head of the gully —
+             * so it counts down to zero at the place the arch is, not at the
+             * place the notch starts.
+             */
+            kind: 'readout',
+            id: 'b.cave',
+            label: 'nearest cave',
+            get: () => {
+              const c = ctrl();
+              if (!c) return '–';
+              const near = cavesNear(c.position.x, c.position.z, 1600);
+              if (!near.length) return 'none within 1.6 km';
+              const cave = near[0];
+              const dx = cave.x - c.position.x;
+              const dz = cave.z - c.position.z;
+              const d = Math.hypot(dx, dz);
+              // Screen north is -z, and the compass runs clockwise from it.
+              const brg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+              const point = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][
+                Math.round(((brg + 360) % 360) / 45) % 8
+              ];
+              return `${d.toFixed(0)} m ${point} · ${cave.x.toFixed(0)}, ${cave.z.toFixed(0)}`;
             },
           },
           {

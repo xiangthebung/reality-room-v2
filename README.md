@@ -42,6 +42,8 @@ The tables below are a copy for people reading the repository, and
 | mouse | look (click to capture the pointer) |
 | `E` | interact — sit down, board the ferry, cast, play the jukebox, eat a mushroom |
 | `F` | take out a fishing rod, or put it away |
+| left mouse | with a rod out: hold to load a cast, let go to throw |
+| right mouse | with a rod out: wind the reel |
 | `Q` | next track |
 | `U` | paste a YouTube link at the jukebox |
 | `G` | stand a speaker where you are looking — left first, then right |
@@ -140,13 +142,52 @@ was built round a permanent fourteen-metre one. A place to sit and a direction
 to face is the part that had to be authored; what you look at is now something
 somebody brings.
 
-**Two things to do with your hands.** Fishing: cast, wait six to twenty-six
-seconds, notice, strike. The waiting is the feature — it is long enough that you
-look away and sharp enough that you look back, which is the shape of attention a
-conversation wants underneath it. And the ferry, a raft that spends its whole
-life going up and down the river, calling at the landings. Its position is a
-pure function of the Unix epoch, like the sun, so every client agrees about
-where it is with zero bytes on the wire.
+**Two things to do with your hands.** Fishing: read the water, cast, wait,
+notice, strike, and then play the thing. The waiting is still the feature — it is
+long enough that you look away and sharp enough that you look back, which is the
+shape of attention a conversation wants underneath it. What sits either side of
+it are the two steps a real angler spends their attention on and a game almost
+never models:
+
+- **The read.** What is down there is a function of the depth of water under the
+  float, and the channel is a metre and a half deep in the middle and nothing at
+  the gravel edge. Minnows in the margin, pike in the trench — and you can see
+  which is which, because there are fish in the river whether or not you are
+  fishing for them. Three dozen of them work the top forty centimetres of the
+  channel wherever you are stood next to it, rising to the surface, scattering
+  from a badly placed cast, and now and then one clears the water altogether.
+- **The cast.** Hold the left mouse button and the rod winds back; let go and the
+  tackle leaves the tip at a speed you chose, on an elevation your head chose,
+  and flies a real parabola until it hits something. It can fall short, overshoot
+  into the far bank, or land in the grass. Where it lands is what you get.
+- **The line.** Ten nodes of rope physics between the rod tip and the hook,
+  inextensible and freely slack, so the sag is not drawn — it is what a hanging
+  chain does. There are metres of it off the reel: the cast pays them out,
+  winding takes them back, and it cannot be longer than it is. That last fact is
+  what makes the bank a place. Your float drifts down and swings across on the
+  current until it is out of the good water; walk away from it and you drag it;
+  walk away from a hooked fish and you are pulling with your whole body, which
+  loads the rod as fast as you are walking and parts the line if you run.
+- **The fight.** A hooked fish runs, the line can break, and the hook can fall
+  out. Hold the right mouse button (or `E`) to wind, and lean the rod against the
+  run to put side strain on it — you may do one or the other, never both, which
+  is the whole rule. A minnow comes straight in; a big pike is a dozen seconds of
+  your attention and may still get off. The readout is the tackle, not a meter on
+  the glass: the rod hoops, the line's sag goes out of it, the float rides under,
+  and the line starts to sing before it parts. What you land comes out onto the
+  grass at your feet, at its real length, and lies there kicking for a few
+  seconds before it goes back in.
+
+There is no inventory, no tackle to buy and nothing to unlock, and there never
+will be — the moment any of those exists it stops being a thing you do while
+talking and becomes a thing you are doing instead of talking. `npm run
+check:fish` drives the whole loop, asserts that all three endings are reachable,
+that the game is winnable by somebody following its own prompt, and that a fight
+costs under 60 µs a frame.
+
+And the ferry, a raft that spends its whole life going up and down the river,
+calling at the landings. Its position is a pure function of the Unix epoch, like
+the sun, so every client agrees about where it is with zero bytes on the wire.
 
 The brief asked for a bus. A bus needs a road, and a road here is a hole in the
 density field that plants every tree in an endless world. The river is already
@@ -260,8 +301,9 @@ One shared uniform block is injected into every world material via
   function of *distance from the eye*, so the far ridge swells while the ground
   under your feet stays put. Near depth cues stay honest and far ones lie, which
   is the reported experience.
-- **Ego death** — the surface term is **an open question as of 2026-08-11**, and
-  the panel has four candidates in it. What was there was a luminance-keyed
+- **Ego death** — the surface term is **`unedge` 0.5 + `swarm` 1**, chosen
+  2026-08-11 after shooting four candidates side by side. What was there was a
+  luminance-keyed
   dither hashed off `floor(worldPos * cells)`, world-seeded so the swarm held
   still when you turned your head, and sized to about four pixels on screen at
   any distance so it would read as a swarm rather than as blocks. That last part
@@ -271,10 +313,24 @@ One shared uniform block is injected into every world material via
   near-uniform on screen — the fix is a field with no cell at all, not a smaller
   one.
 
-  The four live in `director.ego`, default to zero, combine, and are on
-  **Trip → Ego death** in the debug panel with one click per candidate.
-  `node scripts/ego-shots.mjs` shoots all of them at two stations with the surge
-  pinned, which is the only way to compare them honestly.
+  The four live in `director.ego`, combine, and are on **Trip → Ego death** in
+  the debug panel with one click per candidate — including one back to
+  `shipped`, which reads `EGO_DEFAULT` itself rather than a second copy of its
+  numbers. `npm run shot:ego` shoots all of them at two stations with the surge
+  pinned to zero, which is the only way to compare them honestly: every amount
+  in the director rides a ~19 s carrier, so two shots a minute apart are at
+  different amplitudes of everything.
+
+  **What ships, and why the other three do not.** `swarm` at full because it is
+  the effect — it is the only candidate that does what the dither was for, and
+  with the lattice gone there is no reason to hold its amplitude back. `unedge`
+  at *half*, because at 1 the rim goes to nothing and objects stop having
+  silhouettes entirely, which reads as flat rather than as dissolving; at 0.5
+  the outlines are there and no longer reliable, and a surge still momentarily
+  restores the edges it is dissolving. `fade` is a genuinely good quiet reading
+  and is an *alternative* to the swarm rather than a layer under it — it takes
+  the contrast the swarm needs to be legible. `unlight` is out for the measured
+  reason below.
 
   | | what it does | cost |
   |---|---|---|
@@ -642,6 +698,7 @@ node scripts/record.mjs         # records a WAV you can actually listen to
 node scripts/perf.mjs           # frame timing at each phase
 node scripts/debug-check.mjs    # drives the debug panel and asserts it works
 node scripts/play-check.mjs     # plays through jukebox + mushrooms, no debug panel
+node scripts/fish-check.mjs     # the whole fishing loop: read, cast, knock, fight, cost
 node scripts/check-plants.mjs   # asserts no plant can stretch into a streak
 node scripts/bisect.mjs ...     # one frame with any layer or effect switched off
 node scripts/isolate.mjs melt   # how much one effect contributes, world frozen
@@ -888,10 +945,11 @@ src/
     campfire.js         every fire in the world, in four draw calls
     video-surface.js    a screen, standing where somebody put it
     ferry.js            the raft, on the epoch clock
+    shoal.js            fish in the river, and the fish shape everything uses
   player/
     controller.js       the body
     seats.js            somewhere to sit down
-    fishing.js          a rod, a float, and a long wait
+    fishing.js          throw it, watch it land, wait, strike, and play it out
   net/
     index.js            other people, and where their pictures hang
     socket.js           membership, signalling, 18 Hz transforms

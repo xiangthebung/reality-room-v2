@@ -6,6 +6,7 @@ import {
   sanitizeHue,
   sanitizeMusic,
   sanitizeName,
+  sanitizeNumbers,
   sanitizePatchId,
   sanitizePresent,
   sanitizeSeed,
@@ -237,6 +238,17 @@ export function attachSignaling(httpServer, registry, { getIceServers, exclusive
        * `MAX_EATEN` for the size this can reach.
        */
       ...(room.eaten.size ? { eaten: [...room.eaten] } : null),
+      /**
+       * Who is simulating the animals. Yourself, if you are the first one in.
+       *
+       * Always sent, unlike the four fields above, because there is no default a
+       * client could assume. Every one of those has a right answer a lone client
+       * already knows — the built-in speaker positions, silence, no mushrooms
+       * eaten — and "who decides what the deer do" does not: a client that
+       * guessed would either be a second host or would stand in a wood whose
+       * animals nobody is moving.
+       */
+      host: room.hostId,
       // Minted server-side and handed over here. See ice.js for why the token
       // that produced these never appears in this payload.
       iceServers: getIceServers(player.id),
@@ -266,8 +278,23 @@ export function attachSignaling(httpServer, registry, { getIceServers, exclusive
 
     socket.on('close', () => {
       if (player.room) {
-        player.room.remove(player.id);
-        player.room.broadcast({ t: 'leave', id: player.id });
+        const room = player.room;
+        const wasHost = room.hostId === player.id;
+        room.remove(player.id);
+        room.broadcast({ t: 'leave', id: player.id });
+        /**
+         * The animals change hands, and ONLY when the person simulating them
+         * leaves.
+         *
+         * Sent after `leave` rather than with it, so that whoever is promoted
+         * has already forgotten the departed avatar before it starts deciding
+         * what the wood does about the people in it. Nobody else's departure
+         * touches this — `hostId` is the earliest arrival, so losing anyone
+         * further down the list leaves it exactly where it was, and a room that
+         * broadcast a host on every leave would hand every remaining client a
+         * pointless reset. See `Room.hostId`.
+         */
+        if (wasHost && room.size > 0) room.broadcast({ t: 'host', id: room.hostId });
       }
       registry.release(player);
     });
@@ -511,6 +538,34 @@ function handle(player, msg) {
       // that comes back for somebody who arrives later. See `MAX_EATEN`.
       if (player.room.eaten.size < MAX_EATEN) player.room.eaten.add(id);
       player.room.broadcast({ t: 'eat', id }, player.id);
+      return;
+    }
+
+    /**
+     * WHERE ALL THE ANIMALS ARE, from the one client entitled to say.
+     *
+     * FORWARDED AND NOT STORED, which is what makes it different from every
+     * other piece of shared world state in this file. The speakers, the record
+     * and the eaten mushrooms are all facts that outlive the person who caused
+     * them, so the room holds them and hands them to the next arrival. An animal
+     * position is stale in a sixth of a second — a late joiner does not want the
+     * last one, it wants the next one, and it will have it before it has finished
+     * building its forest. Nothing here is remembered and nothing is cleared when
+     * the room empties, because there is nothing to clear.
+     *
+     * The host check is the only authority in the whole protocol. Everywhere else
+     * the last write wins, because everywhere else two people disagreeing is two
+     * people moving furniture; here it would be two simulations fighting over the
+     * same deer at six updates a second each.
+     */
+    case 'fauna': {
+      if (!player.room || player.room.hostId !== player.id) return;
+      const a = sanitizeNumbers(msg.a);
+      if (!a) return;
+      // Coats are optional — a client that sends only transforms is behaving.
+      const c = msg.c === undefined ? undefined : sanitizeNumbers(msg.c);
+      if (c === null) return;
+      player.room.broadcast({ t: 'fauna', a, ...(c ? { c } : null) }, player.id);
       return;
     }
 

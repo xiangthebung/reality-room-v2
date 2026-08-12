@@ -1277,6 +1277,30 @@ function buildWater(scene) {
   const material = new THREE.ShaderMaterial({
     name: 'water',
     transparent: true,
+    /**
+     * A TRANSPARENT SURFACE MUST NOT WRITE DEPTH, and until there was anything
+     * under this one it did not matter which way it went.
+     *
+     * `ShaderMaterial` defaults `depthWrite` to true, so the river was stamping
+     * its own surface into the depth buffer — which meant nothing drawn
+     * afterwards could ever appear BELOW it. That was invisible for as long as
+     * the only things under the water were opaque (the bed, which draws first)
+     * and the only things over it were in the air. `world/shoal.js` is the first
+     * thing in this project that lives between the two, and with the write on it
+     * was simply unreachable: a thirty-centimetre fish five metres away, showing
+     * one part in ten of itself through `vec4(col, 0.9)`, is not dim — it is
+     * gone. The shoal was measured rendering perfectly and photographing as
+     * nothing at all.
+     *
+     * Turning it off changes NOTHING for anything that was already working. The
+     * bed is opaque and its depth is written in the opaque pass, so the water is
+     * still occluded everywhere it is buried, which is everywhere but the
+     * channel; and everything else transparent in this file — the shafts, the
+     * mist, the motes — is in the AIR, nearer the camera than the surface, so it
+     * drew over the water before and draws over it now. The only behaviour that
+     * changes is the one that was wrong.
+     */
+    depthWrite: false,
     uniforms: {
       uTime: tripUniforms.uTime,
       uLevel: tripUniforms.uLevel,

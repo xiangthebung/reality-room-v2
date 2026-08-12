@@ -5,6 +5,7 @@ import { buildAtmosphere } from './world/atmosphere.js';
 import { buildSpeakers } from './world/speakers.js';
 import { aimGround } from './world/aim.js';
 import { buildFauna } from './world/fauna.js';
+import { buildShoal } from './world/shoal.js';
 import { groundUnder, setWorldSeed, streamPointNear, wetness } from './world/terrain.js';
 import { buildCaves, caveFloorUnder, caveWarmupObjects } from './world/caves.js';
 import { videoWarmupObjects } from './world/video-surface.js';
@@ -14,7 +15,7 @@ import { buildFerry } from './world/ferry.js';
 import { SeatRegistry, Sitting } from './player/seats.js';
 import { Fishing } from './player/fishing.js';
 import { Social } from './ui/social.js';
-import { FLAG_BITE, FLAG_FISHING, FLAG_SITTING } from './net/protocol.js';
+import { FAUNA_MS, FLAG_BITE, FLAG_FISHING, FLAG_SITTING } from './net/protocol.js';
 import { Controller } from './player/controller.js';
 import { Pipeline } from './render/pipeline.js';
 import { Director, EGO_DEFAULT } from './trip/director.js';
@@ -199,6 +200,25 @@ const speakers = buildSpeakers(scene, new THREE.Vector3(1.2, 0, -6.0));
  */
 const fauna = buildFauna({ scene, seed: SEED });
 /**
+ * The fish in the river, which are not fauna and are deliberately not built by
+ * `buildFauna`.
+ *
+ * Every animal in that module walks or flies on the height field and is placed
+ * against the trunk grid; a fish is placed against the CHANNEL, is only ever
+ * within a hundred metres of one line through the world, and switches itself off
+ * completely everywhere else. Folding it in would have meant teaching the fauna
+ * placement about water for one species, and the shoal is thirty-six instances
+ * that need none of the herding, morphs, plumage or voices that file exists for.
+ *
+ * `sound` is the same optional-chain-into-`ambience` the rod gets, and for the
+ * same reason: fish jump before anybody has clicked through the audio gate.
+ */
+const shoal = buildShoal({
+  scene,
+  seed: SEED,
+  sound: (kind, at, strength) => ambience?.fishing(kind, at, strength),
+});
+/**
  * The caves.
  *
  * Built after the forest and the fauna because it needs neither — it hangs off
@@ -297,6 +317,22 @@ const fishing = new Fishing({
   seed: SEED,
   say: (text, ms) => hud.toast(text, ms),
   announce: (text) => net.note(text),
+  /**
+   * The rod's noises, forwarded to the module that already owns every other
+   * sound made at a point on the water. `ambience` is null until the audio gate
+   * has been clicked through and is declared below this line — both are fine,
+   * because this closure is not called during module evaluation and the optional
+   * chain is what lets a rod work in silence before the context exists at all,
+   * which is the state the perf scripts run the whole world in.
+   */
+  sound: (kind, at, strength) => ambience?.fishing(kind, at, strength),
+  /**
+   * A float hitting the water, and a fish going back into it, are things the
+   * shoal has an opinion about. One callback rather than an import in either
+   * direction: the rod does not know what a shoal is, and the shoal does not
+   * know anybody is fishing.
+   */
+  disturb: (x, z, radius, strength) => shoal.startle(x, z, radius, strength),
 });
 
 /**
@@ -774,6 +810,60 @@ net.onEat((id) => {
   // `onEat` in net/index.js for the walk-then-press-J case this is for.
   for (const mine of eatenByMe) net.sendEat(mine);
 });
+
+/**
+ * THE ANIMALS: one machine decides, everybody watches.
+ *
+ * The three lines below are the whole of it here, because both halves of the
+ * problem live somewhere better. `world/fauna.js` owns the simulation and the
+ * wire format; `src/net/` owns who is entitled to send it. What is left for
+ * main.js is the translation between them, which is the same job it does for
+ * the speakers and the jukebox and for the same reason: neither of those files
+ * should have to know the other exists.
+ */
+net.onHost((mine) => fauna.setHosting(mine));
+net.onFauna((msg) => fauna.applyRemote(msg));
+
+/**
+ * Everybody else's eyes, as four numbers each, rebuilt per frame.
+ *
+ * Not the peer objects themselves — `fauna.setObservers` takes plain positions
+ * and yaws so that nothing in `src/world/` ever holds a reference to a peer.
+ * Allocating a small array a frame is the cost of that boundary and is under a
+ * microsecond at eight people; the alternative is a world module that cannot be
+ * loaded without a net layer, which is what `scripts/fauna-wired.mjs` and every
+ * capture script depend on not being true.
+ *
+ * Empty for the whole of single player, where every path that reads it is
+ * skipped entirely.
+ */
+function faunaObservers() {
+  const peers = net.peers;
+  if (peers.length === 0) return EMPTY_OBSERVERS;
+  return peers.map((p) => ({ x: p.position.x, y: p.position.y, z: p.position.z, yaw: p.yaw }));
+}
+const EMPTY_OBSERVERS = [];
+
+/**
+ * The host's six-a-second send, paced off the world clock.
+ *
+ * `FAUNA_MS` and not a frame count, because frames are not a unit of time: a
+ * machine at 240 fps would be sending four times as often as one at 60 and
+ * paying for it in somebody else's downstream. Falling behind is not caught up
+ * on — a missed send is a sample nobody wants any more by the time it would go,
+ * which is why this sets the mark to `now` rather than advancing it by a step.
+ *
+ * Costs a `performance.now()` and a compare on the frames it does not send.
+ */
+let faunaSentAt = 0;
+function announceFauna() {
+  if (!net.isHost) return;
+  const now = performance.now();
+  if (now - faunaSentAt < FAUNA_MS) return;
+  faunaSentAt = now;
+  const snapshot = fauna.snapshot();
+  if (snapshot) net.sendFauna(snapshot);
+}
 
 /**
  * WHEN WHAT IS PLAYING STARTED, on the world clock.
@@ -1744,10 +1834,41 @@ const PROMPT_ROD = `<kbd>F</kbd> take out a rod`;
  * be able to read it in the time the window is open, which is 1.6 seconds.
  */
 const PROMPT_FISH = {
-  ready: `<kbd>E</kbd> cast · <kbd>F</kbd> put it away`,
-  waiting: `<kbd>E</kbd> reel in`,
-  bite: `<kbd>E</kbd> — <b>now</b>`,
+  ready: `hold <b>left mouse</b> to load a cast · <kbd>F</kbd> put it away`,
+  loading: `let go to throw`,
+  // No entry for `flight`, and that is the point: the tackle is in the air and
+  // there is nothing anybody can do about it. `?? null` at the call site hides
+  // the prompt entirely for the second it takes to land.
+  waiting: `<b>right mouse</b> to wind · <kbd>E</kbd> reel in`,
+  bite: `<b>click</b> — <b>now</b>`,
+  landed: `<b>click</b> to slip it back`,
 };
+/**
+ * The fight, and this is where it is taught.
+ *
+ * FOUR STRINGS, AND THE FOURTH ONE IS LOAD-BEARING. They are keyed off two
+ * fields — `fishing.surge`, is it running, and `fishing.lean`, which way to
+ * sweep the rod — because keying them off `lean` alone was a real bug rather
+ * than an untidiness. Zero meant both "it is resting, wind away" and "it is
+ * running and you have the rod exactly right", which are opposite instructions,
+ * so the screen told players to wind at the precise moment they had got the
+ * lean correct — and winding through a big fish's run is what breaks the line.
+ * Somebody following this prompt perfectly lost half the pike they hooked. See
+ * the note at `surge` in fishing.js.
+ *
+ * The rule of the fight is not obvious from first principles and a tutorial for
+ * a thing you do while talking to somebody is out of the question, so the prompt
+ * says the next thing to do and nothing else. Two or three fish and nobody reads
+ * it any more, because by then the rod is doing the telling.
+ *
+ * Hoisted like the rest for the reason the comment at the call site gives: this
+ * is fed to `setPrompt` every frame, and building the string there would be four
+ * allocations a frame to hand it something it discards.
+ */
+const PROMPT_PLAY = `hold <b>right mouse</b> to wind it in`;
+const PROMPT_PLAY_LEFT = `it runs — lean <b>←</b>`;
+const PROMPT_PLAY_RIGHT = `it runs — lean <b>→</b>`;
+const PROMPT_PLAY_HOLD = `hold it there`;
 
 /** Seconds between trip-readout redraws. See the call site. */
 const HUD_INTERVAL = 1 / 6;
@@ -2067,7 +2188,15 @@ function frame() {
   net.setPose(
     (sitting.seated ? FLAG_SITTING : 0) |
       (fishing.state !== 'off' ? FLAG_FISHING : 0) |
-      (fishing.state === 'bite' ? FLAG_BITE : 0)
+      /**
+       * The bite bit covers the fight too, and no new bit was needed: the flag
+       * is documented in `protocol.js` as "something is on the line right this
+       * second", which is true for both the strike window and the twenty
+       * seconds after it. So a remote avatar's rod bends and its arms lift for
+       * the whole of somebody else's fight, which is the part worth seeing from
+       * across the river, and the byte is unchanged.
+       */
+      (fishing.state === 'bite' || fishing.state === 'playing' ? FLAG_BITE : 0)
   );
 
   // After the audio block so the WebAudio listener is already at this frame's
@@ -2115,7 +2244,20 @@ function frame() {
   // still to photograph it. The trip level reaches the animals as well as the
   // plants — a forest whose trees breathe while its birds fly on rails reads
   // as two worlds superimposed.
+  fauna.setObservers(faunaObservers());
   fauna.update(probe.frozen ? 0 : dt, { camera, tripLevel: director.level });
+  /**
+   * The river's own fish, after the rod so a cast that has just landed has
+   * already told them about it, and frozen by the same switch as the rest of the
+   * world so `isolate.mjs` can photograph one.
+   *
+   * Driven from the BODY rather than the camera. The camera is up to 1.35 m of
+   * trip dolly away from where the player actually is, and everything this reads
+   * the position for — which fish to recycle, whether the shoal is awake at all
+   * — is a question about the person, not the viewpoint.
+   */
+  shoal.update(probe.frozen ? 0 : dt, controller.position);
+  announceFauna();
 
   /**
    * The trip readout does not need to be redrawn 240 times a second.
@@ -2139,7 +2281,17 @@ function frame() {
   // three allocations to hand setPrompt something it will usually discard —
   // it already early-returns when the prompt has not changed.
   if (target?.kind === 'fish') {
-    hud.setPrompt(PROMPT_FISH[fishing.state] ?? null);
+    hud.setPrompt(
+      fishing.state === 'playing'
+        ? !fishing.surge
+          ? PROMPT_PLAY
+          : fishing.lean < 0
+            ? PROMPT_PLAY_LEFT
+            : fishing.lean > 0
+              ? PROMPT_PLAY_RIGHT
+              : PROMPT_PLAY_HOLD
+        : (PROMPT_FISH[fishing.state] ?? null)
+    );
   } else if (target?.kind === 'sit') {
     hud.setPrompt(PROMPT_SIT);
   } else if (target?.kind === 'ferry') {
@@ -2209,9 +2361,27 @@ function frame() {
    */
   caves.update(camera, dt);
   {
+    /**
+     * THE CONTAINMENT TERM IS SATURATED, AND IT HAS TO BE NOW THAT ROOMS EXIST.
+     *
+     * `inCave` is a ramp across the passage, so it reads about 0.5-0.6 in the
+     * middle of a wide chamber — which is correct for what it was built for (a
+     * squeeze IS more enclosed than a hall, and the reverb should say so) and
+     * catastrophic as a proxy for "am I underground". Everything below keys off
+     * `caveMix`: the fog, whether the wood is submitted, and `buried`, which
+     * hides the world's water plane, its sun shafts and its mist.
+     *
+     * At 0.5 the old expression never reached the 0.55 `buried` threshold, so
+     * standing in a breakdown chamber sixty metres inside a mountain drew the
+     * river's surface across the whole screen — from underneath. Dividing by
+     * 0.55 first means anything meaningfully inside the passage counts as
+     * inside, and DEPTH is left as the only thing that decides how far in you
+     * are, which is what it was always the honest measure of.
+     */
+    const enclosed = clamp01(controller.inCave / 0.55);
     const target =
       controller.inCave > 0
-        ? clamp01(controller.inCave * (0.25 + 0.75 * Math.min(1, controller.caveDepth / 26)))
+        ? clamp01(enclosed * (0.25 + 0.75 * Math.min(1, controller.caveDepth / 26)))
         : 0;
     caveMix += (target - caveMix) * Math.min(1, dt * 3.2);
     // Composed inside atmosphere's `_recompose` alongside the hour and the
@@ -2242,7 +2412,24 @@ function frame() {
     if (caves.occludeWorld(forest, caveMix, controller.caveDepth)) {
       renderer.shadowMap.needsUpdate = true;
     }
-    caveAudio?.update(dt, caveMix, controller.caveDepth);
+    /**
+     * …and what the passage is like where the body is standing.
+     *
+     * The reverb size, the draught and the stream all come from the same
+     * `caveSample` the movement already ran this frame — see the block in
+     * `controller._resolveCave`. Passing them rather than re-sampling here is
+     * what keeps the sound and the geometry describing the same place: a second
+     * scan a few lines later would be a frame behind on the one transition
+     * (walking into a squeeze) the whole thing exists to make audible.
+     */
+    caveAudio?.update(
+      dt,
+      caveMix,
+      controller.caveDepth,
+      controller.caveTight,
+      controller.caveRoom,
+      controller.caveWater
+    );
   }
 
   // Last, once the camera is final for this frame: repack the instanced
@@ -2424,6 +2611,13 @@ const probe = {
     screens: () => scene.children.filter((c) => c.name?.startsWith('share-screen')),
     ferry: () => (ferry ? [ferry.group] : []),
     rod: () => [fishing.group],
+    /**
+     * The fish in the river. Its own switch rather than a line in `fauna`,
+     * because the question this surface answers is "which layer is drawing
+     * that", and a shape moving under the water is the single most likely thing
+     * in this world to be mistaken for something else.
+     */
+    shoal: () => [shoal.mesh],
     shafts: () => [atmosphere.shafts.group],
     mist: () => [atmosphere.mist.layers],
     motes: () => [atmosphere.motes.points],
@@ -2589,6 +2783,7 @@ window.RR = {
   probe,
   net,
   fauna,
+  shoal,
   caves,
   /**
    * The social half, exposed for the console and for `server/test/two-player.mjs`
@@ -2604,6 +2799,21 @@ window.RR = {
   social,
   get caveAudio() {
     return caveAudio;
+  },
+  /**
+   * The forest's own sound layer, on a getter for the same reason `caveAudio`
+   * is: neither exists until the audio gate has been clicked through, so a
+   * plain property would freeze `null` into the object at module-evaluation
+   * time and every reader would get it for ever.
+   *
+   * Exposed for `scripts/fish-check.mjs`, which fires all eight of the rod's
+   * one-shots and then asserts the voice counter came back to where it started.
+   * That is not something `audio-probe.mjs` can see — the probe measures the
+   * master bus over a stage, and eight events that each leak one oscillator are
+   * inaudible in a spectrum and fatal by the four hundredth cast.
+   */
+  get ambience() {
+    return ambience;
   },
   /**
    * The live uniform block.

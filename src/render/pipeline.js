@@ -672,8 +672,29 @@ export class Pipeline {
          * per 39 m, about ten seconds at a walk — and near enough that moving
          * around the wood is not moving under a fixed lid.
          */
-        /** Metres out the field sits. Larger = walking moves it less. */
-        const float RR_VIEW_SHELL = 120.0;
+        /**
+         * Metres out the field sits, and it is MEASURED — see
+         * scripts/view-depth.mjs, which raycasts a grid of view directions into
+         * the real wood at the perf stations and solves for it.
+         *
+         * The field is sampled at eye + dir*SHELL, so under a step of one metre
+         * the pattern slides across a world feature at depth z by
+         * ARC * sin(theta) * (1/SHELL - 1/z) — zero exactly at z = SHELL. The
+         * least-squares fit over the depths this forest actually presents is
+         * 13.2 m. It was 120 m, which is three times further than you can see
+         * here at all: the field sat effectively at infinity and barely moved
+         * while the wood streamed past it, which is what a pattern stuck to the
+         * screen looks like.
+         *
+         * WHAT THIS CONSTANT CANNOT DO, and the reason it is not the whole fix.
+         * The residual only falls from 6.0% of the frame per metre to 4.5%,
+         * because the wood spans 4 m to 90 m and one shell can match one depth.
+         * Matching every depth needs the depth buffer, and reading depth is what
+         * puts a seam at every silhouette — the melt, exactly. So the remaining
+         * mismatch is paid for in the director instead, by standing the effect
+         * down while you move: see VIEW_MOVING_FLOOR there.
+         */
+        const float RR_VIEW_SHELL = 13.2;
         /**
          * Domain units across one radian of view, near enough. Set so the
          * frame spans the same 5.2 units it did before normalising — the

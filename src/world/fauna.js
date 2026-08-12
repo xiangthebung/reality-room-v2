@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TAU, clamp, clamp01, damp, makeRng, rngRange, wrapAngle } from '../core/util.js';
+import { TAU, clamp, clamp01, damp, lerp, makeRng, rngRange, wrapAngle } from '../core/util.js';
 import { WORLD_RADIUS, heightAt, slopeAt, wetness } from './terrain.js';
 import { colliderGrid } from './forest.js';
 import { glowSprite } from './textures.js';
@@ -237,6 +237,102 @@ const _m = new THREE.Matrix4();
 const _proj = new THREE.Matrix4();
 const _frustum = new THREE.Frustum();
 const _sphere = new THREE.Sphere();
+/** Whichever observer an animal is currently reacting to. See `nearestEye`. */
+const _eye = new THREE.Vector3();
+
+/**
+ * How wide a cone counts as "somebody is looking that way", in cosine.
+ *
+ * 0.34 is about 70° off their forward — half again the horizontal half-angle of
+ * the game's camera. Deliberately generous, because this number only ever
+ * decides whether an animal is allowed to TELEPORT, and the two errors are not
+ * remotely symmetric: too wide and a recycle waits a few seconds longer than it
+ * needed to, which nobody can see; too narrow and a deer vanishes in somebody's
+ * peripheral vision, which is the single worst artefact this system can produce.
+ *
+ * A cone and not a frustum because a frustum needs a projection matrix, and what
+ * arrives over the network is a position and a yaw. Reconstructing somebody's
+ * exact field of view from that would mean sending their fov and aspect, which
+ * is three more numbers on every tick to slightly tighten a test whose failure
+ * mode is "waited too long".
+ */
+const PEEK_COS = 0.34;
+
+/**
+ * How far behind live a guest replays the animals, in milliseconds.
+ *
+ * Two sends at the host's six a second, for the reason `INTERP_DELAY_MS` is two
+ * body ticks: every frame is then a true interpolation between two samples that
+ * have both arrived, and one dropped packet costs nothing rather than a stall.
+ *
+ * A third of a second is a lot to be behind a person and nothing to be behind a
+ * rabbit. There is no way to notice it: an animal has no voice coming out of it
+ * and nothing in the world to be out of step with, so the only requirement on
+ * this number is that the motion between samples is smooth.
+ */
+const FAUNA_LAG_MS = 333;
+
+/**
+ * The states, in wire order. An index into this is the whole of `state`.
+ *
+ * Order is load-bearing and append-only: it is an integer on the network, so
+ * inserting one in the middle would make every older client read every animal's
+ * state as the one next door.
+ */
+const STATES = ['graze', 'watch', 'walk', 'bolt', 'climb'];
+
+/**
+ * Eight numbers per animal, and the choice of which eight is the whole design.
+ *
+ * The split is between what the host DECIDED and what any machine holding that
+ * decision can work out for itself:
+ *
+ *   x, y, z      where it is. `y` is carried rather than recomputed from
+ *                `heightAt` because a climbing squirrel is three metres up a
+ *                trunk, and that is the one case where the ground is wrong.
+ *   yaw          which way the body faces. Host-owned because `faceHead` swings
+ *                the whole body once the neck runs out, so this carries part of
+ *                "it has noticed somebody".
+ *   look         head yaw against the body — the whole of "it is watching me".
+ *                Cannot be derived: it points at WHICHEVER person the animal
+ *                noticed, and only the host knows who that was.
+ *   lookPitch    the same vertically, and the grazing head-bob.
+ *   speed        drives the stride blend, the gait phase and the footfalls, all
+ *                of which are then local.
+ *   state        an index into `STATES`.
+ *
+ * DERIVED AND DELIBERATELY ABSENT: `pitch` (zero in four states, a constant in
+ * the fifth), `alert` and `alarm` (see `expression`), `gait` (a phase integrated
+ * from speed, and no two machines have anything to compare leg phase against),
+ * `stride`, the frustum test, the draw-slot compaction, and every sound. Sending
+ * those would be half as much again on the wire for nothing anybody could see.
+ */
+const ANIMAL_FIELDS = 8;
+
+/**
+ * How many animals re-describe their coat on each send.
+ *
+ * THIS IS THE ANSWER TO A PROBLEM THAT LOOKS MUCH BIGGER THAN IT IS. Recycling
+ * an animal re-rolls its coat, size, rack and nerve — see `individual` — off a
+ * sequential rng, so a guest that never runs the recycler would keep the coat it
+ * rolled at load and slowly drift into disagreement about what colour every deer
+ * in the wood is.
+ *
+ * The obvious fix tracks which animals changed and sends those, which needs a
+ * dirty flag, a repeat count against packet loss, and a full dump whenever
+ * somebody joins. Two a tick, round-robin, needs none of that: the whole
+ * population is re-described every two seconds, packet loss heals itself, a late
+ * joiner is correct within two seconds of arriving, and there is no state to get
+ * wrong. It costs about a tenth of what the transforms cost.
+ *
+ * The two-second window is invisible because of when a re-roll can happen at
+ * all: the recycler only fires on an animal that is in nobody's view.
+ */
+const COATS_PER_SEND = 2;
+
+/** Wire rounding. See `snapshot` for why the host does this and not the server. */
+const r2 = (n) => Math.round(n * 100) / 100;
+const r1 = (n) => Math.round(n * 10) / 10;
 const _tint = new THREE.Color();
 
 /**
@@ -1090,6 +1186,49 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * are likely to walk past, which is the whole point of the percher: a bird
    * thirty metres up a tree you never approach is a texture.
    */
+  /**
+   * THE BAND A PERCHER LIVES IN, AND IT IS THE WHOLE REASON THIS WOOD HAD NO
+   * BIRDS IN IT.
+   *
+   * Every re-seat used to draw from 26–95 m. With `pow(rng(), 0.7)` biasing
+   * outward that is a mean radius of 67 m, and measuring the running game agreed:
+   * instrumenting `engine.createSpatial` for 45 s of standing still caught 17
+   * song phrases at a MEAN DISTANCE OF 59 m, one of them inside 20 m, and most
+   * lifting the master by less than a quarter over the wind and the stream.
+   *
+   * Two independent things were wrong with that and they have the same cause.
+   *
+   *   YOU COULD NOT HEAR THEM. `_phrase` places song with a 7 m reference and a
+   *   1.35 rolloff, so 59 m is a ninth of the level of the same bird at 7 m, and
+   *   the distance low-pass has by then taken the chiff off the front of every
+   *   note — which is the part that identifies the species. Sixteen carefully
+   *   distinguished contours, delivered as sixteen indistinguishable rumours.
+   *
+   *   YOU COULD NOT SEE THEM EITHER, and this is the half that made the whole
+   *   feature invisible: THE FOREST HIDES EVERYTHING PAST ABOUT 40 m. Of birds
+   *   drawn from 26–95 m, one in nine is inside that. Twenty-six perching birds
+   *   existed, on real trunks, at real bough height, and the player's honest
+   *   report was that birds only ever fly overhead — because the only birds they
+   *   could resolve were the ninety-six flock instances circling above the
+   *   canopy.
+   *
+   * 12–58 m puts the mean at 39 m and about half the roster inside the 40 m the
+   * trees allow you to see through, with two or three inside 20 m at any moment.
+   * THE INNER RADIUS IS NOT SMALLER THAN THAT ON PURPOSE: the startle radius is
+   * 9 m, so a bird seated at 10 would flush the moment you shifted your weight,
+   * and a wood that explodes every few seconds is worse than a quiet one. Twelve
+   * leaves a bird you can walk up to — and then it goes, which is the point.
+   *
+   * IT DOES NOT ADD BIRDSONG, IT MOVES IT. `wildlife.js` meters song through a
+   * leaky bucket, so the number of phrases a minute is set there and not here;
+   * what changed is which birds win the tokens. Its own comment already wanted
+   * this — "the same amount of birdsong, distributed by proximity instead of by
+   * lottery" — and the bucket could not deliver it while every candidate was
+   * sixty metres away.
+   */
+  const PERCH_NEAR = 12;
+  const PERCH_BAND = 58;
+
   function pickPerch(out, ax, az, minR, maxR) {
     for (let attempt = 0; attempt < 14; attempt++) {
       const a = rng() * TAU;
@@ -1119,8 +1258,40 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   /** Scratch for the plumage resolve. Nothing at load may allocate either. */
   const _coat = [1, 1, 1];
   const _mark = [1, 1, 1];
+
+  /**
+   * A DEAL RATHER THAN TWENTY-SIX INDEPENDENT ROLLS, so the wood contains every
+   * species it knows about.
+   *
+   * This was `Math.floor(rng() * VOICE_COUNT)` per bird, which is the obvious
+   * thing and quietly costs you three species a session: twenty-six uniform
+   * draws from sixteen leaves `16 * (15/16)^26` — almost exactly three — with no
+   * percher at all, and a species with no percher can only ever reach the player
+   * as a distant phrase from beyond the trees. Sixteen contours were written to
+   * be told apart, and the ones that go missing are missing for the whole
+   * session, silently, differently each time.
+   *
+   * So the first sixteen cards are the roster and the remaining ten are drawn at
+   * random, then the deck is shuffled so the extras are not all at the end. It
+   * guarantees one of everything, keeps the doubling-up that makes a wood feel
+   * unplanned, and costs one array of twenty-six integers at load.
+   *
+   * Fisher-Yates off the fauna rng, which is its own stream (`:fauna`) — so the
+   * reordering cannot move a tree, and two players in a seeded world still deal
+   * the same wood.
+   */
+  const deck = [];
+  for (let v = 0; v < VOICE_COUNT && deck.length < PERCHERS; v++) deck.push(v);
+  while (deck.length < PERCHERS) deck.push(Math.floor(rng() * VOICE_COUNT));
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = deck[i];
+    deck[i] = deck[j];
+    deck[j] = t;
+  }
+
   for (let i = 0; i < PERCHERS; i++) {
-    const voice = Math.floor(rng() * VOICE_COUNT);
+    const voice = deck[i];
     const plume = plumageOf(voice);
     const size = sizeOf(voice);
     /**
@@ -1146,6 +1317,13 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       state: 'perch',
       timer: rngRange(rng, 0, 9),
       sing: rngRange(rng, 2, 40),
+      /**
+       * Seconds until this one crosses to another branch of its own accord. See
+       * the block in `updatePerchers`. Spread across the whole interval at load
+       * so the roster does not take off together on the first frame it is near
+       * enough to bother.
+       */
+      hop: rngRange(rng, 4, 72),
       beat: rng() * TAU,
       /** Wing spread, 0 folded to 1 open. */
       open: 0.04,
@@ -1187,7 +1365,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       /** One bird in the wood is the one that starts paying attention. */
       watcher: i === 0,
     };
-    pickPerch(p.home, 0, 0, 12, 110);
+    pickPerch(p.home, 0, 0, PERCH_NEAR, PERCH_BAND);
     p.pos.copy(p.home);
     perchers.push(p);
     birdFlight.setXYZW(p.slot, 0, p.open, 0, 0);
@@ -1507,6 +1685,19 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   }
 
   /**
+   * EVERY GROUND ANIMAL IN ONE FLAT LIST, AND THIS IS THE WIRE ORDER.
+   *
+   * `BEASTS` is an object literal and `herds` is built by iterating it, so this
+   * ordering — deer, then rabbits, then squirrels, each in construction order —
+   * is fixed by the source and identical in every tab that loads this file.
+   * That is the whole addressing scheme: index 7 is the same rabbit on eight
+   * machines, so nothing about which animal a row describes has to be sent.
+   *
+   * It costs one array of references to objects that already exist, built once.
+   */
+  const everyone = herds.flatMap((h) => h.members);
+
+  /**
    * WHO THIS ONE IS: a coat, a size, a rack and the nerve that follows from all
    * three.
    *
@@ -1793,16 +1984,94 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   let elapsed = 0;
 
   /**
-   * Is this point in the frame? Used to decide when a creature may be moved,
-   * NOT to decide when it may be drawn — a creature that teleports while you
-   * are looking at it is the worst artefact this system can produce, and the
-   * whole "you glimpsed it and now it is gone" effect depends on the move being
-   * unobservable.
+   * THE OTHER PEOPLE IN THE WOOD, IF THERE ARE ANY.
+   *
+   * `{x, y, z, yaw}` each, refreshed by main.js from the net layer's peers, and
+   * empty for the whole of single player — which is what keeps every path below
+   * exactly what it was when this file had one pair of eyes to think about.
+   */
+  let observers = [];
+
+  /**
+   * Whether THIS machine is the one deciding what the animals do.
+   *
+   * True on a solitary walk, true for exactly one person in a room, false for
+   * everybody else — see `setHosting` and the header on `snapshot`. A guest runs
+   * every line of this file except the deciding: it culls, poses, gaits, sounds
+   * and draws, and takes position and intent off the wire instead of off the
+   * state machine.
+   */
+  let hosting = true;
+
+  /** Where the coat round-robin has got to. See `COATS_PER_SEND`. */
+  let coatCursor = 0;
+
+  /**
+   * Is this point in the frame — ANY frame, belonging to anybody?
+   *
+   * Used to decide when a creature may be moved, NOT when it may be drawn. A
+   * creature that teleports while you are looking at it is the worst artefact
+   * this system can produce, and the whole "you glimpsed it and now it is gone"
+   * effect depends on the move being unobservable.
+   *
+   * WHICH IS WHY THIS TAKES A ROOM AND NOT A CAMERA. The local frustum is exact
+   * and free, because the local camera is right here; everybody else gets the
+   * cone test described at `PEEK_COS`, because a position and a yaw is all that
+   * crosses the network. With nobody else in the wood the loop body never runs
+   * and this is the function it has always been.
+   *
+   * Only the host calls it — recycling is a decision — but it is a decision made
+   * on everyone's behalf, and getting it wrong is the one failure in this whole
+   * feature that a guest would see rather than the host.
    */
   function unseen(p, radius) {
     _sphere.center.copy(p);
     _sphere.radius = radius;
-    return !_frustum.intersectsSphere(_sphere);
+    if (_frustum.intersectsSphere(_sphere)) return false;
+    for (const o of observers) {
+      const dx = p.x - o.x;
+      const dz = p.z - o.z;
+      const d = Math.hypot(dx, dz);
+      // Close enough to be noticed at all. Past this an animal is a speck in
+      // fog for them however directly they are facing it, and holding the
+      // recycler on that basis would strand animals nobody can see.
+      if (d > FAR.deer) continue;
+      // Standing on top of it: no facing test survives a zero-length vector,
+      // and somebody that close can see it whichever way they turn.
+      if (d < radius + 2) return false;
+      // `yaw` is the same convention the avatars use — 0 is -Z, and x leads.
+      if ((dx * Math.sin(o.yaw) + dz * Math.cos(o.yaw)) / d > PEEK_COS) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The eye an animal is reacting to: the nearest one, in the plane.
+   *
+   * THE ONE BEHAVIOURAL CHANGE THAT MULTIPLAYER FORCED, and it is a fix rather
+   * than a compromise. Every distance in `updateHerd` — notice, flee, watch,
+   * which way to run — used to be measured against the local camera, because
+   * there was only ever one. Kept that way in a room, the host's own approach
+   * would be the only one that could startle anything: four people could walk
+   * through a herd and the deer would go on grazing, then all bolt at once when
+   * the host arrived from the other side. The nearest observer is what "you
+   * walked too close to it" always meant.
+   *
+   * Returns a scratch vector, valid until the next call, and the local camera
+   * whenever the wood is empty of other people.
+   */
+  function nearestEye(m, camera) {
+    _eye.copy(camera.position);
+    if (observers.length === 0) return _eye;
+    let best = (m.pos.x - _eye.x) ** 2 + (m.pos.z - _eye.z) ** 2;
+    for (const o of observers) {
+      const d2 = (m.pos.x - o.x) ** 2 + (m.pos.z - o.z) ** 2;
+      if (d2 < best) {
+        best = d2;
+        _eye.set(o.x, o.y, o.z);
+      }
+    }
+    return _eye;
   }
 
   function updatePerchers(dt, camera, tripLevel) {
@@ -1822,13 +2091,22 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * singing to nobody, while the wood you are actually standing in has no
        * birds in it.
        *
-       * PERCH_FAR is past the 95 m the flush itself re-seats within, so this
-       * cannot fight with that; and it only ever fires while the bird is out of
-       * frame, so what the player sees is a bird that was always there.
+       * PERCH_FAR is past the PERCH_BAND the flush itself re-seats within, so
+       * this cannot fight with that; and it only ever fires while the bird is
+       * out of frame, so what the player sees is a bird that was always there.
+       *
+       * It came down from 150 with the band, and by more than the band did. The
+       * clearance is what has to be preserved rather than the number — 30 m of
+       * it here — because a bird re-seated at the far edge of the band must not
+       * immediately qualify to be re-seated again, which is a bird that moves
+       * every frame the player walks away from it.
        */
-      const PERCH_FAR = 150;
+      const PERCH_FAR = 88;
       if (dist > PERCH_FAR && p.state === 'perch' && unseen(p.pos, 2)) {
-        if (pickPerch(p.home, camera.position.x, camera.position.z, 26, 95) && unseen(p.home, 2)) {
+        if (
+          pickPerch(p.home, camera.position.x, camera.position.z, PERCH_NEAR, PERCH_BAND) &&
+          unseen(p.home, 2)
+        ) {
           p.pos.copy(p.home);
           p.timer = rngRange(rng, 1, 5);
           p.sing = rngRange(rng, 10, 45) * (p.hen ? 2.3 : 1);
@@ -1883,6 +2161,70 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
             p.timer = rngRange(rng, 2.5, 9);
             p.yaw += rngRange(rng, -1.4, 1.4);
           }
+
+          /**
+           * AND EVERY SO OFTEN IT SIMPLY MOVES, WHICH IS THE OTHER HALF OF
+           * "BIRDS SHOULD LAND ON TREES".
+           *
+           * Landing after a flush is an arrival you caused, and it is over in
+           * the second and a half you spend recovering from having caused it.
+           * The thing a wood actually does — constantly, in the corner of your
+           * eye, all day — is that a bird you were not looking at crosses a gap
+           * and settles somewhere else. Nothing frightened it and nothing is
+           * happening; it just went. That is the difference between a wood with
+           * animals in it and a wood with animal events in it.
+           *
+           * IT IS THE ONE THING HERE THAT WANTS TO BE SEEN. Every other move in
+           * this file is hidden behind `unseen` because it is a recycle wearing
+           * a bird costume, and a recycle you witness is a teleport. This is not
+           * a recycle — the bird flies the whole way — so there is nothing to
+           * hide, and the check is inverted: it only bothers when somebody is
+           * close enough to watch, because a hop nobody sees is wingbeats and
+           * a `land` state spent on an empty wood.
+           *
+           * WHAT IT COSTS, since twenty-six birds could make this expensive: at
+           * 22–72 s apart and only inside 46 m, about eight or nine hops a
+           * minute across the whole roster, each one a handful of grains from
+           * `wingbeats` and a few seconds of the same per-bird arithmetic the
+           * loop was already doing. No allocation — `pickPerch` writes into the
+           * bird's own `home` — and no draw calls, because these are instances
+           * that were being submitted anyway.
+           */
+          p.hop -= dt;
+          if (p.hop <= 0) {
+            p.hop = rngRange(rng, 22, 72);
+            if (dist < 46) {
+              // Six to twenty metres: far enough to be a flight, near enough
+              // that the bird stays in the piece of wood you are standing in.
+              pickPerch(p.home, p.pos.x, p.pos.z, 6, 20);
+              const tx = p.home.x - p.pos.x;
+              const tz = p.home.z - p.pos.z;
+              const heading = Math.atan2(tx, tz);
+              // A push off the branch, and then `land` flies it. Gentler than a
+              // flush's launch by half, because nothing is chasing it.
+              p.vel.set(Math.sin(heading) * 3.4, 1.9, Math.cos(heading) * 3.4);
+              p.yaw = heading;
+              p.state = 'land';
+              p.timer = 0;
+              /**
+               * `wingbeats` and NOT `flush`. A flush carries a sub-200 Hz whump,
+               * an alarm note and `_startle`, which stops the entire chorus for
+               * four seconds — correct for a bird you frightened and ruinous
+               * here, since a wood where every voluntary hop silences every
+               * other bird is a wood that is silent. See the header on
+               * `wingbeats`.
+               */
+              wildlife?.wingbeats(p.pos, {
+                nearness: clamp01(1 - dist / 46),
+                gain: 0.6,
+                travel: { x: tx, y: p.home.y - p.pos.y, z: tz },
+              });
+              // "Going." Half the small birds in a wood say something as they
+              // leave a branch, and the flight call is already the note falling
+              // away while the panner carries it across you.
+              if (rng() < 0.3) wildlife?.call(p.pos, p.voice, 'flight', { gain: 0.85 });
+            }
+          }
         }
 
         p.sing -= dt * (p.watcher ? 1.6 : 1);
@@ -1927,7 +2269,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           3.0 * p.wing,
           p.scale
         );
-      } else {
+      } else if (p.state === 'flee') {
         p.timer += dt;
         // Gravity and drag, and a slow curve away: a small bird's escape is a
         // burst, an arc and then a glide, which is three lines of physics.
@@ -1951,17 +2293,103 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         );
         const gone = p.timer > 4.5 || p.pos.y > heightAt(p.pos.x, p.pos.z) + 46;
         if (gone) {
-          pickPerch(p.home, camera.position.x, camera.position.z, 26, 95);
+          pickPerch(p.home, camera.position.x, camera.position.z, PERCH_NEAR, PERCH_BAND);
           if (unseen(p.home, 2)) {
             p.pos.copy(p.home);
             p.state = 'perch';
             p.timer = rngRange(rng, 1, 5);
             p.sing = rngRange(rng, 10, 45) * (p.hen ? 2.3 : 1);
+            p.hop = rngRange(rng, 20, 70);
           } else {
-            // Keep flying until there is somewhere to land that you are not
-            // watching. Cheaper than a fade and completely invisible.
-            p.timer = 3.6;
+            /**
+             * SOMEBODY IS WATCHING THE BRANCH IT WANTED, SO LET THEM WATCH IT
+             * ARRIVE.
+             *
+             * This used to read `p.timer = 3.6`, which meant "stay in the air
+             * and try again in a second" — the bird went on climbing until it
+             * found a perch nobody could see and teleported onto it. That is
+             * exactly right for hiding a recycle and it is why, in a wood with
+             * twenty-six perching birds in it, A PLAYER HAS NEVER ONCE SEEN A
+             * BIRD LAND. Every arrival in this file was, by construction,
+             * unobservable.
+             *
+             * So the seen case becomes the good case: fly there and put it down
+             * in full view. It costs the `land` state below and nothing else —
+             * the perch was already chosen, and the bird was already going to
+             * be simulated for the seconds it spends in the air.
+             */
+            p.state = 'land';
+            p.timer = 0;
           }
+        }
+      } else {
+        /**
+         * COMING IN. A steer toward the branch, and a flare onto it.
+         *
+         * Deliberately NOT the flee arc run backwards. A departure is ballistic
+         * — a shove and then gravity, which is what `flee` integrates — and an
+         * arrival is the opposite kind of motion: a bird lands by aiming at the
+         * branch and bleeding off speed until it has none left at exactly the
+         * point it touches. Integrating a launch and hoping it lands on a
+         * twig-sized target is a simulation problem nobody needs to have.
+         *
+         * So the velocity is damped toward "the direction of the perch, at a
+         * speed proportional to what is left" — which cannot overshoot, arrives
+         * asymptotically, and produces the deceleration for free. The `+1.1` on
+         * the vertical is the small rise onto the branch that every small bird
+         * makes at the last moment, and it is the shape the eye recognises.
+         */
+        p.timer += dt;
+        const tx = p.home.x - p.pos.x;
+        const ty = p.home.y - p.pos.y;
+        const tz = p.home.z - p.pos.z;
+        const left = Math.max(0.001, Math.hypot(tx, ty, tz));
+        const want = Math.min(9, 1.2 + left * 1.6) / left;
+        p.vel.x = damp(p.vel.x, tx * want, 0.004, dt);
+        p.vel.y = damp(p.vel.y, ty * want + 1.1, 0.004, dt);
+        p.vel.z = damp(p.vel.z, tz * want, 0.004, dt);
+        p.pos.addScaledVector(p.vel, dt);
+        if (p.vel.x !== 0 || p.vel.z !== 0) p.yaw = Math.atan2(p.vel.x, p.vel.z);
+        /**
+         * The flare: wings wide and slow over the last three metres. It is the
+         * single most legible frame of a landing — a bird braking is almost all
+         * wing — and it is one clamp against the distance left.
+         */
+        const flare = clamp01(1 - left / 3.2);
+        p.open = damp(p.open, 1, 1e-8, dt);
+        birdBeat.setXYZW(
+          p.slot,
+          p.beat,
+          0.14 + flare * 0.44,
+          (15 - flare * 9) * p.wing,
+          p.scale
+        );
+        /**
+         * DOWN — or given up on, and the timer is not a formality.
+         *
+         * `land` is the only state here that aims at a point rather than simply
+         * running out, so it is the only one that can fail to finish: a perch
+         * chosen on a trunk the recycler has since moved, or an arc that starts
+         * pointing away, leaves a bird converging on nothing. Seven seconds is
+         * four times the longest honest approach, and the cost of hitting it is
+         * one bird appearing on its branch instead of settling onto it.
+         */
+        if (left < 0.5 || p.timer > 7) {
+          p.pos.copy(p.home);
+          p.vel.set(0, 0, 0);
+          p.state = 'perch';
+          p.timer = rngRange(rng, 1, 5);
+          /**
+           * AND IT ANNOUNCES ITSELF. A bird that arrives on a branch near you
+           * and then says nothing for a minute is scenery; a bird that lands and
+           * sings within a few seconds is the reason you looked up. Shorter than
+           * the idle timer on purpose, and it is not a rate increase — the bucket
+           * in `wildlife.js` still decides how much song the wood emits, and all
+           * this does is put this bird near the front of the queue at the one
+           * moment the player is already looking at it.
+           */
+          p.sing = Math.min(p.sing, rngRange(rng, 3, 14) * (p.hen ? 2.3 : 1));
+          p.hop = rngRange(rng, 20, 70);
         }
       }
 
@@ -1994,13 +2422,28 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
 
   function updateHerd(herd, dt, camera, tripLevel) {
     const { spec, members, mesh, gait, tone, tint } = herd;
-    const eye = camera.position;
     let write = 0;
 
     for (const m of members) {
-      const dx = m.pos.x - eye.x;
-      const dz = m.pos.z - eye.z;
-      const dist = Math.hypot(dx, dz);
+      /**
+       * TWO DISTANCES NOW, AND CONFLATING THEM IS THE BUG THIS COMMENT EXISTS TO
+       * PREVENT.
+       *
+       * `dist` is to the local camera and answers "what does THIS screen do with
+       * it" — whether to draw it, how loud its hooves are, whether its bark is
+       * near or far. Every one of those is a fact about the person sitting here
+       * and stays local on every machine.
+       *
+       * `reactDist` is to whoever is NEAREST it and answers "what does the animal
+       * do" — notice, watch, flee, recycle. In single player they are the same
+       * number and always were. In a room they are not, and using `dist` for the
+       * second is what would let four people walk through a herd without
+       * disturbing it while the host startled it from across the clearing.
+       */
+      const eye = nearestEye(m, camera);
+      const reactDist = Math.hypot(m.pos.x - eye.x, m.pos.z - eye.z);
+      const dist = Math.hypot(m.pos.x - camera.position.x, m.pos.z - camera.position.z);
+      const was = m.state;
 
       /**
        * THE TRIP DOES NOT ADD A CREATURE OR A COLOUR. IT CHANGES THE ANIMAL'S
@@ -2032,6 +2475,37 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       const fleeR = spec.flee / boldness / m.nerve;
 
       /**
+       * THE EARS AND THE TAIL, before anything decides.
+       *
+       * Split out of the four cases below so that a guest — which does not run
+       * those cases at all — still gets an animal that visibly stiffens when it
+       * notices somebody, off nothing but the state that arrived on the wire.
+       * Extracted rather than duplicated because these are tuned numbers: two
+       * copies of `damp(m.alert, 1, 0.02, dt)` is a promise to keep them equal
+       * that nobody would keep, and the symptom would be one machine's deer
+       * being permanently a little less alarmed than another's.
+       *
+       * ONLY `alert` AND `alarm`, which is the whole test for what belongs here:
+       * they damp toward a target that follows from the state, so anyone holding
+       * the state can compute them. The head does not — see `faceHead` in the
+       * watch case — and travels instead.
+       *
+       * Ordering is unchanged. These lines used to run at the top of each case,
+       * before that case's decisions, and they still do; none of the four
+       * decisions reads a value this writes.
+       */
+      expression(m, reactDist, fleeR, dt);
+
+      if (!hosting) {
+        /**
+         * A GUEST DOES NOT DECIDE ANYTHING. Everything from here to the recycler
+         * is the host's, and this takes its place: position and intent lifted
+         * off the interpolation buffer. See `playback`.
+         */
+        playback(m, dt);
+      } else {
+
+      /**
        * A JUVENILE GOES WHEN ITS MOTHER GOES.
        *
        * Not when it decides to — it is too young to have decided anything, and
@@ -2050,8 +2524,6 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
 
       switch (m.state) {
         case 'graze': {
-          m.alert = damp(m.alert, 0, 0.02, dt);
-          m.alarm = damp(m.alarm, 0, 0.01, dt);
           m.timer -= dt;
           if (m.timer <= 0) {
             graze(m, spec);
@@ -2072,7 +2544,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           );
           m.look = damp(m.look, 0, 0.2, dt);
           approach(m, spec.speed.graze, dt);
-          if (dist < noticeR) {
+          if (reactDist < noticeR) {
             m.state = 'watch';
             // Nerve again: the big steady animal holds the stare half again as
             // long as the average and the jumpy one barely holds it at all,
@@ -2084,16 +2556,23 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         }
         case 'watch': {
           m.speed = damp(m.speed, 0, 0.001, dt);
-          m.alert = damp(m.alert, 1, 0.02, dt);
-          m.alarm = damp(m.alarm, dist < fleeR * 1.5 ? 1 : 0, 0.05, dt);
-          // The head goes round to you, and the body does not. That difference
-          // is the whole of "it is watching me".
+          /**
+           * The head goes round to you, and the body does not. That difference
+           * is the whole of "it is watching me".
+           *
+           * HOST-ONLY, AND THE HEAD IS THEREFORE ON THE WIRE. This turns toward
+           * `eye`, which is whichever person the animal actually noticed — so a
+           * guest cannot recompute it without knowing who that was, and a guest
+           * that ran it against its own camera would produce a deer that looks
+           * at everybody at once. It also nudges `yaw` when the neck runs out,
+           * and yaw is the host's.
+           */
           faceHead(m, eye, dt);
           m.timer -= dt;
-          if (dist > noticeR * 1.35) {
+          if (reactDist > noticeR * 1.35) {
             m.state = 'graze';
             m.timer = 1;
-          } else if (dist < fleeR) {
+          } else if (reactDist < fleeR) {
             /**
              * WHEN A BOLD ANIMAL FINALLY GOES, IT GOES.
              *
@@ -2106,28 +2585,16 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
              * not amble off, he leaves at eight metres a second.
              *
              * It is also one of two levers this file has on the deer's VOICE.
-             * `wildlife.bolt` fires the bark, and only on a bolt — so a stag
-             * barks several times as often as a doe does, and the bark is what
-             * you remember about the encounter.
+             * The bark fires on a bolt and only on a bolt — so a stag barks
+             * several times as often as a doe does, and the bark is what you
+             * remember about the encounter. It is fired below rather than here,
+             * off the state CHANGE, so that a guest hears it too; see `bark`.
              */
-            const hard = dist < fleeR * (m.nerve > 1.15 ? 0.95 : 0.6);
+            const hard = reactDist < fleeR * (m.nerve > 1.15 ? 0.95 : 0.6);
             m.state = hard ? 'bolt' : 'walk';
             m.timer = hard ? rngRange(rng, 2.2, 4.5) : rngRange(rng, 3, 6);
-            if (hard) {
-              /**
-               * The second lever, and mass goes as ITS OWN ARGUMENT now.
-               *
-               * It used to be multiplied into the nearness term, because that
-               * was the only channel available and a quiet bolt is at least in
-               * the right direction. But quiet means FAR, not small: a fawn at
-               * five metres came out sounding like an adult at thirty, and the
-               * panner and the startle hush both agreed with it. `bolt` takes
-               * the two apart — nearness moves the level, mass moves the pitch
-               * of the throat, the length of the crash and the size of the
-               * silence afterwards.
-               */
-              wildlife?.bolt(m.pos, herd.name, clamp01(1 - dist / (fleeR * 2)), m.mass);
-              if (herd.name === 'squirrel') m.trunk = trunks.near(m.pos.x, m.pos.z, 22);
+            if (hard && herd.name === 'squirrel') {
+              m.trunk = trunks.near(m.pos.x, m.pos.z, 22);
             }
             fleeFrom(m, eye, spec.territory * (hard ? 3.2 : 1.6));
           } else if (m.timer <= 0) {
@@ -2141,8 +2608,6 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         case 'walk':
         case 'bolt': {
           const running = m.state === 'bolt';
-          m.alert = damp(m.alert, running ? 0.2 : 0.6, 0.02, dt);
-          m.alarm = damp(m.alarm, 0, 0.02, dt);
           // Nose up while running, level while walking away.
           m.lookPitch = damp(m.lookPitch, running ? -0.16 : 0.04, 0.05, dt);
           m.look = damp(m.look, 0, 0.05, dt);
@@ -2193,7 +2658,6 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           m.yaw = a + Math.PI * 0.5;
           m.pitch = -1.15;
           m.speed = 3.4;
-          m.alert = damp(m.alert, 0, 0.02, dt);
           if (m.climb > 2.6) {
             reseat(m, spec, eye.x, eye.z, 30, 78);
             m.pitch = 0;
@@ -2205,7 +2669,6 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       }
 
       if (m.state !== 'climb') {
-        m.pitch = damp(m.pitch, 0, 0.02, dt);
         m.pos.y = heightAt(m.pos.x, m.pos.z);
       }
 
@@ -2215,6 +2678,12 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * out of the frame is deleted and rebuilt somewhere you have not been —
        * so you are never more than a minute's walk from an encounter and the
        * scene never contains more than twenty-three state machines.
+       *
+       * BOTH TESTS ARE NOW ABOUT THE WHOLE ROOM. `reactDist` is the distance to
+       * the nearest person, so "a long way off" means far from everybody, and
+       * `unseen` means in nobody's view — see the note there for why getting
+       * that second one wrong is the only bug in this feature that a guest would
+       * see rather than the host.
        */
       /**
        * OR IF IT HAS LOST ITS MOTHER, which recycling is the only thing that
@@ -2227,10 +2696,41 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        */
       const strayed = m.parent && m.pos.distanceToSquared(m.parent.pos) > 26 * 26;
       if (
-        (dist > FAR[herd.name] * 0.8 || strayed) &&
+        (reactDist > FAR[herd.name] * 0.8 || strayed) &&
         unseen(m.pos, herd.radius * m.scale)
       ) {
         reseat(m, spec, eye.x, eye.z, 32, FAR[herd.name] * 0.7);
+      }
+
+      } // end of the host's decisions
+
+      /**
+       * Nose level unless it is up a tree, on both paths.
+       *
+       * Derived rather than sent: `pitch` is zero in four of the five states and
+       * a constant in the fifth, so a guest reads it off the state for nothing.
+       * The climb case above sets it directly and this leaves it alone, exactly
+       * as it did before there were two paths through here.
+       */
+      if (m.state !== 'climb') m.pitch = damp(m.pitch, 0, 0.02, dt);
+
+      /**
+       * THE BARK, FIRED OFF THE STATE CHANGE AND NOT OFF THE DECISION.
+       *
+       * Moved out of the `watch` case for one reason: a guest never runs that
+       * case, and a wood where the deer bolt in silence for seven people out of
+       * eight is worse than one with no bark at all. A transition into `bolt` is
+       * the same event whether this machine decided it or read it off the wire,
+       * so this is the honest place for it.
+       *
+       * `dist` and not `reactDist`, deliberately. How loud a bark is depends on
+       * how far away YOU are from it — the nearness term was always a fact about
+       * the listener, and it is the one place in this loop where the local camera
+       * is still the right question. A deer startled by somebody across the
+       * clearing should be faint here, and now is.
+       */
+      if (m.state === 'bolt' && was !== 'bolt') {
+        wildlife?.bolt(m.pos, herd.name, clamp01(1 - dist / (fleeR * 2)), m.mass);
       }
 
       // Gait: phase advances with distance travelled, so the feet cannot skate.
@@ -2315,6 +2815,103 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     }
   }
 
+  /**
+   * EVERY ANIMAL IN THE WOOD, AS ONE FLAT ARRAY OF NUMBERS. Host only.
+   *
+   * The message a room's host sends six times a second. `a` is `ANIMAL_FIELDS`
+   * numbers per animal in `everyone` order — no ids, no keys, no brackets per
+   * creature — because that order is fixed by the source and is therefore the
+   * same on every machine. `c` is the coat round-robin; see `COATS_PER_SEND`.
+   *
+   * ROUNDED HERE AND NOT BY THE SERVER, which is the difference between the
+   * server needing to know what these numbers mean and it not. Two decimals is
+   * a centimetre on a position and about half a degree on an angle, both well
+   * under what a third of a second of interpolation is already smoothing over,
+   * and it is most of the size of the message: `-12.3456789012` is thirteen
+   * characters and `-12.35` is six.
+   */
+  function snapshot() {
+    const a = new Array(everyone.length * ANIMAL_FIELDS);
+    for (let i = 0; i < everyone.length; i++) {
+      const m = everyone[i];
+      const o = i * ANIMAL_FIELDS;
+      a[o] = r2(m.pos.x);
+      a[o + 1] = r2(m.pos.y);
+      a[o + 2] = r2(m.pos.z);
+      a[o + 3] = r2(m.yaw);
+      a[o + 4] = r2(m.look);
+      a[o + 5] = r2(m.lookPitch);
+      a[o + 6] = r1(m.speed);
+      a[o + 7] = STATES.indexOf(m.state);
+    }
+
+    const c = [];
+    for (let n = 0; n < COATS_PER_SEND; n++) {
+      const i = coatCursor % everyone.length;
+      coatCursor = (coatCursor + 1) % everyone.length;
+      const m = everyone[i];
+      // Index first, then the eight things `individual` rolls. `nerve` rides
+      // along because a guest reads it in `expression`, and `mass` because a
+      // guest's own footfalls and barks are scaled by it.
+      c.push(i, r2(m.scale), r2(m.tint.r), r2(m.tint.g), r2(m.tint.b), r2(m.pied), r2(m.antler), r2(m.nerve), r2(m.mass));
+    }
+    return { a, c };
+  }
+
+  /**
+   * A snapshot off the wire. Guests only — a host ignores these, because the
+   * only thing that could send it one is a room with two hosts in it.
+   *
+   * Nothing is applied to an animal here; the sample is pushed into that
+   * animal's buffer with the time it landed, and `playback` reads it a third of
+   * a second later. Applying directly would be a snap six times a second, which
+   * is exactly the rubber-banding the buffer exists to prevent.
+   */
+  function applyRemote(msg) {
+    if (hosting || !msg) return;
+    const a = msg.a;
+    if (Array.isArray(a)) {
+      const now = performance.now();
+      const n = Math.min(everyone.length, Math.floor(a.length / ANIMAL_FIELDS));
+      for (let i = 0; i < n; i++) {
+        const m = everyone[i];
+        const o = i * ANIMAL_FIELDS;
+        const buffer = m.wire ?? (m.wire = []);
+        // Out-of-order arrival would drag the interpolator backwards, which
+        // shows as a twitch. Same guard as `push` in player/avatar.js.
+        if (buffer.length && now < buffer[buffer.length - 1].t) continue;
+        buffer.push({
+          t: now,
+          x: a[o],
+          y: a[o + 1],
+          z: a[o + 2],
+          yaw: a[o + 3],
+          look: a[o + 4],
+          lookPitch: a[o + 5],
+          speed: a[o + 6],
+          state: STATES[a[o + 7]] ?? 'graze',
+        });
+        // Four is a fifth of a second of slack past the replay cursor. Longer
+        // buffers do not make it smoother, they make it later.
+        if (buffer.length > 4) buffer.shift();
+      }
+    }
+
+    const c = msg.c;
+    if (Array.isArray(c)) {
+      for (let o = 0; o + 8 < c.length; o += 9) {
+        const m = everyone[c[o]];
+        if (!m) continue;
+        m.scale = c[o + 1];
+        m.tint.setRGB(c[o + 2], c[o + 3], c[o + 4]);
+        m.pied = c[o + 5];
+        m.antler = c[o + 6];
+        m.nerve = c[o + 7];
+        m.mass = c[o + 8];
+      }
+    }
+  }
+
   /** Walk toward the current target, turning rather than sliding. */
   function approach(m, speed, dt) {
     _v2.set(m.target.x - m.pos.x, 0, m.target.z - m.pos.z);
@@ -2357,6 +2954,82 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     m.target.set(m.pos.x + Math.sin(away) * 6, m.pos.y, m.pos.z + Math.cos(away) * 6);
   }
 
+  /**
+   * How wound up it looks, from the state it is in. Runs on every machine.
+   *
+   * `alert` is the ears and the stance; `alarm` is the tail. Both are pure
+   * functions of the state plus how close the thing it is watching has got, so
+   * they are derived on a guest rather than sent — two numbers per animal per
+   * tick saved, on values whose whole behaviour is "damp toward the obvious".
+   */
+  function expression(m, dist, fleeR, dt) {
+    switch (m.state) {
+      case 'graze':
+        m.alert = damp(m.alert, 0, 0.02, dt);
+        m.alarm = damp(m.alarm, 0, 0.01, dt);
+        break;
+      case 'watch':
+        m.alert = damp(m.alert, 1, 0.02, dt);
+        m.alarm = damp(m.alarm, dist < fleeR * 1.5 ? 1 : 0, 0.05, dt);
+        break;
+      case 'walk':
+      case 'bolt':
+        m.alert = damp(m.alert, m.state === 'bolt' ? 0.2 : 0.6, 0.02, dt);
+        m.alarm = damp(m.alarm, 0, 0.02, dt);
+        break;
+      case 'climb':
+        m.alert = damp(m.alert, 0, 0.02, dt);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * WHERE A GUEST'S ANIMALS COME FROM: the buffer, replayed a third of a second
+   * behind live.
+   *
+   * The same interpolator the avatars use and for the same reasons — see
+   * `_interpolate` in player/avatar.js. Two samples that have both already
+   * arrived, a cursor between them, and a HOLD rather than an extrapolation once
+   * the cursor runs past the newest. Extrapolating a velocity is the standard
+   * trick and it is wrong for exactly the animals it would matter for: a bolting
+   * deer changes direction hard, so every extrapolated metre has to be taken back
+   * when the truth arrives, and the overshoot-and-snap is far more visible than
+   * a sixth of a second of standing still.
+   *
+   * `speed` and `state` are taken from the OLDER of the two samples rather than
+   * interpolated, because neither is a quantity: a state is a name, and speed is
+   * only ever read as "how fast are the legs going", which wants to change on
+   * the same frame the pose does.
+   */
+  function playback(m, dt) {
+    const buffer = m.wire;
+    if (!buffer || buffer.length === 0) return;
+
+    const renderTime = performance.now() - FAUNA_LAG_MS;
+    while (buffer.length > 2 && buffer[1].t < renderTime) buffer.shift();
+
+    const a = buffer[0];
+    const b = buffer.length > 1 ? buffer[1] : null;
+    let t = 0;
+    if (b && renderTime > a.t) {
+      const span = b.t - a.t;
+      t = span > 0 ? clamp01((renderTime - a.t) / span) : 1;
+    }
+    const from = a;
+    const to = b ?? a;
+
+    m.pos.set(lerp(from.x, to.x, t), lerp(from.y, to.y, t), lerp(from.z, to.z, t));
+    // The short way round, or an animal crossing north spins 350° on the spot.
+    m.yaw = from.yaw + wrapAngle(to.yaw - from.yaw) * t;
+    m.look = from.look + wrapAngle(to.look - from.look) * t;
+    m.lookPitch = lerp(from.lookPitch, to.lookPitch, t);
+    m.speed = from.speed;
+    m.state = from.state;
+    void dt;
+  }
+
   /** Turn the head — and only the head — toward a point. */
   function faceHead(m, at, dt) {
     const want = wrapAngle(Math.atan2(at.x - m.pos.x, at.z - m.pos.z) - m.yaw);
@@ -2385,6 +3058,76 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     swarm,
     /** For the capture scripts, which need to pin a subject to photograph it. */
     __perchers: perchers,
+    /**
+     * The live wood's own voice, for probes — a GETTER because it does not
+     * exist until `attachAudio`.
+     *
+     * `scripts/fauna-audio.mjs` measures birdsong by constructing its own
+     * `Wildlife` and forcing events into it, which is the right way to ask "does
+     * this species buzz" and no way at all to ask "can the player hear the birds
+     * in this wood". That second question needs THIS instance — the one holding
+     * the song bucket the perchers are competing for and the listener position
+     * the distance model reads — and it lives in a closure, so until this line
+     * there was no way to reach it from a page. See `scripts/bird-check.mjs`.
+     */
+    get __wildlife() {
+      return wildlife;
+    },
+    /** Every ground animal, in wire order. Read by the checks. See `everyone`. */
+    everyone,
+
+    /**
+     * WHETHER THIS MACHINE DECIDES WHAT THE ANIMALS DO.
+     *
+     * True on a solitary walk and for exactly one person in a room — the server
+     * picks, and picks whoever has been there longest, so it is stable for as
+     * long as that person stays. Everybody else plays back what arrives.
+     *
+     * TAKING THE JOB IS SEAMLESS AND GIVING IT UP IS NOT, and that asymmetry is
+     * worth knowing. A guest promoted mid-session simply starts deciding from
+     * wherever its playback had got to, which is a third of a second behind
+     * where the old host left off and completely invisible. The reverse — a host
+     * demoted because somebody older reconnected — snaps its animals onto that
+     * person's version once, and cannot not: two woods that have been simulating
+     * independently do not agree, and there is nothing to interpolate between.
+     * The server's "longest in the room" rule exists so that this happens on a
+     * host leaving and at no other time.
+     */
+    setHosting(on) {
+      const next = Boolean(on);
+      if (next === hosting) return hosting;
+      hosting = next;
+      // Nothing arriving is stale the moment the job changes hands. A promoted
+      // guest must not have `playback` fed from a buffer it is no longer
+      // reading, and a demoted host must not replay samples from before it was
+      // told — either way the first thing that matters is the next send.
+      for (const m of everyone) m.wire = null;
+      return hosting;
+    },
+    get hosting() {
+      return hosting;
+    },
+
+    /**
+     * THE OTHER PEOPLE IN THE WOOD: `{x, y, z, yaw}` each, refreshed per frame.
+     *
+     * Not peers, not avatars, not the net layer's objects — four numbers, so
+     * that this file keeps knowing nothing about multiplayer. main.js does the
+     * translating, which is the same boundary the speakers and the jukebox use.
+     *
+     * They matter in two places and both are about the room rather than about
+     * you: `nearestEye` (which person an animal reacts to) and `unseen` (whether
+     * a recycle would happen in somebody's face).
+     */
+    setObservers(list) {
+      observers = Array.isArray(list) ? list : [];
+    },
+
+    /** The host's six-a-second message. Null for a guest, which sends nothing. */
+    snapshot: () => (hosting ? snapshot() : null),
+
+    /** One of those, arriving. A no-op on the host. See `applyRemote`. */
+    applyRemote,
     /**
      * Audio only exists after the user clicks through the gate, so the world is
      * built without it and told about it later — see main.js. `music` is

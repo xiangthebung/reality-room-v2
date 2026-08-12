@@ -2120,14 +2120,102 @@ export class Wildlife {
   }
 
   /**
-   * A bird leaving: wingbeats, and an alarm note if it is close enough to have
-   * really been startled.
+   * WINGS, AND NOTHING ELSE — the sound of a bird simply going somewhere.
    *
    * WINGBEATS ARE THE SOUND OF AIR MOVING, so they are low and dull — around
    * 260 Hz, wide, 45 ms each — and they ACCELERATE and then thin out, which is
-   * what a small bird's escape actually is: five or six frantic beats to get
-   * clear of the branch and then a glide. Playing them evenly spaced sounds like
-   * a helicopter.
+   * what a small bird's departure actually is: five or six beats to get clear of
+   * the branch and then a glide. Playing them evenly spaced sounds like a
+   * helicopter.
+   *
+   * WHY THIS IS SPLIT OUT OF `flush` RATHER THAN BEING IT. A flush is a bird
+   * being FRIGHTENED, and three of the four things it does say so: the sub-200 Hz
+   * whump of a panic launch, the alarm note, and `_startle`, which stops the
+   * whole wood for four seconds. Those are exactly right when you have walked
+   * into a thicket and exactly wrong when a chaffinch has decided the next tree
+   * looks better — and `_startle` is the one that cannot simply be turned down,
+   * because a wood that goes quiet every time any bird moves is a wood that is
+   * silent. So the wings are the shared half and the panic is `flush`'s own.
+   *
+   * `travel` is where it is going, as a displacement from `position`, and it is
+   * the reason this is worth a panner ramp at all: wings that stay put are a
+   * sound effect played at a coordinate, and wings that cross you are a bird.
+   * `flush` passes a vector pointing away from the listener; a bird flying to a
+   * perch passes the perch.
+   */
+  wingbeats(position, { nearness = 1, gain = 1, travel = null, spatial = null } = {}) {
+    if (!this.built) return null;
+    const rng = this.rng;
+    const t0 = this.ctx.currentTime + 0.01;
+    const own =
+      spatial ??
+      this._place(position, {
+        refDistance: 4,
+        rolloff: 1.4,
+        maxDistance: 60,
+        bus: this.engine.sfxBus,
+      });
+
+    let t = t0;
+    let gap = 0.115;
+    const beats = 5 + Math.floor(rng() * 4);
+    for (let i = 0; i < beats; i++) {
+      const fade = 1 - i / (beats + 2);
+      this._puff(position, t, {
+        freq: rngRange(rng, 210, 330),
+        q: 0.55,
+        decay: 0.05,
+        gain: 0.3 * gain * fade * (0.4 + nearness * 0.8),
+        rate: rngRange(rng, 0.7, 1.1),
+        spatial: own,
+      });
+      t += gap;
+      // Accelerating, then settling: the gap shrinks toward a steady beat.
+      gap = Math.max(0.062, gap * 0.87);
+    }
+    // A leaf shiver off the branch it just left.
+    this._puff(position, t0, {
+      freq: 2600,
+      q: 0.5,
+      decay: 0.22,
+      gain: 0.09 * gain * nearness,
+      rate: 1.5,
+      spatial: own,
+    });
+
+    /**
+     * AND IT GOES SOMEWHERE. The panner is ramped over the length of the
+     * wingbeat train.
+     *
+     * `createSpatial` exposes the PannerNode and its position is an AudioParam,
+     * so this is three `linearRampToValueAtTime` calls on a node that already
+     * exists — no per-frame work, no timer, nothing to tear down.
+     */
+    const arrive = t0 + beats * 0.09 + 0.5;
+    if (travel && own.panner.positionX) {
+      own.panner.positionX.linearRampToValueAtTime(position.x + travel.x, arrive);
+      own.panner.positionY.linearRampToValueAtTime(position.y + travel.y, arrive);
+      own.panner.positionZ.linearRampToValueAtTime(position.z + travel.z, arrive);
+    }
+    // Only the owner tears down. `flush` keeps the source alive for its alarm.
+    if (!spatial) {
+      setTimeout(
+        () => {
+          try {
+            own.dispose();
+          } catch {
+            /* already gone */
+          }
+        },
+        (t - t0 + 1.4) * 1000
+      );
+    }
+    return own;
+  }
+
+  /**
+   * A bird leaving IN A HURRY: the wings above, plus the three things that make
+   * it a fright rather than a journey.
    */
   flush(position, nearness = 1, voiceIndex = 0) {
     if (!this.built) return;
@@ -2141,41 +2229,31 @@ export class Wildlife {
       bus: this.engine.sfxBus,
     });
 
-    let t = t0;
-    let gap = 0.115;
-    const beats = 5 + Math.floor(rng() * 4);
-    for (let i = 0; i < beats; i++) {
-      const fade = 1 - i / (beats + 2);
-      this._puff(position, t, {
-        freq: rngRange(rng, 210, 330),
-        q: 0.55,
-        decay: 0.05,
-        gain: 0.3 * fade * (0.4 + nearness * 0.8),
-        rate: rngRange(rng, 0.7, 1.1),
-        spatial,
-      });
-      t += gap;
-      // Accelerating, then settling: the gap shrinks toward a steady beat.
-      gap = Math.max(0.062, gap * 0.87);
-    }
-    // A leaf shiver off the branch it just left.
-    this._puff(position, t0, {
-      freq: 2600,
-      q: 0.5,
-      decay: 0.22,
-      gain: 0.09 * nearness,
-      rate: 1.5,
+    /**
+     * The bearing is away from the listener because that is where a frightened
+     * one goes, and the eight metres of travel is about what a blackbird covers
+     * before it is behind the next trunk.
+     */
+    const away = Math.atan2(position.x - this.lx, position.z - this.lz);
+    const travel = 6 + nearness * 5;
+    this.wingbeats(position, {
+      nearness,
       spatial,
+      travel: {
+        x: Math.sin(away) * travel,
+        y: 3.2 + nearness * 2,
+        z: Math.cos(away) * travel,
+      },
     });
     /**
      * The whump. One puff, an octave and a half below the wingbeats, on the
      * first downstroke only.
      *
      * A bird leaving a branch displaces a surprising slug of air and you feel
-     * that more than you hear it — the beats above are at 260 Hz because that
-     * is where wings live, but the thing that makes a flush startling is the
-     * sub-200 Hz thud underneath the first one. Three nodes, and it is the
-     * difference between a rustle and something LEAVING.
+     * that more than you hear it — the beats are at 260 Hz because that is where
+     * wings live, but the thing that makes a flush startling is the sub-200 Hz
+     * thud underneath the first one. Three nodes, and it is the difference
+     * between a rustle and something LEAVING.
      */
     this._puff(position, t0, {
       freq: rngRange(rng, 88, 132),
@@ -2185,33 +2263,6 @@ export class Wildlife {
       rate: 0.55,
       spatial,
     });
-    /**
-     * AND IT GOES SOMEWHERE. The panner is ramped up and away over the length
-     * of the wingbeat train.
-     *
-     * `createSpatial` exposes the PannerNode and its position is an AudioParam,
-     * so this is three `linearRampToValueAtTime` calls on a node that already
-     * exists — no per-frame work, no timer, nothing to tear down. It matters
-     * far more than it should: a flush that stays put is a sound effect played
-     * at a coordinate, and a flush that recedes and lifts is a bird. The
-     * bearing is away from the listener because that is where a frightened one
-     * goes, and the eight metres of travel is about what a blackbird covers
-     * before it is behind the next trunk.
-     */
-    const away = Math.atan2(position.x - this.lx, position.z - this.lz);
-    const travel = 6 + nearness * 5;
-    const arrive = t0 + beats * 0.09 + 0.5;
-    if (spatial.panner.positionX) {
-      spatial.panner.positionX.linearRampToValueAtTime(
-        position.x + Math.sin(away) * travel,
-        arrive
-      );
-      spatial.panner.positionY.linearRampToValueAtTime(position.y + 3.2 + nearness * 2, arrive);
-      spatial.panner.positionZ.linearRampToValueAtTime(
-        position.z + Math.cos(away) * travel,
-        arrive
-      );
-    }
     /**
      * The alarm call: two or three of the species' HIGHEST note, hammered, with
      * no glide. Real alarm calls are deliberately hard to locate — thin, high
@@ -2235,13 +2286,23 @@ export class Wildlife {
         }
       }, 1200);
     }
+    /**
+     * 2.4 s, a constant rather than the end of the wing train.
+     *
+     * The train is `wingbeats`' business now and its length is a roll it makes
+     * privately; eight beats of an accelerating gap is 0.75 s at the very most,
+     * the alarm above finishes inside 0.4 s, and the panner ramp lands well
+     * before either. Re-deriving the train's length here to save a second of a
+     * disconnected node would be two copies of the same loop that have to agree
+     * forever, which is the trade `_release` and `giveBack` both refuse.
+     */
     setTimeout(() => {
       try {
         spatial.dispose();
       } catch {
         /* already gone */
       }
-    }, (t - t0 + 1.4) * 1000);
+    }, 2400);
     this._startle(nearness);
   }
 

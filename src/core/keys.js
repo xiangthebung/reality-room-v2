@@ -86,6 +86,28 @@ export const BINDINGS = [
     essential: true,
   },
   { group: 'world', keys: ['F'], label: 'Take out a rod, or put it away' },
+  /**
+   * THE ROD'S TWO MOUSE ROWS, and they are here rather than under Moving about
+   * because they only exist while you are holding one — a left click with no rod
+   * out is what takes the pointer, and nothing else.
+   *
+   * `Mouse` is one of the caps `keys-check.mjs` knows is not a `KeyboardEvent`
+   * (see NOT_A_KEY there), so these describe themselves to the settings menu and
+   * the on-screen strip without asking the checker to find a key code that does
+   * not exist.
+   */
+  {
+    group: 'world',
+    keys: ['Mouse'],
+    label: 'Hold to load a cast, let go to throw',
+    note: 'With a rod out. How long you hold it is how far it goes',
+  },
+  {
+    group: 'world',
+    keys: ['Mouse'],
+    label: 'Right button winds the reel',
+    note: 'Retrieving a cast, or playing a fish',
+  },
 
   // ---- the jukebox ---------------------------------------------------------
   { group: 'music', keys: ['E'], label: 'Start or stop it', note: 'Standing at a speaker' },

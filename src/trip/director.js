@@ -286,6 +286,57 @@ const MAX_VIEW_WARP = 0.016;
 const SURGE_VIEW = 0.45;
 
 /**
+ * THE VIEW BREATH STANDS DOWN WHILE YOU MOVE, and this is a design statement
+ * rather than a mitigation.
+ *
+ * WHY IT HAS TO. Every other family here is attached to geometry, so it survives
+ * any camera motion for free: a trunk that is bending is bending wherever you
+ * stand. The view breath is attached to the IMAGE, and an image-space field can
+ * only stay with the world if it knows how far away every pixel is. Rotation is
+ * fine without that — a turn is a pure angular remap and the field's domain is
+ * angular, so it comes out exact. Translation is not, and cannot be: the field
+ * sits at one distance (RR_VIEW_SHELL, fitted to this wood) and everything
+ * nearer or further slides against it. Measured at 4.5% of the frame per metre
+ * walked, which at a walking pace is a fifth of the picture a second. That is
+ * seen, and it was: reported as noticing the effect when moving forward in a
+ * straight line while turning had stopped showing it.
+ *
+ * The only way to make it hold under translation is a depth buffer, and a
+ * depth-keyed offset is bounded, and a bounded offset draws a seam at every
+ * silhouette. That is the melt, and the melt is why this file's whole approach
+ * exists. So the mismatch is not fixable; it is avoidable.
+ *
+ * WHY IT SHOULD ANYWAY. The reports this effect comes from are of a room
+ * breathing while somebody looks at it. Standing the picture down when the
+ * picture is streaming past costs nothing anybody described, and it puts the
+ * view breath on the same principle as the stare — the world gives you more
+ * when you hold still, which this project already does with uDwell.
+ */
+/** At or below this the picture counts as held still. m/s. */
+const VIEW_STILL = 0.5;
+/** At or above this the view breath is at its floor. Half a walk (WALK = 4.4). */
+const VIEW_MOVING = 2.2;
+/**
+ * What survives at a walk. Not zero: an effect that switches off announces that
+ * it was an effect, and at 15% of 1.6% of the frame this is three pixels at
+ * 1280 — present enough to keep the transition from being an edge, far below
+ * anything that can be read as a pattern sliding over the wood.
+ */
+const VIEW_MOVING_FLOOR = 0.15;
+/** Seconds to fade either way. Slow enough that a footstep cannot flicker it. */
+const VIEW_SETTLE = 0.9;
+/**
+ * Further than this in one frame is a TELEPORT, not a speed.
+ *
+ * Spawning, a debug seek, and every `arrive` in the perf harness move the camera
+ * tens of metres between two updates. Read as a velocity that is thousands of
+ * metres a second, which would stand the effect down for a second afterwards —
+ * so the perf rig would measure a damped effect and report it as cheap, and a
+ * player would find the wood stopped breathing every time the world recentred.
+ */
+const VIEW_TELEPORT = 3;
+
+/**
  * How far into the frame the bright-pass reaches, in threshold units.
  *
  * Lowering the bloom threshold rather than raising the bloom AMOUNT is the
@@ -380,6 +431,13 @@ export class Director {
     this._gazeFrom = new THREE.Vector3();
     this._gazeDir = new THREE.Vector3(0, 0, -1);
     this._dwell = 0;
+    /**
+     * How still the picture is, 0..1, and where it was last frame. Drives the
+     * view breath only — see the VIEW_STILL block above.
+     */
+    this._lastEye = new THREE.Vector3();
+    this._eyeSeen = false;
+    this._stillness = 1;
 
     /** Debug switches. Each disables one family of effects. */
     this.switches = {
@@ -508,6 +566,19 @@ export class Director {
     tripUniforms.uTime.value = worldClock();
     tripUniforms.uEye.value.copy(camera.position);
     if (audioLevels) tripUniforms.uAudio.value.copy(audioLevels);
+    /**
+     * Measured HERE, at the top, and that is what makes it the body's speed
+     * rather than the trip's.
+     *
+     * The real loop seats the camera on the body and only then lets
+     * `_updateCamera` offset it, so at this point in the frame `camera.position`
+     * is the clean body pose with none of the dolly, roll or sway on it. Reading
+     * it after would fold the trip's own camera family into the number, and the
+     * view breath would then stand itself down in response to a motion the trip
+     * had just invented — a feedback loop between two effects that have no
+     * business knowing about each other.
+     */
+    this._updateStillness(dt, camera);
 
     /**
      * The level is eased on the way up and the way down, but with very
@@ -659,10 +730,16 @@ export class Director {
      * _updateCamera — see the note there.
      */
     const view = (this.switches.view ? 1 : 0) * this.gain.view;
+    /**
+     * The stillness factor multiplies LAST, after the switch and the gain, so
+     * that turning the debug gain up to look at the effect does not also
+     * override the stand-down and hand you the artefact it exists to prevent.
+     */
     tripUniforms.uViewWarp.value =
       MAX_VIEW_WARP *
       (Math.pow(clamp01((L - 0.35) / 0.65), 1.3) + SURGE_VIEW * surge) *
-      view;
+      view *
+      (VIEW_MOVING_FLOOR + (1 - VIEW_MOVING_FLOOR) * this._stillness);
 
     // ---- the pass ----------------------------------------------------------
     this.pipeline.setTripParameters({
@@ -787,6 +864,25 @@ export class Director {
    *
    * The whole thing is four vector operations a frame and one uniform write.
    */
+  /**
+   * How still the picture is, 0..1. See the VIEW_STILL block at the top.
+   *
+   * Speed from the eye's own displacement rather than from the controller,
+   * because the director is not given the controller and should not be: this is
+   * a question about the CAMERA, and a flying camera, a cutscene or a test rig
+   * driving the camera directly all answer it correctly this way.
+   */
+  _updateStillness(dt, camera) {
+    const moved = this._eyeSeen ? camera.position.distanceTo(this._lastEye) : 0;
+    this._lastEye.copy(camera.position);
+    this._eyeSeen = true;
+    // A jump is not a velocity. See VIEW_TELEPORT.
+    if (moved > VIEW_TELEPORT || dt <= 1e-4) return;
+    const speed = moved / dt;
+    const target = 1 - clamp01((speed - VIEW_STILL) / (VIEW_MOVING - VIEW_STILL));
+    this._stillness = damp(this._stillness, target, 0.05, dt / VIEW_SETTLE);
+  }
+
   _updateGaze(dt, camera, amount) {
     camera.getWorldDirection(_gaze);
     const held =

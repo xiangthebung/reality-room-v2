@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { clamp, damp } from '../core/util.js';
+import { clamp, clamp01, damp } from '../core/util.js';
 import { modalHasKeyboard, worldHearsKey } from '../core/keys.js';
 import { confine, groundUnder, normalAt } from '../world/terrain.js';
 import { colliderGrid, bushZones } from '../world/forest.js';
-import { SEC_WIDE, caveSample } from '../world/caves.js';
+import { caveSample } from '../world/caves.js';
 
 /**
  * The body.
@@ -120,6 +120,19 @@ export class Controller {
     this.inCave = 0;
     this.caveFloor = 0;
     this.caveDepth = 0;
+    /**
+     * …and what the passage is like where the body is, for the audio.
+     *
+     * `caveTight` is how constricted, `caveRoom` is how big, `caveWater` is how
+     * near running water. Published for the same reason the three above are:
+     * `caveSample` is a scan and the audio must not run a second one, and — the
+     * part that matters — the reverb, the draught and the stream have to agree
+     * with the geometry on the same frame or a squeeze sounds like the chamber
+     * you left. Zero outside, so the audio layer needs no special case.
+     */
+    this.caveTight = 0;
+    this.caveRoom = 0;
+    this.caveWater = 0;
 
     this.keys = new Set();
     this._bind();
@@ -351,6 +364,59 @@ export class Controller {
    * a map lookup, and the two passes below share the one result.
    */
   _resolveCollisions() {
+    /**
+     * A TRUNK IS A CIRCLE ON A MAP, AND UNDERGROUND THAT IS THE WRONG SHAPE.
+     *
+     * `colliderGrid` holds `{x, z, r}` — no height, no extent, because for the
+     * whole of this project's life the body and the trees stood on the same
+     * single-valued surface and a circle was exactly right. A cave is the first
+     * place where two things can share a coordinate and not touch: walk twelve
+     * metres into a passage and you are under the hillside, where trees grow,
+     * and every trunk up there is still a post through the tunnel as far as this
+     * function is concerned.
+     *
+     * The symptom is not subtle and it is not "you clip a tree" — it is that
+     * caves cannot be entered. `cave-walk.mjs` holds W from the gully and the
+     * body walks in, reaches the first trunk rooted over the passage, and is
+     * pushed back out at half a metre a second with its heading still pointing
+     * inward. Three mouths on three different slots all stopped within a metre
+     * of the same depth, which is the tree line resuming past the cleared gully.
+     *
+     * Faded out by `inCave` rather than switched off, because the ramp is a
+     * metre and a half wide at the mouth and a trunk on the lip of the gully is
+     * still a real trunk. Nothing underground can be a legitimate collider:
+     * `caveClearance` keeps the scatter out of the gully and off the tor, and
+     * the passage is under rock everywhere else.
+     *
+     * The vertical fix — giving colliders a height and testing it — is the
+     * "right" one and is not worth it: it is a wider entry in the busiest grid
+     * in the project, ingested per streamed sector, to answer a question one
+     * float already answers.
+     */
+    /**
+     * FADED BY DEPTH AS WELL AS BY CONTAINMENT, and the second term is not
+     * belt-and-braces — the first one stopped being sufficient.
+     *
+     * `inCave` was a reliable "is there rock all round me" while every passage
+     * was the same tube: it sat at 1 from a few metres in until the mouth. It no
+     * longer does. A wide chamber is deliberately less enclosed than a squeeze —
+     * that is what the fog and the reverb ride on — and at a junction the
+     * winning passage can be the branch you are entering, measured from its own
+     * wall. Both put `inCave` around 0.6 with thirty metres of hillside
+     * overhead, which handed a third of the trunk push back to trees rooted on
+     * the mountain above.
+     *
+     * The symptom was a body walking at full speed and not moving: the push
+     * displaces position without touching velocity, so it stands there running.
+     * `cave-walk` caught it as a 600-frame stall at 31 m on one mouth of three,
+     * which is exactly the shape of a bug that would otherwise have shipped —
+     * two thirds of the caves in the world are fine.
+     *
+     * Depth is the honest predicate. Six metres past the doorway there is no
+     * tree that can legitimately be a collider, whatever the section is doing.
+     */
+    const solid = (1 - this.inCave) * clamp01(1 - this.caveDepth / 6);
+    if (solid <= 0.001) return;
     const colliders = colliderGrid.near(this.position.x, this.position.z);
     for (let pass = 0; pass < 2; pass++) {
       let moved = false;
@@ -362,7 +428,7 @@ export class Controller {
         const d2 = dx * dx + dz * dz;
         if (d2 >= min * min || d2 < 1e-8) continue;
         const d = Math.sqrt(d2);
-        const push = (min - d) / d;
+        const push = ((min - d) / d) * solid;
         this.position.x += dx * push;
         this.position.z += dz * push;
         moved = true;
@@ -388,6 +454,9 @@ export class Controller {
    * boundary does not chatter the cue on and off.
    */
   _resolveBrush() {
+    // Same map-circle problem as the trunks, in its harmless form: a bush on the
+    // hillside over a passage would rustle at somebody thirty metres under it.
+    if (this.inCave > 0.5) return;
     const zones = bushZones.near(this.position.x, this.position.z);
     for (let i = 0; i < zones.length; i++) {
       const z = zones[i];
@@ -434,10 +503,16 @@ export class Controller {
     this.inCave = s.inside;
     if (s.inside <= 0) {
       this.caveDepth = 0;
+      this.caveTight = 0;
+      this.caveRoom = 0;
+      this.caveWater = 0;
       return;
     }
     this.caveFloor = s.floor;
     this.caveDepth = s.along;
+    this.caveTight = s.tight;
+    this.caveRoom = s.room;
+    this.caveWater = s.water;
     // Flying: publish where the body is, push it nowhere. See the branch in
     // `update` for why the two halves of this function are separable.
     if (this.fly) return;
@@ -454,11 +529,41 @@ export class Controller {
      * Resolved by displacement rather than by cancelling velocity, exactly like
      * the trunks, so sliding along a passage wall is smooth instead of sticky.
      */
-    const wall = s.radius * SEC_WIDE - RADIUS - 0.12;
+    /**
+     * `wallDist`, NOT the radius times a constant.
+     *
+     * The section is no longer one shape: a canyon is 0.6 radii across and a
+     * bedding plane is nearly 2, so a single multiplier is now wrong in both
+     * directions at once — it holds you out of the middle of a wide passage and
+     * lets you walk through the wall of a narrow one. `caveSample` solves the
+     * outline at the body's own chest height and hands back the answer, so the
+     * wall the body feels is the wall the sweep drew.
+     */
+    const wall = s.wallDist - RADIUS - 0.12;
     if (s.radial > wall && s.radial > 1e-4) {
       const push = (s.radial - wall) / s.radial;
       this.position.x += (s.cx - this.position.x) * push;
       this.position.z += (s.cz - this.position.z) * push;
+    }
+
+    /**
+     * …and out of a pillar, which is the one thing down here you go ROUND.
+     *
+     * Breakdown blocks are reported as floor and climbed. A column is a post
+     * from floor to ceiling: there is no over it, and treating one as floor
+     * would stand the player on top of a two-metre pillar with their head in the
+     * roof. Same displacement push as the trunks, and for the same reason —
+     * cancelling velocity against a pillar you are sliding past is sticky.
+     */
+    if (s.postR > 0) {
+      const dx = this.position.x - s.postX;
+      const dz = this.position.z - s.postZ;
+      const d = Math.hypot(dx, dz);
+      const want = s.postR + RADIUS;
+      if (d < want && d > 1e-4) {
+        this.position.x = s.postX + (dx / d) * want;
+        this.position.z = s.postZ + (dz / d) * want;
+      }
     }
 
     /**

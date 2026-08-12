@@ -396,6 +396,18 @@ export class RoomSocket extends Emitter {
     return this.send({ t: 'eat', id });
   }
 
+  /**
+   * Where all the animals are. Sent only by the room's host, six times a second.
+   *
+   * The server checks that this came from the host and that the arrays hold
+   * nothing but numbers, and forwards them without knowing what a single one
+   * means — the shape belongs to `snapshot` in world/fauna.js at both ends. It
+   * is the only message in this file whose contents this layer cannot read.
+   */
+  sendFauna(data) {
+    return this.send({ t: 'fauna', a: data.a, c: data.c });
+  }
+
   close() {
     this._closedByUs = true;
     this._stopPing();

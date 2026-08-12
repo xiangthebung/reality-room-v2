@@ -67,6 +67,37 @@ export const TICK_MS = 1000 / TICK_HZ;
 export const INTERP_DELAY_MS = 2 * TICK_MS;
 
 /**
+ * HOW OFTEN THE HOST TELLS THE ROOM WHERE THE ANIMALS ARE.
+ *
+ * A third of the body rate, and the ratio is the argument. A person is the thing
+ * you are talking to and standing next to, usually within a few metres, and a
+ * tick they miss shows as a hitch in somebody's stride. An animal is a thing you
+ * glimpse at twenty to a hundred metres and then it is behind a tree — at that
+ * distance a sixth of a second of interpolation is under a pixel of error for
+ * everything except a deer at a flat gallop, and a deer at a flat gallop is
+ * leaving anyway.
+ *
+ * Six is also what makes the whole feature affordable: twenty-three animals at
+ * eighteen would cost more than every player transform in the room put together,
+ * for creatures nobody is looking at most of the time.
+ */
+export const FAUNA_HZ = 6;
+export const FAUNA_MS = 1000 / FAUNA_HZ;
+
+/**
+ * The SHAPE of an animal row is deliberately not here — see `snapshot` in
+ * world/fauna.js, which owns both ends of it.
+ *
+ * This file is the contract between the client and the server, and the animals
+ * are not part of that contract: the server relays the array without knowing
+ * what a single number in it means, exactly as it relays an SDP offer. Putting
+ * the field list here would make `src/world/` import `src/net/` to read it, and
+ * a world module that depends on the network is one you cannot open a forest
+ * without. The cadence above is genuinely protocol — it is the rate at which the
+ * wire is used — and it is the only half that belongs on this side.
+ */
+
+/**
  * The longest thing anybody may say, mirrored in `server/rooms.js`.
  *
  * Enforced on BOTH sides, which is not belt and braces. The client's copy exists
