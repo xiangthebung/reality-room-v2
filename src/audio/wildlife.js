@@ -912,7 +912,31 @@ const FAR_LEVELS = [0.5, 0.36, 0.25, 0.17];
  * and letting twenty-six nearby birds starve it of tokens would have shrunk
  * the wood to a thirty-metre bubble — which is the opposite of the point.
  */
-const SONG_REFILL = 0.3;
+/**
+ * 0.45, up from 0.3, AND THE ARGUMENT IS THE ONE THIS COMMENT ALREADY MAKES.
+ *
+ * Everything above is about a bucket that had to refuse most of its demand
+ * because the demand was seventy-two phrases a minute from twenty-six birds, of
+ * which the player could hear a handful. `fauna.js` has since moved the perching
+ * roster from a 26–95 m band to 12–58 m — see PERCH_NEAR there — and that
+ * changes what refusing means. The same throttle now throws away song from birds
+ * in the trees around you: measured in the running game, forty-one attempts a
+ * minute and SEVEN getting through, with the node ceiling untouched at the other
+ * end (no note was ever refused, and the count sat above 70% of the ceiling for
+ * five per cent of the minute).
+ *
+ * A rate limiter that is discarding five sixths of an audible signal while the
+ * resource it protects is idle is mis-calibrated, not conservative. 0.45 takes
+ * it to about one song every two and a bit seconds at full tilt, which is what a
+ * wood with a dozen birds inside forty metres actually does; the ceiling and the
+ * chorus wave still shape it, and `_afford`'s `hour` factor still means midnight
+ * is a fifth of that.
+ *
+ * IT IS NOT A LEVEL CHANGE. The measured in-band peak of one song over the bed
+ * is +19 dB at 8 m, +13 at 25 and +9 at 40, and it was that before this line
+ * moved — which is exactly why the fix was rate and distance rather than gain.
+ */
+const SONG_REFILL = 0.45;
 const SONG_BUDGET = 5;
 
 /**
@@ -2145,6 +2169,22 @@ export class Wildlife {
    */
   wingbeats(position, { nearness = 1, gain = 1, travel = null, spatial = null } = {}) {
     if (!this.built) return null;
+    /**
+     * THE FIRST THING TO GO WHEN THE WOOD IS FULL, and the same 0.55 guard
+     * `call` uses, for the same reason.
+     *
+     * A train of wingbeats is nine nodes and it is the least missed sound in the
+     * file: it carries no pitch, no species and no information beyond "something
+     * moved over there", and at dawn there are twenty other things making that
+     * point. Song is what the ceiling exists to protect, so wings stand aside
+     * for it — measured at a full dawn chorus this is the difference between
+     * sitting one voice under the cap and having room.
+     *
+     * `flush` passes its own `spatial`, and a flush is a bird you frightened
+     * three metres away: that one is never declined, because the guard is about
+     * the wood's background traffic and a flush is an event about you.
+     */
+    if (!spatial && this.voices > VOICE_CEILING * 0.55) return null;
     const rng = this.rng;
     const t0 = this.ctx.currentTime + 0.01;
     const own =

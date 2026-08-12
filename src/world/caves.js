@@ -675,6 +675,99 @@ function pickType(rng, from, turned) {
 /** How many rings past the mouth a branch may start. See `blind`, below. */
 const BRANCH_MIN_RING = 22;
 
+/**
+ * NO SKYLIGHTS: the RINGS are checked against the hillside, not the nodes.
+ *
+ * `buildNodes` clamps every node to ROOF_ROCK under `heightAt`, and that has
+ * always been described as the one hard constraint in the walk. But the nodes
+ * are not what gets drawn. The rings are a Catmull-Rom resampling and
+ * Catmull-Rom OVERSHOOTS between control points; the RADIUS is splined too, so
+ * a ring halfway between two nodes can be fatter than either of them; and
+ * `_emitRing` then displaces the ceiling outward by up to `r * rough` on top of
+ * that. Three overshoots stacked, none of them ever checked against the ground.
+ *
+ * Measured over three mouths on grove-01 the day this was written: one passage
+ * put four rings through the hillside by up to 20 cm, two hundred metres in. A
+ * 20 cm breach in a single-sided tube is a hole you can see the SKY through from
+ * inside a mountain — and because the terrain is single-sided too, there is
+ * nothing behind it either: it is a hard-edged wedge of daylight in an otherwise
+ * black passage, and it does not look like a hole, it looks like a rendering
+ * artefact somebody else introduced.
+ *
+ * Pushing the ring DOWN rather than shrinking it keeps the section's shape,
+ * which is what the whole feature is about. `from` exempts the mouth, where
+ * being proud of the ground is the hood and is the entire point.
+ */
+function burySkylights(path, from) {
+  const n = path.x.length;
+  const want = Float64Array.from(path.y);
+  for (let i = Math.max(0, from); i < n; i++) {
+    const r = path.r[i];
+    const half = r * path.w[i];
+    const top = path.y[i] + r * (path.t[i] + path.rough[i]);
+    /**
+     * SAMPLED ACROSS THE PASSAGE, NOT DOWN ITS CENTRE LINE.
+     *
+     * The first version of this compared the ceiling against `heightAt` at the
+     * ring's own (x, z) and declared the cave buried. A ring is five to twenty
+     * metres wide and every cave in this world is cut into a FLANK, so the
+     * ground over the downhill shoulder can be metres lower than the ground over
+     * the axis — the tube breaks out sideways while its centre still has four
+     * metres of rock above it. That is the breach you actually get, it is the
+     * one a centre-line test cannot see, and it is why this samples the
+     * shoulders and takes the worst.
+     */
+    const a = Math.max(0, i - 1);
+    const b = Math.min(n - 1, i + 1);
+    let tx = path.x[b] - path.x[a];
+    let tz = path.z[b] - path.z[a];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl;
+    tz /= tl;
+    /**
+     * Eight samples on a footprint slightly larger than the passage, at two
+     * radii. Two shoulder samples closed most of the breach and left a sliver:
+     * the ground between two sample points can be lower than either, and the
+     * spline moves the tube in x and z between rings as well as in y. Sixteen
+     * `heightAt` calls per ring is about four thousand per cave, once, on a
+     * build that is already sliced across frames.
+     */
+    let surf = heightAt(path.x[i], path.z[i]);
+    const reach = half * 1.15 + 0.6;
+    for (let k = 0; k < 8; k++) {
+      const a2 = (k / 8) * TAU;
+      const ox = (-tz * Math.cos(a2) + tx * Math.sin(a2)) * reach;
+      const oz = (tx * Math.cos(a2) + tz * Math.sin(a2)) * reach;
+      surf = Math.min(surf, heightAt(path.x[i] + ox, path.z[i] + oz));
+      surf = Math.min(surf, heightAt(path.x[i] + ox * 0.55, path.z[i] + oz * 0.55));
+    }
+    const room = surf - ROOF_ROCK;
+    if (top > room) want[i] = path.y[i] - (top - room);
+  }
+
+  /**
+   * APPLIED AS A SLOPE-LIMITED ENVELOPE, NOT RING BY RING.
+   *
+   * Dropping one ring by a metre and leaving its neighbours alone puts a notch
+   * in the passage: the ceiling over that ring is a metre lower than the ceiling
+   * either side of it, and the body — whose head is held 0.28 m under the
+   * ceiling and whose feet are held on the floor — is pushed down and up on the
+   * same frame and stops dead. `cave-walk` caught it immediately: a mouth that
+   * had been walking 116 m stalled at 30 for 1 153 frames.
+   *
+   * Two passes of a running minimum let the correction spread along the passage
+   * at 0.3 m a ring, which is a gradient of about fifteen degrees — a slope you
+   * walk down without noticing. It only ever lowers, so it cannot undo the
+   * burial it exists to perform.
+   */
+  const SLOPE = 0.3;
+  for (let i = 1; i < n; i++) want[i] = Math.min(want[i], want[i - 1] + SLOPE);
+  for (let i = n - 2; i >= 0; i--) want[i] = Math.min(want[i], want[i + 1] + SLOPE);
+  // Ring 0 of a branch is welded to the main tube and must not move; the mouth
+  // rings are the hood and must not either.
+  for (let i = Math.max(0, from); i < n; i++) path.y[i] = want[i];
+}
+
 function buildBranch(c, main, joints, bi, tag) {
   const rng = makeRng(`${getWorldSeed()}:cave-branch:${c.k}:${tag}`);
   const n = main.x.length;
@@ -701,10 +794,21 @@ function buildBranch(c, main, joints, bi, tag) {
    * about which is in front for the six metres either side of the junction.
    */
   const rb = Math.min(r0 * 0.85, rngRange(rng, sh.lo, sh.hi));
+  /**
+   * Ring zero sits INSIDE the main passage by MOUTH_INSET, not on its wall.
+   *
+   * Both surfaces carry independent rock displacement — the main wall is pushed
+   * about by `rock()` and so is the branch's own first ring — so two surfaces
+   * that meet exactly on the nominal wall meet raggedly on the real one, and a
+   * few centimetres of miss is a few centimetres of hole. Forty centimetres of
+   * overlap costs a snout you can only see by looking for it and removes the
+   * whole class of gap.
+   */
+  const MOUTH_INSET = 0.4;
   const first = shaped(
-    main.x[bi] + rx * r0 * w0,
+    main.x[bi] + rx * (r0 * w0 - MOUTH_INSET),
     main.y[bi],
-    main.z[bi] + rz * r0 * w0,
+    main.z[bi] + rz * (r0 * w0 - MOUTH_INSET),
     rb,
     sh
   );
@@ -802,6 +906,8 @@ function buildBranch(c, main, joints, bi, tag) {
   nodes.push(pinchA, pinchB);
 
   const path = resample(nodes);
+  // From ring 1: ring 0 is welded to the main tube's wall and must not move.
+  burySkylights(path, 1);
   path.base = bi;
   path.side = side;
   /**
@@ -810,13 +916,38 @@ function buildBranch(c, main, joints, bi, tag) {
    * phi 0 is +right and phi PI is -right — see the frame in `_emitRing` — so a
    * branch leaving to the right is centred on phi 0 and one leaving left on PI.
    */
-  const halfV = rb * path.t[0] * 0.62;
-  const halfH = rb * path.w[0] * 0.62;
+  /**
+   * The vertical half-extent is the SMALLER of the bore's two, and it has to be.
+   *
+   * A section is an ellipse cut off flat at the floor, so it reaches `t` above
+   * the mid-line and only `f` below it — and the hole is centred on the
+   * mid-line and symmetric. Sizing it from `t` alone cuts further down than the
+   * branch's floor exists, which leaves a crescent of nothing along the bottom
+   * lip of every junction. It is a few pixels, it is pure white against black
+   * because it is a straight view out of the hillside, and it is the last thing
+   * you would ever find by walking around in the dark.
+   */
+  const halfV = rb * Math.min(path.t[0], path.f[0]) * 0.5;
+  const halfH = rb * path.w[0] * 0.5;
   path.holePhi = side > 0 ? 0 : Math.PI;
-  // Vertical extent converted to an angle at the wall, capped so a fat branch
-  // off a thin passage cannot unzip half the tube.
-  path.holeSpan = Math.min(0.95, Math.atan2(halfV, Math.max(r0 * w0, 0.5)));
-  path.holeRings = Math.max(1, Math.round(halfH / RING_STEP));
+  /**
+   * THE VERTICAL EXTENT IS AN ARCSINE, NOT AN ARCTANGENT, AND THAT WAS A LEAK.
+   *
+   * The wall vertex at angle phi sits at height `r0 * t0 * sin(phi)`, so the
+   * band of wall within `halfV` of the mid-line is `|phi| <= asin(halfV /
+   * (r0*t0))`. The first version took `atan2(halfV, r0*w0)` — the angle
+   * subtended at the AXIS — which for a tall branch off a wide passage
+   * overestimates badly: it cut to 0.95 rad, which is 54 degrees of a section
+   * whose ceiling starts curving over at 40, so the top of the window was up in
+   * the roof where the branch's bore never reaches.
+   *
+   * The symptom is unmistakable once seen and easy to miss in the dark: standing
+   * at the junction you could see daylight and the tops of trees through the
+   * corner of the opening, because the tube is single-sided and a hole in it
+   * looks straight out of the mountain.
+   */
+  path.holeSpan = Math.min(0.85, Math.asin(clamp(halfV / Math.max(r0 * main.t[bi], 0.5), 0, 0.92)));
+  path.holeRings = Math.max(1, Math.floor(halfH / RING_STEP));
   return path;
 }
 
@@ -886,6 +1017,23 @@ function resample(nodes) {
     path.w[i] = Math.max(0.12, path.w[i]);
     path.t[i] = Math.max(0.12, path.t[i]);
     path.f[i] = Math.max(0.08, path.f[i]);
+    /**
+     * THE FLOOR CUT HAS TO BE INSIDE THE ELLIPSE, OR THERE IS NO FLOOR.
+     *
+     * `section` truncates at `f` only where the ellipse reaches below it, so a
+     * ring whose `f` exceeds its `t` has no flat bottom at all — its lowest
+     * point is `-t` and the section is a plain ellipse. That is survivable for
+     * the mesh and fatal for the body: `caveSample` still reports the floor at
+     * `-f`, so the walking surface sits below the geometry, the chest height
+     * used for the wall solve lands where the ellipse has collapsed to nothing,
+     * and `halfWidthAt` returns ~0. The push then pins the player to the ring's
+     * centre every frame — full running velocity, zero displacement, in a
+     * passage four metres wide with nothing near them.
+     *
+     * The jitter in `shaped` is what lets f drift past t; 0.95 keeps the cut
+     * strictly inside and costs a couple of centimetres of depth.
+     */
+    path.f[i] = Math.min(path.f[i], path.t[i] * 0.95);
     path.key[i] = clamp01(path.key[i]);
     path.rough[i] = Math.max(0, path.rough[i]);
     path.scal[i] = clamp01(path.scal[i]);
@@ -1704,7 +1852,22 @@ function caveMaterial() {
          * whole lighting design. The first attempt used 0.19 and 0.17 and the
          * result was a uniformly lit corridor with no darkness anywhere in it.
          */
-        float near = exp(-dist * 0.30) * max(dot(n, normalize(toEye)), 0.0);
+        /**
+         * RETUNED WHEN THE PASSAGE LEARNED TO BE NARROW.
+         *
+         * 0.30 and 0.36 were fitted against a tube that was six metres across,
+         * so the nearest wall was three metres off and the term sat around 0.4.
+         * A vadose canyon is three metres across: the wall is at arm's length,
+         * exp(-0.33) is 0.72, and the tightest, most oppressive passage in the
+         * cave came out as the BRIGHTEST — a washed-out grey-green corridor,
+         * which is the exact opposite of what the shape is for.
+         *
+         * A steeper constant and a smaller coefficient put a wall at one metre
+         * at roughly what a wall at three used to be, and take everything past
+         * six metres to nothing. That hands the mid-distance back to the fungi,
+         * which is where the lighting design always said it belonged.
+         */
+        float near = exp(-dist * 0.34) * max(dot(n, normalize(toEye)), 0.0);
         near *= 0.62 + 0.5 * grain + 0.24 * bed;
 
         /**
@@ -1717,7 +1880,17 @@ function caveMaterial() {
          * came off it. Light does not work that way and the cave came out a
          * uniform luminous teal.
          */
-        vec3 col = vRock * (0.016 + near * 0.36);
+        /**
+         * The ambient floor is 0.028 rather than 0.016 and that is the only
+         * thing stopping a breakdown chamber being literally black.
+         *
+         * Halving the albedo and steepening the near-field together took about
+         * two and a half stops out, which fixed the washed-out canyon and went
+         * too far the other way in a room: the near blocks came back as pure
+         * black silhouettes against the fungus glow on the ceiling. A room is
+         * supposed to be dark; it is not supposed to be empty.
+         */
+        vec3 col = vRock * (0.028 + near * 0.34);
         col += vLit * (0.78 + 0.44 * grain);
         col += uDay * vDay * uDayGain;
         col *= 0.78 + grain * 0.42;
@@ -1762,11 +1935,26 @@ function caveMaterial() {
           vec3 wn = normalize(vec3(cos(wx) * 0.07 + cos(wz * 0.7) * 0.03, 1.0,
                                    cos(wz) * 0.06 + cos(wx * 0.6) * 0.03));
           vec3 v = normalize(toEye);
+          /**
+           * THE SHEEN IS BOUNDED, AND THE FIRST VERSION WAS NOT.
+           *
+           * At 3.4 fresnel plus 2.2 sparkle the multiplier on the baked light
+           * reaches 6.1, and fresnel goes to 1 at exactly the angle you see most
+           * of a stream from — along it. A ribbon of water seen down its own
+           * length came back as a clipped white wedge lying on the floor, which
+           * in a dark passage reads as a hole in the world; I chased it through
+           * three unrelated junction fixes before measuring it.
+           *
+           * Water is DARK. What makes it read is contrast against darker rock
+           * and the fact that it moves, not brightness — and the tail is clamped
+           * so no viewing angle can take it past its own albedo.
+           */
           float fres = pow(1.0 - clamp(dot(wn, v), 0.0, 1.0), 4.0);
           float spark = pow(max(0.0, sin(wx * 1.7) * sin(wz * 1.3)), 12.0);
+          float sheen = min(1.6, 0.32 + 1.0 * fres + 0.45 * spark);
           vec3 water = vRock * 0.05
-                     + vLit * (0.5 + 3.4 * fres + 2.2 * spark)
-                     + uDay * vDay * uDayGain * 0.7;
+                     + vLit * sheen
+                     + uDay * vDay * uDayGain * 0.55;
           col = mix(col, water, clamp((vWet - 0.5) * 2.0, 0.0, 1.0));
         }
 
@@ -1942,6 +2130,7 @@ class Cave {
     // At least one hooded ring, or the taper in `step` divides by zero and the
     // whole mouth comes out NaN — which draws as nothing, silently.
     this._hood = Math.max(1, exposedRings(this.path));
+    burySkylights(this.path, this._hood + 2);
     const n = this.path.x.length;
     /**
      * Ring 0 is the mouth and the last ring is the point the sweep collapses
@@ -1965,6 +2154,27 @@ class Cave {
           this.path.z[i] - this.path.z[i - 1]
         );
     }
+    /**
+     * NO SKYLIGHTS: the RINGS are checked against the hillside, not the nodes.
+     *
+     * `buildNodes` clamps every node to ROOF_ROCK under `heightAt` and that has
+     * always been described as the hard constraint — but the nodes are not what
+     * gets drawn. The rings are a Catmull-Rom resampling, Catmull-Rom overshoots
+     * between control points, the RADIUS is splined too (so a ring between two
+     * nodes can be fatter than either), and `_emitRing` then displaces the
+     * ceiling outward by up to `r * rough` on top of that. Three overshoots
+     * stacked, none of them checked.
+     *
+     * Measured over three mouths on grove-01: one passage put four rings through
+     * the hillside by up to 20 cm, two hundred metres in. A 20 cm breach in a
+     * single-sided tube is a hole you can see the SKY through from inside a
+     * mountain — and because the terrain is single-sided too, it is not subtle:
+     * it is a hard-edged wedge of daylight in an otherwise black passage.
+     *
+     * Pushing the ring DOWN rather than shrinking it keeps the section's shape,
+     * which is the thing the whole feature is about. Rings 0..hood are exempt:
+     * being proud of the ground there is the mouth, and is the point.
+     */
     this.along = along;
     this.path.along = along;
     this.length = along[n - 1];
@@ -2069,6 +2279,24 @@ class Cave {
       }
       path.obstacles = obs;
       path.obsAt = at;
+    }
+
+    /**
+     * The holes, hoisted out of `_link` so `_emitRing` can see them too.
+     *
+     * Both need them and for related reasons: `_link` skips the quads, and
+     * `_emitRing` has to flatten the rock displacement around the opening.
+     * Without the second, the two surfaces that have to meet at a junction are
+     * each being thrown about by up to `r * rough` — which in a rough room is
+     * over a metre, against a snout inset of forty centimetres — so they miss,
+     * and a miss in a single-sided tube is a view straight out of the mountain.
+     * Flattening the wall near the hole is also just correct: the rim of a real
+     * opening is where the rock has been worked hardest.
+     */
+    this._holes = [];
+    for (let p = 1; p < this.paths.length; p++) {
+      const br = this.paths[p];
+      this._holes.push({ ring: br.base, rings: br.holeRings, phi: br.holePhi, span: br.holeSpan });
     }
 
     /**
@@ -2247,6 +2475,8 @@ class Cave {
     }
 
     const day = this._daylight(path, i);
+    // How big the space is here, for the albedo. See the `open` block in _shade.
+    const span = r * Math.sqrt(sh.w * sh.t);
     const sec = { x: 0, y: 0 };
     /** Metres along this passage, for the scallops and the flowstone patches. */
     const alongHere = path.along ? path.along[i] : i * RING_STEP;
@@ -2258,6 +2488,17 @@ class Cave {
     // this is a channel the stream sits IN rather than a step the player takes.
     const waterHalf = wetRing > 0.01 ? Math.min(1.7, r * sh.w * 0.55) * wetRing : 0;
     const troughMax = 0.12 + 0.30 * (isHood ? 0 : path.pool[i]);
+    /**
+     * The main tube flattens where a branch leaves it; a branch flattens at its
+     * own mouth. Both halves of the same seam.
+     */
+    const holes = !isHood && path === this.path && this._holes.length ? this._holes : null;
+    /**
+     * …and the branch's own first rings, for the same reason from the other
+     * side: ring zero is the disc that plugs the hole, and displacing it is
+     * displacing the plug.
+     */
+    const mouthDamp = !isHood && path.base >= 0 && i < 3 ? smoothstep(clamp01(i / 3)) : 1;
 
     for (let j = 0; j < RADIAL; j++) {
       const phi = (j / RADIAL) * TAU - Math.PI * 0.5;
@@ -2278,8 +2519,20 @@ class Cave {
        * displacement as the silhouette needs.
        */
       const rough = isHood ? ROUGH : Math.max(ROUGH_FLOOR, path.rough[i]);
-      const amp =
-        r * (ROUGH_FLOOR + (rough - ROUGH_FLOOR) * (1 - floorish)) * (isHood ? 1.6 + 2.6 * lip : 1);
+      let amp =
+        r * (ROUGH_FLOOR + (rough - ROUGH_FLOOR) * (1 - floorish)) * (isHood ? 1.6 + 2.6 * lip : 1) * mouthDamp;
+      // Flat around a junction, fading back to full over twice the opening.
+      if (holes) {
+        for (let h = 0; h < holes.length; h++) {
+          const hh = holes[h];
+          const dr = (i - hh.ring) / (hh.rings * 2.2);
+          if (Math.abs(dr) > 1) continue;
+          const dp =
+            Math.abs(((phi - hh.phi + Math.PI) % TAU + TAU) % TAU - Math.PI) / (hh.span * 2.2);
+          const e = Math.sqrt(dr * dr + dp * dp);
+          if (e < 1) amp *= smoothstep(clamp01(e));
+        }
+      }
 
       // Position on the smooth outline, then displaced radially by the rock.
       let ox = sec.x * r;
@@ -2400,7 +2653,7 @@ class Cave {
       // analytic floor rather than from the vertex's own displacement, so the
       // line is level across a wall that is not.
       const above = py - (cy - r * sh.f);
-      this._shade(vi, px, py, pz, floorish, calcite, above, wetRing);
+      this._shade(vi, px, py, pz, floorish, calcite, above, wetRing, span);
     }
   }
 
@@ -2419,7 +2672,7 @@ class Cave {
   }
 
   /** Baked albedo, and separately the baked light landing on it. */
-  _shade(vi, x, y, z, floorish, calcite = 0, above = 99, damp = 0) {
+  _shade(vi, x, y, z, floorish, calcite = 0, above = 99, damp = 0, span = 6) {
     const b = this._buffers;
     const k = vi * 3;
     /**
@@ -2432,15 +2685,31 @@ class Cave {
      * pull apart instead of one.
      */
     const vein = clamp01(fbm2(x * 0.09, z * 0.09 + y * 0.14, 2) * 1.6 + 0.5);
-    let cr = 0.30 + vein * 0.22;
-    let cg = 0.30 + vein * 0.15;
-    let cb = 0.34 + vein * 0.06;
+    /**
+     * DARKER THAN IT WAS, BECAUSE THE WALL IS NOW WITHIN REACH.
+     *
+     * 0.30 + 0.22 peaks at 0.52 and the mottle below took it to 0.68, which is
+     * chalk — real limestone is 0.3 to 0.4 dry and much less than that wet. It
+     * was invisible while every passage was six metres across and the nearest
+     * wall was three metres off; a canyon puts it at arm's length, and a 0.68
+     * albedo at arm's length is a pale grey-green corridor with no darkness
+     * anywhere in it. That is the same failure the near-field term's own comment
+     * describes, arriving from the albedo side.
+     *
+     * Halving it also does the thing the lighting design has always claimed to
+     * want: the fungi are unchanged in absolute terms, so they are now roughly
+     * twice as important relative to the rock, and the passage is legible
+     * BECAUSE of them rather than in spite of them.
+     */
+    let cr = 0.19 + vein * 0.15;
+    let cg = 0.19 + vein * 0.10;
+    let cb = 0.22 + vein * 0.04;
     // Damp, dark floor. Real cave floors are mud and rubble, not the walls.
     const wet = 1 - floorish * 0.42;
     cr *= wet;
     cg *= wet;
     cb *= wet;
-    const mottle = noise2(x * 1.4, z * 1.4 + y * 0.8) * 0.16;
+    const mottle = noise2(x * 1.4, z * 1.4 + y * 0.8) * 0.09;
     cr = clamp01(cr + mottle);
     cg = clamp01(cg + mottle);
     cb = clamp01(cb + mottle);
@@ -2491,11 +2760,39 @@ class Cave {
        * A speleothem is banded — it was deposited in layers, over a very long
        * time, and the layers are what stop it looking moulded.
        */
-      const band = mottle * 2.4 + noise2(y * 3.1, (x + z) * 0.9) * 0.12;
-      cr = lerp(cr, clamp01(0.46 + band), calcite);
-      cg = lerp(cg, clamp01(0.40 + band), calcite);
-      cb = lerp(cb, clamp01(0.33 + band), calcite);
+      /**
+       * The banding is SMALL. `mottle` is already +/-0.16, so the first pass
+       * multiplied it by 2.4 to "add variation" and took calcite to 0.84 —
+       * brighter than the value it was introduced to bring down, and measurably
+       * so: the probe read 0.79 off a column standing in a canyon.
+       */
+      const band = mottle * 0.6 + noise2(y * 3.1, (x + z) * 0.9) * 0.08;
+      cr = lerp(cr, clamp01(0.33 + band), calcite);
+      cg = lerp(cg, clamp01(0.29 + band), calcite);
+      cb = lerp(cb, clamp01(0.24 + band), calcite);
     }
+
+    /**
+     * A NARROW PASSAGE IS DARKER ROCK, AND THIS IS THE ONLY HONEST FIX FOR THE
+     * PROXIMITY PROBLEM.
+     *
+     * The near-field term is a function of DISTANCE, so the closer a wall is the
+     * brighter it reads — which means a three-metre canyon is lit about twice as
+     * hard as a twenty-metre chamber, and the tightest place in the cave comes
+     * out as the palest. Retuning the exponent cannot fix that: it trades the
+     * washed-out canyon for a black room, and I went round that loop twice.
+     *
+     * What breaks the tie is that the two really do differ in albedo. A squeeze
+     * is where the water still runs — it is wet, silted and stained, and wet
+     * limestone is roughly half the reflectance of dry. A big chamber is
+     * abandoned and dusty. So the fix is a build-time multiply on the vertex
+     * colour keyed to the local cross-section, it costs nothing per frame, and
+     * it makes the canyon dark for a reason rather than by a fudge factor.
+     */
+    const open = 0.54 + 0.46 * clamp01((span - 1.9) / 4.6);
+    cr *= open;
+    cg *= open;
+    cb *= open;
 
     // Wet rock is dark rock. The bank of a stream is the darkest thing here.
     if (damp > 0 && floorish > 0.35) {
@@ -2551,7 +2848,7 @@ class Cave {
    */
 
   /** One vertex, shaded, into the extras region. Returns its index. */
-  _push(px, py, pz, nx, ny, nz, day, wet, calcite, floorish, above, damp) {
+  _push(px, py, pz, nx, ny, nz, day, wet, calcite, floorish, above, damp, span = 6) {
     const buf = this._buffers;
     const vi = buf.vert++;
     const k = vi * 3;
@@ -2566,8 +2863,22 @@ class Cave {
     buf.surf[k4 + 1] = 0;
     buf.surf[k4 + 2] = px * this.bedX + py * this.bedY + pz * this.bedZ;
     buf.surf[k4 + 3] = wet;
-    this._shade(vi, px, py, pz, floorish, calcite, above, damp);
+    this._shade(vi, px, py, pz, floorish, calcite, above, damp, span);
     return vi;
+  }
+
+  /**
+   * The cross-section size at a path's ring, for the albedo.
+   *
+   * Everything standing on the floor takes it from the ring it was placed
+   * against, so a boulder in a squeeze is as dark as the squeeze and the same
+   * boulder in a chamber is not. Without this the loose geometry is shaded as
+   * though it were always in a big room, which is exactly how it looked: dark
+   * walls with pale blocks and columns floating in front of them.
+   */
+  _spanAt(path, ring) {
+    const i = clamp(ring | 0, 0, path.x.length - 1);
+    return path.r[i] * Math.sqrt(path.w[i] * path.t[i]);
   }
 
   _tri(a, b, c) {
@@ -2587,7 +2898,7 @@ class Cave {
    * subtractions and a dot per face, at build time, to make an entire class of
    * invisible bug impossible.
    */
-  _face(p, q, r, s, inside, day, calcite, floorish, above, damp, wet = 0) {
+  _face(p, q, r, s, inside, day, calcite, floorish, above, damp, wet = 0, span = 6) {
     let ax = q[0] - p[0];
     let ay = q[1] - p[1];
     let az = q[2] - p[2];
@@ -2612,7 +2923,7 @@ class Cave {
     }
     const pts = s ? [p, q, r, s] : [p, q, r];
     const idx = pts.map((v) =>
-      this._push(v[0], v[1], v[2], nx, ny, nz, day, wet, calcite, floorish, above, damp)
+      this._push(v[0], v[1], v[2], nx, ny, nz, day, wet, calcite, floorish, above, damp, span)
     );
     if (flip) {
       if (s) {
@@ -2641,6 +2952,7 @@ class Cave {
     const rng = makeRng(`${getWorldSeed()}:cave-block:${this.c.k}:${bl.seed}`);
     const path = this.paths[bl.path];
     const day = this._daylight(path, bl.ring);
+    const span = this._spanAt(path, bl.ring);
     const ca = Math.cos(bl.rot);
     const sa = Math.sin(bl.rot);
     const hz = bl.rad * rngRange(rng, 0.68, 1.15);
@@ -2680,7 +2992,7 @@ class Cave {
       [1, 3, 7, 5],
     ];
     for (const f of faces) {
-      this._face(c[f[0]], c[f[1]], c[f[2]], c[f[3]], mid, day, 0, 0.85, above, 0.25);
+      this._face(c[f[0]], c[f[1]], c[f[2]], c[f[3]], mid, day, 0, 0.85, above, 0.25, 0, span);
     }
   }
 
@@ -2688,6 +3000,7 @@ class Cave {
   _emitSpire(sp) {
     const path = this.paths[sp.path];
     const day = this._daylight(path, sp.ring);
+    const span = this._spanAt(path, sp.ring);
     const rng = makeRng(`${getWorldSeed()}:cave-spire:${this.c.k}:${sp.seed}`);
     const SEG = 6;
 
@@ -2720,8 +3033,8 @@ class Cave {
         const mz = (a[1] + b[1]) * 0.5;
         const my = sp.y0 - (a[2] + b[2]) * 0.25;
         const off = 0.5;
-        this._face(p0, p1, p2, p3, [mx + sp.dirZ * off, my, mz - sp.dirX * off], day, 1, 0.1, half + 2, 0);
-        this._face(p0, p1, p2, p3, [mx - sp.dirZ * off, my, mz + sp.dirX * off], day, 1, 0.1, half + 2, 0);
+        this._face(p0, p1, p2, p3, [mx + sp.dirZ * off, my, mz - sp.dirX * off], day, 1, 0.1, half + 2, 0, 0, span);
+        this._face(p0, p1, p2, p3, [mx - sp.dirZ * off, my, mz + sp.dirX * off], day, 1, 0.1, half + 2, 0, 0, span);
       }
       return;
     }
@@ -2773,7 +3086,9 @@ class Cave {
             1,
             0.1,
             lo.y - sp.y0 + h * 0.25,
-            0
+            0,
+            0,
+            span
           );
         }
       }
@@ -2799,7 +3114,9 @@ class Cave {
         1,
         dir > 0 ? 0.5 : 0.05,
         dir > 0 ? sp.h * 0.4 : 99,
-        0
+        0,
+        0,
+        span
       );
     }
   }
@@ -2844,7 +3161,7 @@ class Cave {
         (prev.y + cur.y) * 0.5 - 1,
         (prev.l[2] + cur.r[2]) * 0.5,
       ];
-      this._face(prev.l, prev.r, cur.r, cur.l, below, this._daylight(path, i), 0, 1, 0.02, 1, 1);
+      this._face(prev.l, prev.r, cur.r, cur.l, below, this._daylight(path, i), 0, 1, 0.02, 1, 1, this._spanAt(path, i));
       prev = cur;
     }
   }
@@ -2896,9 +3213,17 @@ class Cave {
             const phiC = ((j + 0.5) / RADIAL) * TAU - Math.PI * 0.5;
             let cut = false;
             for (const h of holes) {
-              if (Math.abs(i - h.ring) > h.rings) continue;
-              const d = Math.abs(((phiC - h.phi + Math.PI) % TAU + TAU) % TAU - Math.PI);
-              if (d <= h.span) {
+              /**
+               * ELLIPTICAL, NOT RECTANGULAR. A box in (ring, phi) has corners
+               * outside the branch's ring-zero ellipse — that is what a bore is
+               * — so a rectangular window is a window with four holes at its
+               * corners. Same normalised test the branch's own section uses.
+               */
+              const dr = (i - h.ring) / h.rings;
+              if (Math.abs(dr) > 1) continue;
+              const dp =
+                (Math.abs(((phiC - h.phi + Math.PI) % TAU + TAU) % TAU - Math.PI)) / h.span;
+              if (dr * dr + dp * dp <= 1) {
                 cut = true;
                 break;
               }
@@ -2916,6 +3241,33 @@ class Cave {
           b.index[t++] = c;
           b.index[t++] = e;
           b.index[t++] = d;
+          /**
+           * A BRANCH'S FIRST RINGS ARE WOUND BOTH WAYS, and this is what finally
+           * closed the junction.
+           *
+           * The tube is FrontSide with inward normals, so a branch's snout only
+           * occludes when you are looking INTO its bore. Stand to one side of a
+           * junction and your line of sight passes through the snout's near wall
+           * — which is not drawn — then through the hole cut in the main tube,
+           * and out of the mountain. What you see is a hard-edged wedge of sky,
+           * and it survives every adjustment to the hole's size and shape,
+           * because the hole was never the problem: three separate fixes to the
+           * cut changed nothing at all, which is the tell.
+           *
+           * Emitting the collar rings a second time with the opposite winding
+           * makes the snout solid from every angle. Three rings is about a metre
+           * and a half, it costs 144 triangles per junction, and from inside it
+           * reads as the rim of the opening — which is what an opening in rock
+           * has.
+           */
+          if (p > 0 && i < 3) {
+            b.index[t++] = a;
+            b.index[t++] = d;
+            b.index[t++] = c;
+            b.index[t++] = c;
+            b.index[t++] = d;
+            b.index[t++] = e;
+          }
         }
       }
     }
@@ -3362,8 +3714,39 @@ export function caveSample(x, y, z) {
      * than it is tall and the vertical extent is already covered by the floor
      * and ceiling.
      */
-      const hx = path.x[bi] - x;
-      const hz = path.z[bi] - z;
+      /**
+       * THE OFFSET IS MEASURED ACROSS THE PASSAGE, NOT TO THE RING'S CENTRE.
+       *
+       * The ring nearest you is rarely the one you are level with — walking
+       * forward, the nearest centre sits slightly behind — so the vector to it
+       * has a component ALONG the passage. Using its full length as "how far off
+       * the centre line am I" overstates the offset, and pushing along it pushes
+       * you backwards.
+       *
+       * That backward component is a trap with a stable equilibrium, and it cost
+       * a long hunt: in a keyhole's slot the wall is about a metre from the axis,
+       * the push fires every frame, and the backward part of it exactly cancels
+       * a walking pace. The body runs at full speed, on level ground, in a
+       * passage with two feet of clearance either side, and does not move —
+       * indistinguishable from being blocked by geometry, which is what it was
+       * mistaken for three times.
+       *
+       * Projecting the tangent out leaves a pure sideways push, which is also
+       * what makes sliding along a wall feel like sliding rather than like being
+       * held.
+       */
+      const a2 = Math.max(0, bi - 1);
+      const b2 = Math.min(n - 1, bi + 1);
+      let tx = path.x[b2] - path.x[a2];
+      let tz = path.z[b2] - path.z[a2];
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl;
+      tz /= tl;
+      const rawX = path.x[bi] - x;
+      const rawZ = path.z[bi] - z;
+      const alongComp = rawX * tx + rawZ * tz;
+      const hx = rawX - tx * alongComp;
+      const hz = rawZ - tz * alongComp;
       const horiz = Math.hypot(hx, hz);
       const inside =
         clamp01(1.35 - horiz / (r * sh.w)) * clamp01((ceiling + 1.2 - y) / 1.2) * ends;
@@ -3442,9 +3825,12 @@ export function caveSample(x, y, z) {
       _sample.wallDist = wall;
       _sample.floor = floor;
       _sample.ceiling = ceiling;
-      _sample.cx = path.x[bi];
+      // The point on the centre LINE level with the body, rather than the ring's
+      // own centre — so the push that aims at it is perpendicular by
+      // construction. See the projection above.
+      _sample.cx = x + hx;
       _sample.cy = path.y[bi];
-      _sample.cz = path.z[bi];
+      _sample.cz = z + hz;
       _sample.blind = path.blind ?? Infinity;
       _sample.tight = clamp01((3.3 - span) / 2.1);
       _sample.room = clamp01((span - 2.6) / 6.2);

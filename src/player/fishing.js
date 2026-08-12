@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { clamp, clamp01, damp, hashString, makeRng, wrapAngle } from '../core/util.js';
 import { modalHasKeyboard } from '../core/keys.js';
-import { WATER_LEVEL, heightAt, streamPointNear } from '../world/terrain.js';
+import { WATER_LEVEL, groundUnder, heightAt, streamPointNear } from '../world/terrain.js';
 import { daylightAt } from '../world/daylight.js';
 import { fishGeometry } from '../world/shoal.js';
 import { makeLiving } from '../trip/living.js';
@@ -467,21 +467,12 @@ class Rope {
     return this.z[this.n - 1];
   }
 
-  /** Metres a second the far end is travelling. Used to decide a splashdown. */
-  endSpeed() {
-    const i = this.n - 1;
-    const dt = this.dtPrev || 1 / 60;
-    return Math.hypot(this.x[i] - this.px[i], this.y[i] - this.py[i], this.z[i] - this.pz[i]) / dt;
-  }
-
-  /** Give the far end a velocity, by moving where it says it came from. */
-  launch(vx, vy, vz, dt = 1 / 60) {
-    const i = this.n - 1;
-    this.px[i] = this.x[i] - vx * dt;
-    this.py[i] = this.y[i] - vy * dt;
-    this.pz[i] = this.z[i] - vz * dt;
-    this.dtPrev = dt;
-  }
+  /**
+   * TOMBSTONE: there was a `launch(vx, vy, vz)` here, which gave the far node a
+   * velocity by moving where it remembered coming from — the natural way to
+   * throw a Verlet chain, and it does not throw. See the note at `_fly` in the
+   * constructor for the measurement and for what replaced it.
+   */
 
   /**
    * One step.
@@ -854,6 +845,20 @@ export class Fishing {
     this.fish.castShadow = false;
     this.fish.receiveShadow = false;
     this.fish.visible = false;
+    /**
+     * 'YXZ', for exactly one pose.
+     *
+     * Three's default 'XYZ' applies the X term LAST, so it is a rotation about
+     * the WORLD's X axis rather than about the fish's own length. Every angle in
+     * the swimming pose is a few degrees and the difference is unmeasurable
+     * there; laying a fish on the bank is a quarter turn, and a quarter turn
+     * about the wrong axis is the difference between on its side and on its
+     * nose. With 'YXZ' the yaw is applied last, so the X term rolls the body
+     * about the axis it is long on — which is what "on its side" means, and is
+     * what the check verifies when it measures the catch's height above the
+     * water.
+     */
+    this.fish.rotation.order = 'YXZ';
     this.group.add(this.fish);
 
     /**
@@ -1247,7 +1252,19 @@ export class Fishing {
        */
       this._dry = true;
       this._target.set(x, bed + 0.06, z);
-      this._floorY = bed + 0.04;
+      /**
+       * THE FLOOR IS THE WATER EVEN FOR A CAST THAT MISSED IT, and that is not
+       * a fudge — it is what the single-number floor means.
+       *
+       * `_floorY` only ever applies to the rope's MIDDLE; both ends are pinned
+       * (the tip by the rod, the float by `_target` at the height of the ground
+       * it is actually lying on). A cast that clears the river lands on the far
+       * bank, which is above the water — and the line between here and there
+       * hangs over the CHANNEL, so a floor at the far bank's height jacked the
+       * whole middle of the line up above the river and drew a tent instead of a
+       * line. The lower of the two is the surface most of the rope is over.
+       */
+      this._floorY = Math.min(bed + 0.04, WATER_LEVEL);
       this._catch = null;
       this.say(depth > -0.4 ? 'It lands in the shallows, barely wet.' : 'It lands in the grass.');
       this.sound?.('cast', this._target, 0.4);
@@ -2009,11 +2026,32 @@ export class Fishing {
      */
     const c = this.controller;
     const fwd = c.forward(_v);
-    const bx = c.position.x + fwd.x * 1.5 - fwd.z * 0.35;
-    const bz = c.position.z + fwd.z * 1.5 + fwd.x * 0.35;
+    /**
+     * 1.9 m, and the number is the neck rather than the arm. At the metre and a
+     * half a person actually unhooks a fish at, looking at it from an eye 1.68 m
+     * up means pitching down about 48° — past the bottom of a 60° frame, so the
+     * catch was on the ground behind the player's own chin. Two metres brings it
+     * into an ordinary downward glance.
+     */
+    const bx = c.position.x + fwd.x * 1.9 - fwd.z * 0.35;
+    const bz = c.position.z + fwd.z * 1.9 + fwd.x * 0.35;
     this._beachX = bx;
     this._beachZ = bz;
-    this._beachY = heightAt(bx, bz) + 0.04;
+    /**
+     * `groundUnder`, not `heightAt`, and then half a fish's width on top.
+     *
+     * Two mistakes were in the one line this replaces and the first photograph
+     * of a landed pike had both. `heightAt` is a point sample of a field the
+     * rendered ground only approximates on a grid, so on any slope the mesh in
+     * front of you is above it — `groundUnder` is the same average the body's
+     * own feet stand on, which is by definition the surface you can see.
+     *
+     * And the fish is lying on its SIDE (see the roll in `update`), so what has
+     * to clear the ground is its half-WIDTH, which the geometry puts at 0.085 of
+     * its length. At 4 cm a 96 cm pike was buried to its lateral line and read
+     * as a leaf.
+     */
+    this._beachY = groundUnder(bx, bz) + 0.09 * (got.cm / 100) + 0.02;
     this._beachYaw = Math.atan2(fwd.z, fwd.x) + Math.PI / 2;
     this._beached = BEACH_S;
     this._beachPhase = 0;
@@ -2558,7 +2596,9 @@ export class Fishing {
       if (WATER_LEVEL - bed < MIN_DEPTH_M) {
         this._dry = true;
         this._catch = null;
-        this._floorY = bed + 0.04;
+        // Same reasoning as in `_settle`: the floor is for the middle of the
+        // rope, which is over the channel however shallow the far end has got.
+        this._floorY = Math.min(bed + 0.04, WATER_LEVEL);
         t.y = bed + 0.06;
         this.say('The float swings in and grounds in the shallows.');
       }

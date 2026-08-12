@@ -816,6 +816,46 @@ console.log(`  Fishing.update with a fish on: ${perFrame.toFixed(1)} µs a frame
  */
 ok(perFrame < 60, 'the fight costs under 60 µs a frame', `${perFrame.toFixed(1)} µs`);
 
+/**
+ * And the shoal, which is the one part of this feature that runs whether or not
+ * anybody is fishing — so it is the one with a claim to defend on every frame of
+ * every session spent anywhere near the river.
+ *
+ * Both numbers matter and they are different questions. AWAKE is what a player
+ * stood on the bank pays. ASLEEP is what everybody else pays, everywhere else in
+ * a world 768 m across, and it had better be a rounding error: one
+ * `streamPointNear` and a compare, which is the whole of the distance gate at
+ * the top of `Shoal.update`.
+ */
+const shoalCost = await page.evaluate(([bx, bz]) => {
+  const { shoal: s, controller: c } = window.RR;
+  const run = (n) => {
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) s.update(1 / 60, c.position);
+    return ((performance.now() - t0) * 1000) / n;
+  };
+  const back = { x: c.position.x, z: c.position.z };
+  run(200); // wake and settle before the clock starts
+  const awake = run(3000);
+  c.position.x = bx + 500;
+  c.position.z = bz + 500;
+  run(20);
+  const asleep = run(3000);
+  c.position.x = back.x;
+  c.position.z = back.z;
+  return { awake, asleep };
+}, [bank.x, bank.z]);
+console.log(
+  `  Shoal.update: ${shoalCost.awake.toFixed(1)} µs a frame at the river, ` +
+    `${shoalCost.asleep.toFixed(2)} µs everywhere else`
+);
+ok(shoalCost.awake < 60, 'the shoal costs under 60 µs a frame at the water', `${shoalCost.awake.toFixed(1)} µs`);
+ok(
+  shoalCost.asleep < 2,
+  'and effectively nothing away from it',
+  `${shoalCost.asleep.toFixed(2)} µs`
+);
+
 await page.evaluate(() => window.RR.fishing.stow());
 
 /* ------------------------------------------------------------------ report */

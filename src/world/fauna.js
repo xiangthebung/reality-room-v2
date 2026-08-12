@@ -1255,6 +1255,20 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   }
 
   const perchers = [];
+  /**
+   * Whether the roster has been placed in trees that actually exist yet. See the
+   * block at the top of `updatePerchers`; false until the first frame on which
+   * the streamed forest has put a trunk within reach.
+   */
+  let seated = false;
+  /** Frames spent waiting for them, so a treeless spawn cannot spin for ever. */
+  let seatingFrames = 0;
+  /**
+   * Whether the one corrective pass has run — the birds the first seating left
+   * in the grass because their sector had not streamed yet. See `updatePerchers`.
+   */
+  let settled = false;
+  let settleFrames = 0;
   /** Scratch for the plumage resolve. Nothing at load may allocate either. */
   const _coat = [1, 1, 1];
   const _mark = [1, 1, 1];
@@ -2075,6 +2089,141 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   }
 
   function updatePerchers(dt, camera, tripLevel) {
+    /**
+     * SEAT THE ROSTER ONCE THERE ARE TREES TO SEAT IT IN, AND THIS IS A BUG FIX
+     * RATHER THAN A REFINEMENT.
+     *
+     * `pickPerch` puts a bird on a real trunk at real bough height four times in
+     * five and on the ground the fifth, which is about right for a wood. What it
+     * actually produced was NINETY-SIX PER CENT OF THEM ON THE GROUND — measured,
+     * over a live session, by sampling `pos.y - heightAt(pos)` across the roster:
+     * median 23 cm, which is the ground fallback's own range and nothing else.
+     *
+     * The cause is an ordering that only became wrong when the forest started
+     * streaming. `trunkIndex` used to walk the collider list once at load; it is
+     * now a QUERY against `colliderGrid`, which is the right change and is what
+     * lets a bird two kilometres out perch on a tree that did not exist at boot.
+     * But main.js builds the forest and then immediately builds the fauna, and at
+     * that instant not one sector has streamed in — so the grid holds the loose
+     * colliders and no trunks at all, every one of twenty-six `pickPerch` calls
+     * misses, and the entire roster is seeded in the grass. Nothing ever moved
+     * them, either: a perched bird is only re-seated when you walk PERCH_FAR away
+     * from it, so standing anywhere near where you spawned left them there.
+     *
+     * This is the whole of "birds only ever fly overhead". The birds you could
+     * see in the air were the ninety-six flock instances, which is exactly what
+     * they are for; the twenty-six that were supposed to be in the branches were
+     * in the undergrowth, below the grass, in a wood whose ground cover is waist
+     * high.
+     *
+     * The fix is to wait for the trees, and WAIT FOR ENOUGH OF THEM, which is
+     * the whole of the second attempt at this.
+     *
+     * Two versions of "wait" were wrong before this one, and both failed the
+     * same way — they seated the roster while the ring was still streaming
+     * OUTWARD, when the only trunks in the world were the ones under the
+     * player's feet.
+     *
+     *   Latching on the first trunk anywhere near the camera moved the number
+     *   from 4% in the branches to 6%: on the frame that check passes there is
+     *   one sector beneath you and nothing at forty metres, so twenty-five of
+     *   the twenty-six re-picks land in the same grass they started in.
+     *
+     *   Retiring each bird individually as its own pick found a tree was worse
+     *   in a way that took a distance histogram to see. It looks unbiased and it
+     *   is the opposite: a bird whose candidate lands near the player is retired
+     *   on frame one, a bird whose candidate lands at fifty metres finds nothing
+     *   and is re-rolled, so the roster is filtered by proximity. SEVENTEEN OF
+     *   TWENTY-SIX BIRDS ENDED UP INSIDE SIXTEEN METRES, the wood turned into an
+     *   aviary, and the audio ceiling was pinned at 58 of 58.
+     *
+     * So: ask whether the forest exists AT THE FAR EDGE OF THE BAND, in four
+     * directions, and only then place everybody, once. Four grid queries a frame
+     * for the handful of frames the entry gate is already waiting through, and
+     * the gate is opaque, so there is nothing to see — which is why `unseen` is
+     * not consulted.
+     *
+     * The frame cap is the backstop for a spawn with genuinely no trees at that
+     * radius: open moor, or a seed that puts the clearing on a lake shore. There
+     * the roster seats itself late and takes whatever `pickPerch` can find,
+     * which is the same answer it would have given anyway.
+     */
+    if (!seated) {
+      seatingFrames++;
+      /**
+       * THREE OF FOUR, AT 60% OF THE BAND, and both numbers are a compromise
+       * against how long the player waits rather than against correctness.
+       *
+       * Four probes at 80% of the band is the strict reading of "the ring has
+       * streamed", and it took EIGHT SECONDS to satisfy — long enough that a
+       * player who clicks straight through the menu spends their first eight
+       * seconds in a wood whose birds are all in the grass. Requiring three of
+       * the four covers the case the strict test exists for, which is the ring
+       * being one sector wide, while tolerating the ordinary case of one bearing
+       * pointing at the stream, a clearing or a slope with no trunk on it — and
+       * that lone bearing is exactly what the strict test was waiting out.
+       */
+      let ring = 0;
+      const probe = PERCH_BAND * 0.6;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + 0.7;
+        const px = camera.position.x + Math.cos(a) * probe;
+        const pz = camera.position.z + Math.sin(a) * probe;
+        if (trunks.near(px, pz, 14)) ring++;
+      }
+      if (ring >= 3 || seatingFrames > 300) {
+        seated = true;
+        for (const p of perchers) {
+          pickPerch(p.home, camera.position.x, camera.position.z, PERCH_NEAR, PERCH_BAND);
+          p.pos.copy(p.home);
+        }
+      }
+    } else if (!settled) {
+      /**
+       * AND THEN ONE SECOND PASS, FOR THE ONES THAT STILL FOUND NOTHING.
+       *
+       * Seating early and seating well pull against each other: the strict
+       * four-bearing test took eight seconds and put 85% of the roster in the
+       * branches, the relaxed one takes two and manages 65%, and the difference
+       * is entirely birds whose radius happened to fall on a sector that had not
+       * arrived yet. Neither number is the one to keep — there is no reason to
+       * choose, because the two failures are separated in TIME.
+       *
+       * So the wood fills immediately and is then corrected: once the ring is
+       * properly out, every bird still standing in the grass gets one more roll.
+       * It cannot reintroduce the proximity bias that the per-bird retry had,
+       * and the reason is the whole point of waiting — by now trees exist at
+       * every radius in the band, so a re-roll is no longer filtered by how far
+       * out it landed.
+       *
+       * ONE pass, and `unseen` is honoured this time. The gate may well be down
+       * by now, and a bird that vanishes off the leaf litter while you are
+       * looking at it is the teleport this file spends most of its recycler
+       * avoiding. A bird being watched simply keeps its ground perch, which is a
+       * perfectly good thing for a blackbird to be doing.
+       */
+      settleFrames++;
+      let ring = 0;
+      const probe = PERCH_BAND * 0.85;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + 2.1;
+        const px = camera.position.x + Math.cos(a) * probe;
+        const pz = camera.position.z + Math.sin(a) * probe;
+        if (trunks.near(px, pz, 14)) ring++;
+      }
+      if (ring === 4 || settleFrames > 900) {
+        settled = true;
+        for (const p of perchers) {
+          if (p.state !== 'perch') continue;
+          if (p.pos.y - heightAt(p.pos.x, p.pos.z) > 1.5) continue;
+          if (!unseen(p.pos, 2)) continue;
+          pickPerch(p.home, camera.position.x, camera.position.z, PERCH_NEAR, PERCH_BAND);
+          if (!unseen(p.home, 2)) continue;
+          p.pos.copy(p.home);
+        }
+      }
+    }
+
     for (const p of perchers) {
       const dx = p.pos.x - camera.position.x;
       const dz = p.pos.z - camera.position.z;
@@ -2291,7 +2440,41 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           (16 + hammering * 16) * p.wing,
           p.scale
         );
-        const gone = p.timer > 4.5 || p.pos.y > heightAt(p.pos.x, p.pos.z) + 46;
+        /**
+         * THE ARC HAD A CEILING AND NO FLOOR.
+         *
+         * `flee` is ballistic — one shove and then gravity — and it ran for a
+         * flat 4.5 s or until the bird passed 46 m above the ground. Nothing
+         * looked at the ground itself, so a bird whose arc topped out early
+         * spent the rest of its flight descending THROUGH the terrain: watched
+         * with a camera that follows one, it reaches about 8 m, comes back down,
+         * and is eleven metres underground by the time the recycler collects it.
+         *
+         * It has always done this and nobody has ever seen it, because a flush
+         * goes away from the player and the recycle is hidden behind `unseen` —
+         * the bird was only ever underground where there was nothing to compare
+         * it to. That stops being true the moment arrivals are things you watch,
+         * which is the point of the `land` state below, so the floor is now a
+         * condition of the same test as the ceiling: coming back down to head
+         * height ends the escape, and what follows is a landing rather than a
+         * burial.
+         *
+         * One `heightAt` per fleeing bird per frame, which is what the ceiling
+         * test already cost — the value is taken once and used for both.
+         */
+        const ground = heightAt(p.pos.x, p.pos.z);
+        /**
+         * FALLING, and not merely low. One in five perchers is on the ground —
+         * see `pickPerch` — and a bird that launches from the leaf litter is
+         * below head height for the first half second BY DEFINITION. Testing
+         * height alone ended its escape on the frame it began and the blackbirds
+         * never got off the floor; the escape is over when it is coming back
+         * DOWN through head height, which is what the two extra terms say.
+         */
+        const gone =
+          p.timer > 4.5 ||
+          p.pos.y > ground + 46 ||
+          (p.timer > 0.5 && p.vel.y < 0 && p.pos.y < ground + 2.2);
         if (gone) {
           pickPerch(p.home, camera.position.x, camera.position.z, PERCH_NEAR, PERCH_BAND);
           if (unseen(p.home, 2)) {
@@ -2380,15 +2563,26 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           p.state = 'perch';
           p.timer = rngRange(rng, 1, 5);
           /**
-           * AND IT ANNOUNCES ITSELF. A bird that arrives on a branch near you
-           * and then says nothing for a minute is scenery; a bird that lands and
-           * sings within a few seconds is the reason you looked up. Shorter than
-           * the idle timer on purpose, and it is not a rate increase — the bucket
-           * in `wildlife.js` still decides how much song the wood emits, and all
-           * this does is put this bird near the front of the queue at the one
-           * moment the player is already looking at it.
+           * AND IT ANNOUNCES ITSELF — BUT ONLY IF IT LANDED WHERE YOU ARE.
+           *
+           * A bird that arrives on a branch near you and then says nothing for a
+           * minute is scenery; a bird that lands and sings within a few seconds
+           * is the reason you looked up.
+           *
+           * THE 25 m GATE IS NOT TIDINESS, IT IS WHAT MAKES THE LINE WORK. Every
+           * shortened timer is a bid for a token from the leaky bucket in
+           * `wildlife.js`, and the bucket is a fixed rate: bids that lose are not
+           * free, they are the reason somebody else's bid lost. Ungated, twenty
+           * landings a minute across the whole 46 m hop radius tripled the demand
+           * on that bucket and it went from refusing about half of the wood's
+           * song to refusing five sixths of it — so the bird that landed at your
+           * elbow was MORE likely to be silent than before the line existed.
+           * Measured: 41 attempts a minute, 7 of them audible.
+           *
+           * Bidding only from inside 25 m is what turns it back into a priority
+           * rather than a flood.
            */
-          p.sing = Math.min(p.sing, rngRange(rng, 3, 14) * (p.hen ? 2.3 : 1));
+          if (dist < 25) p.sing = Math.min(p.sing, rngRange(rng, 3, 14) * (p.hen ? 2.3 : 1));
           p.hop = rngRange(rng, 20, 70);
         }
       }

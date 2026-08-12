@@ -284,11 +284,43 @@ export function buildShoal({ scene, seed = 'grove-01', sound = null } = {}) {
    * on a black river, which is the same failure from the other end.
    */
   const material = makeLiving(
-    new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x0b1010 }),
+    new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      emissive: 0x0b1010,
+      /**
+       * TRANSPARENT AT 0.85, AND THE TRANSPARENCY IS NOT THE POINT — THE QUEUE
+       * IS.
+       *
+       * Three draws opaque geometry before transparent geometry and sorts only
+       * within each group, so an opaque fish can never be drawn after the river
+       * it is in, whatever its `renderOrder`. Marking the shoal transparent is
+       * what puts it in the same queue as the water, where `renderOrder` below
+       * can put it AFTER — and being drawn after a surface you are under is the
+       * whole of how anything is ever visible through it. (The other half of
+       * that is `depthWrite: false` on the water; see the long note in
+       * atmosphere.js's `buildWater`.)
+       *
+       * Having got there, 0.85 is what makes it read as under the water rather
+       * than stuck on top of it: a fifteen-percent wash of whatever the surface
+       * is doing at that pixel, which is the glare where there is glare and the
+       * dark green where there is not. It costs nothing, because a transparent
+       * material is what was needed anyway.
+       *
+       * `depthWrite` off for the ordinary reason — thirty-six fish blending over
+       * each other should not be an order-dependent depth puzzle — and
+       * `depthTest` deliberately LEFT ON, which is what keeps the near bank's
+       * reeds and leaves in front of them where they belong.
+       */
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    }),
     'prop'
   );
   const mesh = new THREE.InstancedMesh(geometry, material, COUNT);
   mesh.name = 'shoal';
+  /** After the water, which is 2. See the material note above. */
+  mesh.renderOrder = 3;
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   /**
    * No shadows, in either direction. They live under a surface that is drawn

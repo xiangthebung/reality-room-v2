@@ -539,9 +539,31 @@ export class Controller {
      * outline at the body's own chest height and hands back the answer, so the
      * wall the body feels is the wall the sweep drew.
      */
-    const wall = s.wallDist - RADIUS - 0.12;
+    /**
+     * Clamped so the push can never reach the centre line, and never pass it.
+     *
+     * `push` of 1 puts the body exactly on the axis; above 1 it overshoots to
+     * the far side and oscillates. Either one destroys forward motion, because
+     * a body snapped to the same ring's centre every frame never leaves that
+     * ring however fast it is running — which is precisely the failure a
+     * degenerate section produced before the floor cut was fixed upstream. The
+     * geometry bug is fixed; this is the guard that makes the whole class of it
+     * a slow walk instead of a full stop.
+     */
+    const wall = Math.max(0.25, s.wallDist - RADIUS - 0.12);
+    /**
+     * Published for diagnosis, three assignments a frame.
+     *
+     * Every stall this feature has produced looked identical from outside — full
+     * velocity, no displacement — and each time the first hour went on working
+     * out WHICH constraint was doing it. These are the three numbers that
+     * answer it, and they are free next to the scan that produced them.
+     */
+    this.caveWall = wall;
+    this.caveRadial = s.radial;
+    this.cavePost = s.postR;
     if (s.radial > wall && s.radial > 1e-4) {
-      const push = (s.radial - wall) / s.radial;
+      const push = Math.min(0.85, (s.radial - wall) / s.radial);
       this.position.x += (s.cx - this.position.x) * push;
       this.position.z += (s.cz - this.position.z) * push;
     }
