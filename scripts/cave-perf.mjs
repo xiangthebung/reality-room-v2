@@ -66,8 +66,17 @@ const spot = await page.evaluate(async (k) => {
   R.controller.fly = true;
   R.controller.position.set(near.x, 60, near.z);
   R.controller.velocity.set(0, 0, 0);
-  // Long enough for the rescan (twice a second) plus the sliced build.
-  for (let i = 0; i < 400; i++) await raf();
+  /**
+   * WAIT FOR THE CAVE TO SAY IT IS FINISHED, NOT FOR A NUMBER OF FRAMES.
+   *
+   * This was 400 frames with a comment saying that was long enough for the
+   * rescan plus the sliced build, and it was, for the build as it stood when it
+   * was written. The build is now cut against a millisecond deadline rather than
+   * a ring count, so the number of frames it takes is a property of the machine
+   * and of how many mouths happen to be in range. Bounded, so a build that never
+   * finishes says so instead of hanging.
+   */
+  for (let i = 0; i < 6000 && !R.caves.caves.get(near.k)?.ready; i++) await raf();
   const cave = R.caves.caves.get(near.k);
   if (!cave?.ready) return null;
   const p = cave.path;

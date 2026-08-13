@@ -20,10 +20,23 @@ import {
   shrubTexture,
   stickGeometry,
   stumpGeometry,
+  BREATH_OF_THICKNESS,
+  gaugeBreath,
+  matchSeamNormals,
+  weldProp,
 } from './undergrowth.js';
 import { PLANT_SCALE, makeLiving, setPlantScale } from '../trip/living.js';
 import { InstanceCuller, packSlab } from './culling.js';
 import { ColliderGrid, ForestField } from './forest-field.js';
+import {
+  IMPOSTOR_ATLAS_BYTES,
+  IMPOSTOR_SPRITES_PER_SIDE,
+  IMPOSTOR_TEXTURE_SIZE,
+  bakeImpostor,
+  bakeRendererReady,
+  impostorGeometry,
+  impostorMaterial,
+} from '../render/impostor.js';
 
 /**
  * The forest.
@@ -151,8 +164,52 @@ export const bushZones = new ColliderGrid();
  * transparent water, mist, shafts and motes still blend against a finished
  * frame.
  */
+/**
+ * AND THE SOLID THINGS THAT WERE NOT TRUNKS WERE IN THE ALPHA-TESTED BAND.
+ *
+ * The four numbers above describe an order — ground, wood, understorey, canopy
+ * — and the implementation delivered it for the two layers it names and put
+ * EVERYTHING ELSE in the understorey slot, including four layers that are
+ * completely solid: boulders, fallen logs, mushroom stems and mushroom caps.
+ * None of them has an alphaTest and none of them discards a fragment.
+ *
+ * That matters beyond early-Z, and the reason is the hardware the complaint
+ * came from. Apple's tile-based deferred renderers do hidden-surface removal
+ * per tile before shading, and the WWDC20 guidance is explicit that the
+ * removal is defeated by an alpha-tested draw: a shader that can discard
+ * cannot have its depth resolved ahead of shading, so the tile falls back to
+ * shading in submission order from the first such draw onward. Submitting
+ * opaque, then alpha-tested, then translucent, and never interleaving them, is
+ * the whole of the advice. A boulder drawn AFTER a lacy grass card is a solid
+ * occluder that arrives too late to occlude anything.
+ *
+ * So the test is what the mesh IS rather than what it is called: the opaque
+ * set is the named list, the canopy stays last, and the alpha-tested
+ * understorey is the default. It is one assignment and it changes no pixel —
+ * `renderOrder` sorts within the opaque list only, and depth resolves the same
+ * image whatever order these are submitted in. Verified at 0 px by
+ * `check:cull`, which re-renders every station.
+ */
+const OPAQUE_SOLIDS = new Set(['trunk', 'rocks', 'logs', 'shroom-stem', 'shroom-cap']);
+
+/**
+ * `impostor` RIDES WITH `leaf`, AND ENDS UP AFTER IT, WHICH IS THE POINT.
+ *
+ * An impostor is a canopy — alpha-tested, and by construction the furthest
+ * canopy in the frame — so the rule above puts it in the same last group rather
+ * than in the understorey's. Within one `renderOrder` three's painter sort falls
+ * through to `material.id`, and the impostor materials are built during the bake
+ * on the first frames of the session, long after every leaf material, so they
+ * carry the highest ids in the wood and are submitted last of all the trees.
+ *
+ * That is worth having rather than incidental. The band holds on the order of
+ * 1700 quads in a 66° frustum at `medium`, each about 50 px square at 300 m, so
+ * it is a few screenfuls of fragments — and almost all of them are behind trunks
+ * and crowns that are only occluders once their depth is down.
+ */
 function orderOpaque(mesh) {
-  mesh.renderOrder = mesh.name === 'trunk' ? -3 : mesh.name === 'leaf' ? -1 : -2;
+  const canopy = mesh.name === 'leaf' || mesh.name === 'impostor';
+  mesh.renderOrder = OPAQUE_SOLIDS.has(mesh.name) ? -3 : canopy ? -1 : -2;
   return mesh;
 }
 
@@ -273,10 +330,50 @@ function rockGeometry(rng, size) {
   const welded = BufferGeometryUtils.mergeVertices(geo, 1e-4);
   welded.computeVertexNormals();
   geo.dispose();
-  return welded;
+  /**
+   * AND THE WELD ABOVE DOES NOT ACTUALLY CLOSE ALL OF IT, which is worth saying
+   * out loud under a comment that claims it does. `mergeVertices` hashes every
+   * attribute and an icosahedron keeps its `uv`, so the nine vertices on the
+   * unwrap seam survive as pairs — measured, not assumed. Unlike the props in
+   * undergrowth.js the UVs cannot simply be deleted here, because `rockMat` is
+   * one of the surfaces whose procedural grain reads them.
+   *
+   * The residue is small — adjacent faces on a subdivided icosahedron differ by
+   * a few degrees, so the seam opens by under a centimetre on a 1.7 m boulder
+   * against the 9.6 cm the flat rim of a log was opening — and it is one line to
+   * make it exactly zero.
+   */
+  return matchSeamNormals(welded);
 }
 
-/** A fallen log: a slightly bent cylinder with bark. */
+/**
+ * A fallen log: a slightly bent cylinder with bark.
+ *
+ * CAPPED SINCE IT WAS WRITTEN, AND STILL OPEN AT BOTH ENDS UNDER A TRIP.
+ *
+ * `CylinderGeometry` emits the rim twice — once as the last ring of the side,
+ * with a radial normal, and once as the edge of the cap, with an axial one —
+ * and after the `rotateZ` those two directions are 90° apart. living.js pushes
+ * every vertex along its own normal, so the two rings walk away from each other
+ * and what opens is an annular crack of up to 9.6 cm at each end of a log 38 cm
+ * in radius. It is not subtle and it is not a culling artefact: the before
+ * pictures show the pale inside of the log through a band all the way round the
+ * end face. `rockGeometry` records this same failure and the same fix.
+ *
+ * THE CRISP RIM WAS CONSIDERED AND GIVEN UP, because keeping it and closing the
+ * crack are the same wish. A hard shading edge IS two normals at one place, and
+ * two normals at one place IS two vertices, and two vertices at one place is
+ * exactly what the breath pulls apart. Welding blends the rim over about 45°,
+ * which on a broken log — the end of a log on a forest floor is a break, not a
+ * saw cut — is the truer read anyway. The alternative, pinning the end rings by
+ * zeroing their normals, cannot be done: `normalize()` of a zero vector is NaN
+ * and the lighting on both rings goes with it.
+ *
+ * NO GAUGE. The thin end is 0.72 × 0.38 = 27.4 cm in radius against 9.6 cm of
+ * breath — 35% of it, comfortably inside `BREATH_OF_THICKNESS`. A log is thick
+ * enough to breathe the whole amount and it should, because it is the largest
+ * single surface on the floor.
+ */
 function logGeometry(rng, length, radius) {
   const geo = new THREE.CylinderGeometry(radius * 0.72, radius, length, 8, 4, false);
   geo.rotateZ(Math.PI / 2);
@@ -287,10 +384,23 @@ function logGeometry(rng, length, radius) {
     pos.setY(i, pos.getY(i) + Math.sin(t * 2.4) * radius * 0.5);
     pos.setZ(i, pos.getZ(i) + Math.sin(t * 3.1 + 1) * radius * 0.35);
   }
-  geo.computeVertexNormals();
   void rng;
-  return geo;
+  // The bend is a function of X alone, so both copies of a rim vertex land in
+  // the same place and the weld is exact.
+  return weldProp(geo);
 }
+
+/**
+ * The cap's dome, in radians of polar angle, and how many sides it is drawn on.
+ *
+ * A hair past the equator, which is what gives a cap its slight overhang. Named
+ * because the underside below has to end EXACTLY on the ring this produces —
+ * `sin` and `cos` of this angle are the rim's radius and height — and a second
+ * literal `Math.PI * 0.52` somewhere else in the file is how that stops being
+ * true one edit later.
+ */
+const CAP_THETA = Math.PI * 0.52;
+const CAP_SIDES = 12;
 
 /**
  * Mushroom geometry: a stem and a cap, in two materials.
@@ -299,15 +409,84 @@ function logGeometry(rng, length, radius) {
  * faint, at the edge of noticeable. Something has to draw the eye across a
  * clearing and say "that". A prompt on the HUD would do the job and would also
  * announce that this is a game.
+ *
+ *
+ * THE CAP HAD NO UNDERSIDE, AND THIS IS THE SHAPE THE PLAYER IS HOLDING WHEN
+ * THE COMPLAINT HAPPENS.
+ *
+ * It was an open hemispherical shell: `SphereGeometry` stopped at `CAP_THETA`
+ * and nothing closed it. `capMat` is `FrontSide`, so from below the rim there
+ * is no mushroom at all — the near half faces away and is culled, the far half
+ * shows you its back and is culled, and a 15 cm cap becomes a hole in the world
+ * that the eye can reach by crouching. Then the breath flares the rim outward
+ * and downward and widens the band of angles that can see under it.
+ *
+ * The underside is now a shallow cone from the rim down to a point buried
+ * inside the stem, which is 12 triangles on a 156-triangle cap — under 8% — and
+ * closes the body completely. It is also what a mushroom looks like: the gills
+ * hang, they do not sit flat.
+ *
+ * WHY NOT MERGE THE CAP AND THE STEM INTO ONE MESH, which is the fix the shape
+ * of the bug suggests: because they are two materials — a cream stem with no
+ * instance tint and a purple cap that takes one, `push(caps, _mat, _col, ...)`
+ * in scatter.js — and one mesh with two materials is a geometry group per
+ * material, which is two draw calls and one instance colour shared between
+ * them. It would cost the stems their own colour to fix a seam that closing the
+ * cap hides anyway. The two meshes still ride the same instance matrix; what
+ * changed is that neither of them has an opening for the other to show through.
+ *
+ * BOTH HALVES ARE GAUGED, and the cap's budget is set by the SHALLOWEST
+ * dimension of the closed body rather than by its radius. The cap is 10–17 cm
+ * across and only 5–15 cm from its crown to the bottom of its gills, so the
+ * radius is the wrong number to size a ±9.6 cm displacement against: at the
+ * trough the dome would sink through the underside it now has. The stem is
+ * gauged against its 2.8 cm neck for the plain reason living.js gives — 9.6 cm
+ * of inward travel on a 2.8 cm tube turns it inside out, which is what made a
+ * patch of mushrooms flicker.
  */
 function mushroomGeometry(rng) {
   const stemH = rngRange(rng, 0.2, 0.44);
   const stem = new THREE.CylinderGeometry(0.028, 0.045, stemH, 7, 1);
   stem.translate(0, stemH / 2, 0);
-  const cap = new THREE.SphereGeometry(rngRange(rng, 0.1, 0.17), 12, 7, 0, TAU, 0, Math.PI * 0.52);
-  cap.scale(1, rngRange(rng, 0.55, 0.85), 1);
+
+  const r = rngRange(rng, 0.1, 0.17);
+  const squat = rngRange(rng, 0.55, 0.85);
+  const dome = new THREE.SphereGeometry(r, CAP_SIDES, 7, 0, TAU, 0, CAP_THETA);
+  dome.scale(1, squat, 1);
+  const rimR = r * Math.sin(CAP_THETA);
+  const rimY = r * Math.cos(CAP_THETA) * squat;
+  /**
+   * How far the gills hang below the rim: 45% of the dome's own height above
+   * it. A fraction rather than a constant so that the flattest cap the rng can
+   * draw still gets an underside with some depth to it, and the tallest one
+   * does not get a spike.
+   *
+   * The cone is built apex-UP by three and turned over, which flips its normals
+   * with it — so they point down and outward, which is what makes the underside
+   * front-facing to an eye below it and is the whole point of adding it.
+   */
+  const drop = (r * squat - rimY) * 0.45;
+  const gills = new THREE.ConeGeometry(rimR, drop, CAP_SIDES, 1, true);
+  gills.rotateX(Math.PI);
+  gills.translate(0, rimY - drop / 2, 0);
+  /**
+   * The two rings meet exactly. `SphereGeometry` lays its rim at
+   * `(-cos φ, sin φ) · r sin θ` and `ConeGeometry` lays its base at
+   * `(sin θ, cos θ) · radius`; the parameterisations are a reflection of one
+   * another, so the two are not the same VERTEX in the same order, but at
+   * twelve segments they are the same twelve POINTS — every multiple of 30° on
+   * a circle of radius `rimR`. `mergeVertices` welds by position and does not
+   * care about the order, so the rim closes into one ring with one normal, and
+   * the cap can be inflated and deflated without ever splitting along it.
+   */
+  const cap = BufferGeometryUtils.mergeGeometries([dome, gills], false);
+  dome.dispose();
+  gills.dispose();
   cap.translate(0, stemH, 0);
-  return { stem, cap };
+  return {
+    stem: gaugeBreath(weldProp(stem), 0.028 * BREATH_OF_THICKNESS),
+    cap: gaugeBreath(weldProp(cap), drop * BREATH_OF_THICKNESS),
+  };
 }
 
 /**
@@ -586,7 +765,32 @@ export function buildForest(scene, seed = 'grove-01') {
    * done by eye means "darker" every time, and darker down here does not read
    * as lush, it reads as a hole in the floor.
    */
-  const grassTex = herbTuft({ key: 'sward', seed: `${seed}:grass`, hue: 128, sat: 42, light: 42 });
+  /**
+   * ==== AND THE SWARD'S COLOUR LEFT THIS FILE ENTIRELY ======================
+   *
+   * `sat: 42` became `sat: 10` and the material colour became white. The
+   * sward's hue now lives in ONE place — the two linear triples at the top of
+   * scatter.js, lerped by a value-noise field of the world position — and this
+   * texture supplies only the shape and the within-blade shading.
+   *
+   * THAT IS THE FIX FOR THE PROBLEM THE BLOCK ABOVE DESCRIBES, rather than
+   * another lap of it. Three green factors multiplied together cannot be
+   * balanced by tuning any one of them, because the failure is structural: the
+   * old texture's red channel averaged 0.054 of linear light, so whatever red a
+   * tint asked for was multiplied by a twentieth and deleted. A layer whose
+   * colour cannot reach red cannot have a dry patch in it, and a floor with no
+   * dry patch in it is a printed pattern. One factor carrying the colour and
+   * two carrying luminance is the only arrangement in which a two-ended ramp
+   * reaches both ends.
+   *
+   * The full before/after luma table — texture, material and tint, measured
+   * rather than asserted, product luma 0.07401 to 0.07691 — is in scatter.js
+   * with the field that drives it, because that is where the decision is made.
+   * The only thing worth repeating here is the direction: this is 3.9%
+   * BRIGHTER, and the reason the arithmetic was done at all is that going
+   * greener by eye means going darker every time.
+   */
+  const grassTex = herbTuft({ key: 'sward', seed: `${seed}:grass`, hue: 128, sat: 10, light: 42 });
   /**
    * `receivesShadow: false` HERE AND ON EVERY OTHER CARD LAYER BELOW, for the
    * reason trees.js:2575 states for the trunk and the leaf — and this is the
@@ -617,7 +821,12 @@ export function buildForest(scene, seed = 'grove-01') {
       map: grassTex,
       alphaTest: 0.4,
       side: THREE.DoubleSide,
-      color: 0x9ecc94,
+      // WHITE, AND IT IS A DELETION RATHER THAN A COLOUR. This slot used to
+      // hold 0x9ecc94, a third green factor whose own Rec.709 luma is 0.5259 —
+      // so it was halving the layer's brightness to say something the tint was
+      // already saying. Removing it is what pays for the near-neutral texture
+      // and the wider tint range; see the arithmetic above and in scatter.js.
+      color: 0xffffff,
     }),
     'plant',
     { receivesShadow: false }
@@ -1372,6 +1581,9 @@ export function buildForest(scene, seed = 'grove-01') {
     streamedLayers.push({
       id,
       packer,
+      // The mesh, kept because the impostor band has to swap a material onto it
+      // once its atlas exists — everything else here only ever needs the packer.
+      mesh,
       bound: options.bound,
       bucketSize: options.bucketSize,
       mirrorOf: options.mirrorOf ?? null,
@@ -1472,6 +1684,140 @@ export function buildForest(scene, seed = 'grove-01') {
    */
   const TREE_REACH = 384;
 
+  /**
+   * WHERE THE WOOD STOPS BEING GEOMETRY AND STARTS BEING A SILHOUETTE.
+   *
+   * The fourth band. Past `reach` — which is whatever the tree-distance knob is
+   * set to — a tree is one camera-facing quad reading from a 64-view
+   * hemi-octahedral atlas of itself. Four vertices and two triangles against the
+   * 2400-6400 the near trunk and canopy cost, and it is the answer to the
+   * problem `reach-visible.mjs` found and the comment on the canopy mesh below
+   * (which is still right about what it says, and is answered rather than
+   * contradicted — see the note appended to it).
+   *
+   * IT IS 384 AND NOT A NEW PRESET ROW, ON PURPOSE. The quality ladder has five
+   * rungs and every knob on it needs five entries; this needs none, because the
+   * only sensible value is the one the whole ring is already generated to.
+   * `TREE_REACH`'s own block argues at length that 384 m is where a tree stops
+   * being able to produce a pixel — that argument is about FOG against a
+   * surface, and it is exactly as true for a quad as for a trunk. So the outer
+   * edge of this band is the outer edge of the world and the INNER edge is the
+   * knob: at `ultra` and `high` the knob is 384 and the band is
+   * (384, 384] — empty, no instances, no draw calls, no program, the ladder's
+   * top two rungs completely untouched. At `medium` it is (250, 384], at `low`
+   * (180, 384], at `potato` (120, 384].
+   *
+   * Callers who want it off pass `impostorReach` to `setReach`, or call
+   * `setImpostors(false)`. Both exist for the A/B scripts and neither is wired
+   * to a setting.
+   *
+   *
+   * 384 ON EVERY RUNG, INCLUDING `potato`, AND THAT WAS THE QUESTION.
+   *
+   * The obvious economy is to shorten this band at the bottom of the ladder:
+   * potato exists for weak machines and its band is (90, 384], nearly three
+   * hundred metres of quads almost all of which are behind trees from where a
+   * player stands. `impostor-knee.mjs` sweeps it. There is no knee — the cost
+   * and the benefit fall together, almost proportionally:
+   *
+   *     impostorReach   quads   wood ms   above-flat mean Δ   picture
+   *     none                0     0.00          6.03          bare heightfield
+   *     384              5426    +0.39          1.64          treeline to horizon
+   *     300              3551    +0.35          2.19          treeline to horizon
+   *     240              2105    +0.22          3.21          bare summit returning
+   *     140               629    +0.03          4.25          bare heightfield
+   *
+   * Cutting to 300 recovers a tenth of the cost for an eighth of the picture,
+   * which is not a trade worth making; cutting to 240 recovers 44% of it and
+   * puts the bare summit back in the frame. AND WHERE IT BREAKS IS A PROPERTY OF
+   * THE TERRAIN, not of the number: 240 fails at this station because the ridge
+   * that station looks at happens to be about 300 m away. The world is seeded
+   * per session, so no preset value below the ring's own edge is safe on a
+   * landscape nobody has photographed. 384 is the one value that cannot be
+   * wrong, and it is the value `TREE_REACH` already argues for on its own terms.
+   *
+   * THE OTHER EDGE IS WORSE, and was measured too. Handing the near end of the
+   * band back to the far trunk sweep — `geometryReach` of 120, 150, 180 instead
+   * of `leafReach`'s 90 — costs MORE (+0.57, +0.68, +0.55 against +0.45) because
+   * the trunk geometry it puts back is dearer than the quads it removes, and it
+   * costs the picture as well (mean 2.44, 2.85, 3.28 against 1.64) because bare
+   * boles above the canopy are exactly what the band exists to stop. Both edges
+   * are closed; the band is the size it should be.
+   *
+   *
+   * WHAT IT IS WORTH, AND WHAT IT COSTS. Both measured, both from one page
+   * session with the preset pinned so the band is the only thing moving.
+   *
+   * `reach-visible.mjs`, from 70 m above the canopy, against a full-reach frame
+   * — differing pixels and mean delta out of 255:
+   *
+   *     rung      before             after
+   *     medium    14.69%  mean 2.69   4.64%  mean 0.43
+   *     low       25.39%       4.28  13.02%       1.09
+   *     potato    31.27%       6.01  18.42%       1.65
+   *
+   * and at every eye-level station, before and after, 0.00-0.04%. It is very
+   * nearly the whole of the difference this lever was making to the picture.
+   *
+   * `impostor-knee.mjs`, 14 interleaved rounds at the potato bands and the
+   * potato internal resolution, five stations, with `canopy` — a view straight
+   * up into the crown where the band has no instances — carried as the noise
+   * control and subtracted:
+   *
+   *     wood     +0.39 ms        ridge     0.00 ms
+   *     clearing  0.00 ms        glade     0.00 ms
+   *
+   * ONE STATION. The band is free at the long sightlines and at the spawn, and
+   * costs a third of a millisecond in the dense interior view, on a 2.4-3.4 ms
+   * frame. It also buys back 0.6-3.5% of the frame's triangles, the far sweep it
+   * replaces being 216-594 triangles a tree against the quad's two.
+   *
+   * AN EARLIER VERSION OF THIS BLOCK SAID +0.563 AND +0.505 AND WAS WRONG,
+   * which is worth leaving in rather than quietly correcting. Those readings
+   * were taken while another agent was driving Chromium on the same GPU; the
+   * `canopy` control moved by 0.19-0.42 ms in the same runs, which is the tell
+   * and is exactly why that station is in the table. A row is only readable if
+   * the control beside it is small. See the header of `impostor-knee.mjs` for
+   * the sweep that established the honest numbers.
+   */
+  const IMPOSTOR_REACH = TREE_REACH;
+
+  /**
+   * ONE GEOMETRY FOR ALL FIFTEEN LAYERS, and one dummy material until the
+   * atlases exist.
+   *
+   * The geometry is genuinely shared: a unit plane has nothing archetype-shaped
+   * about it, and the tree's size and centre reach the vertex shader as uniforms
+   * on the material instead. Fifteen `InstancedMesh`es over one four-vertex
+   * buffer is one upload for the wood's entire far band.
+   *
+   * The material cannot be shared and cannot exist yet, because it holds the
+   * atlas. `impostorBakes` below is the work list; `pumpImpostors` in `cull()`
+   * works through it and swaps the real material in. Until then the band is held
+   * empty by `impostorsReady`, so a mesh with the dummy on it never draws.
+   */
+  const impostorGeo = impostorGeometry();
+  const impostorDummy = new THREE.MeshBasicMaterial({ visible: false });
+  impostorDummy.name = 'impostor-unbaked';
+  const impostorBakes = [];
+  let impostorsReady = false;
+  let impostorsOn = true;
+  let impostorBytes = 0;
+  let impostorBakeMs = 0;
+  /**
+   * Summed quad area as a fraction of the square one, for the report.
+   *
+   * A tree is tall and narrow and the sprite has to be square; the QUAD does
+   * not. See the three-radii block in `bakeImpostor` — this is the number that
+   * says how much of the fill a square quad was wasting, which was 0.56 ms.
+   */
+  let impostorFill = 0;
+  /** Frames `pumpImpostors` has been offered. See the deadline in its body. */
+  let impostorCalls = 0;
+  const IMPOSTOR_DEADLINE = 300;
+  /** The band `setReach` last asked for, applied the moment the bakes finish. */
+  let impostorBand = { min: IMPOSTOR_REACH, max: IMPOSTOR_REACH };
+
   for (const arch of archetypes) {
     const a = archetypes.filter((x) => x.name === arch.name).indexOf(arch);
     /**
@@ -1540,6 +1886,21 @@ export function buildForest(scene, seed = 'grove-01') {
      * which is the entire reason the variants in trees.js could be a material
      * each instead of an atlas with a per-instance sub-rect. Two archetypes that
      * share a variant get the same material OBJECT here, not a copy.
+     *
+     *
+     * THE PARAGRAPH ABOVE IS STILL RIGHT AND IS NOW ANSWERED RATHER THAN
+     * OVERTURNED. It rejects a REDUCED canopy: fewer cards, thinner crown, the
+     * silhouette eaten at exactly the range where the silhouette is the whole
+     * tree. That reasoning has not changed and there is still no far leaf mesh.
+     *
+     * What follows this block is a different move — not less canopy, but no
+     * geometry at all: past the knob's reach a tree is one quad reading a baked
+     * 64-view atlas of ITSELF, so the silhouette is not thinned, it is
+     * photographed. `reach-visible.mjs` is the reason it had to exist: at eye
+     * level shortening the reach moves 0.02-0.05% of the pixels, and from 70 m
+     * above the canopy it moves 14.69% at `medium` and 31.27% at `potato`,
+     * because up there nothing is in the way and every tree the reach removed
+     * was a tree you could have seen. See IMPOSTOR_REACH.
      */
     addStreamed(`leaf:${arch.name}:${a}`, 'leaf', arch.grown.leaf, arch.mats.leafMats[a], {
       capacity: TREE_CAPACITY,
@@ -1549,6 +1910,99 @@ export function buildForest(scene, seed = 'grove-01') {
       thinnable: false,
       castShadow: true,
       bound: leafBound,
+    });
+    /**
+     * AND THE SAME TREE AGAIN, AS ONE QUAD, PAST WHERE THE GEOMETRY STOPS.
+     *
+     * A THIRD MIRROR OF THE TRUNK PAYLOAD, not a fourth layer in the worker.
+     * `mirrorOf` makes `forest-field` insert one sector's trunk matrices into
+     * however many slabs name it, so this costs the worker nothing, costs the
+     * network nothing, and — this is the part that matters — inherits the trunk
+     * layer's bucket spheres, which is what makes the band arithmetic in
+     * `setReach` a straight extension of the pairing that was already there.
+     *
+     * THE TRUNK AND NOT THE LEAF, and the choice is about the instance tint.
+     * `treeSector` writes two different colours for one tree: the canopy gets a
+     * palette tint jittered ±16° of hue, the trunk gets a near-white lightness
+     * jitter. Mirroring the canopy would multiply the impostor — bole included —
+     * by a saturated green; mirroring the trunk multiplies it by a grey near 1
+     * and lets the atlas carry its own colour, which is what an impostor of a
+     * whole tree wants. The price is that all three archetypes of a species show
+     * their own baked canopy colour rather than a per-instance one, and at
+     * 150 m the fog has already taken 85% of that difference.
+     *
+     * `castShadow: false` IS A HARD CONSTRAINT, not a saving. The shadow pass is
+     * already 84% alpha-tested leaf cards; a shadow map cannot be cast by a
+     * camera-facing quad in any case, because the quad faces the eye and the
+     * shadow camera is not the eye — it would render as a flat rectangle of
+     * whatever sprite the light happens to be looking from. Nothing in this band
+     * is closer than `reach`, and the shadow camera is a 58 m box.
+     *
+     * `alwaysNear` is absent for the same reason it is absent on `trunk-far`:
+     * that radius exists to keep a tree behind your head alive for its shadow,
+     * and nothing here has one.
+     */
+    addStreamed(`impostor:${arch.name}:${a}`, 'impostor', impostorGeo, impostorDummy, {
+      capacity: TREE_CAPACITY,
+      bucketSize: TREE_BUCKET,
+      minDistance: IMPOSTOR_REACH,
+      maxDistance: IMPOSTOR_REACH,
+      thinnable: false,
+      castShadow: false,
+      bound: unionBound(trunkBound, leafBound),
+      mirrorOf: `trunk:${arch.name}:${a}`,
+    });
+    /**
+     * What `pumpImpostors` will need, in the order it will need it.
+     *
+     * The bake materials are built HERE rather than in impostor.js because
+     * everything they are made of is local to this file — and they are FRESH
+     * materials rather than `arch.mats`, which is a saving and a correctness fix
+     * at once. The world's materials are `makeLiving`-wrapped: they carry the
+     * wind, the breath, the lean-toward-you and the whole trip uniform block,
+     * all of which are noise on a bake of a tree standing still. Worse, they are
+     * compiled against a scene that HAS fog, and three keys its program cache on
+     * that, so handing them to a fog-less bake scene would compile a second full
+     * set of tree programs — which is the shader hitch this repo has already
+     * shipped once and reads as the game freezing.
+     *
+     * A plain Lambert with the same map, the same alpha test and the same
+     * emissive compiles two programs for the whole bake and is what the far band
+     * actually wants: the tree, lit, with nothing moving.
+     */
+    const palette = arch.mats.tints[a];
+    impostorBakes.push({
+      id: `impostor:${arch.name}:${a}`,
+      parts: [
+        {
+          geometry: arch.grown.trunk,
+          material: new THREE.MeshLambertMaterial({ map: arch.mats.trunkMat.map }),
+        },
+        {
+          geometry: arch.grown.leaf,
+          material: new THREE.MeshLambertMaterial({
+            map: arch.mats.leafMats[a].map,
+            // Matched to `makeLeafMaterial` in trees.js, all three of them: the
+            // cut, the two-sidedness and the stand-in for subsurface scatter. A
+            // canopy baked at FrontSide is half a canopy, because a leaf card is
+            // a card.
+            alphaTest: 0.42,
+            side: THREE.DoubleSide,
+            emissive: new THREE.Color(0x17260f),
+            emissiveIntensity: 0.72,
+            /**
+             * The middle of the archetype's own palette, baked in.
+             *
+             * The canopy's colour is a per-instance multiply in the wood and
+             * cannot be one here — see the trunk-mirror note above — so the
+             * palette has to be collapsed to one colour, and the middle entry is
+             * the one that is least wrong for a rowan in blossom AND a birch on
+             * the turn. It is the same array `treeSector` samples.
+             */
+            color: new THREE.Color(palette[Math.floor(palette.length / 2)]),
+          }),
+        },
+      ],
     });
   }
 
@@ -1875,6 +2329,115 @@ export function buildForest(scene, seed = 'grove-01') {
     glow: glowPoints,
   });
 
+  /**
+   * BAKE THE IMPOSTOR ATLASES, ONE ARCHETYPE A FRAME, WHILE THE MENU IS UP.
+   *
+   * WHEN, and why it is here rather than at construction. `buildForest` has no
+   * renderer — main.js builds the forest at line 182 and the Pipeline at 288 —
+   * and the atlas is a render target, so the earliest possible moment is the
+   * first frame. That is the moment this repo has learned to be afraid of: a
+   * one-time stall at load reads as the game freezing, and there is a whole
+   * pre-warm block in main.js that exists because of it.
+   *
+   * So this rides the frame loop instead. `cull()` is called from main.js on
+   * every animation frame INCLUDING while the entry gate is up — the gate
+   * throttles the DRAW to 10 Hz and returns before it, but the cull happens
+   * first, unconditionally. Fifteen archetypes at one a frame is fifteen frames
+   * behind an opaque full-page panel that the player is still typing a name
+   * into. Nothing that stalls is ever on screen.
+   *
+   * ONE A FRAME AND NOT ALL FIFTEEN. The whole set is a few hundred
+   * milliseconds; done in a single call it would be one long frame, and the gate
+   * is not a still image — it has a settings panel and a text field in it, and a
+   * 300 ms input delay while somebody is typing is exactly as bad as a hitch in
+   * the world. Fifteen ordinary frames is not.
+   *
+   * IF THE PIPELINE NEVER APPEARS, NOTHING BREAKS. `bakeRendererReady` returns
+   * null until the Pipeline constructor has published one, this returns
+   * immediately, `impostorsReady` stays false and the band stays shut. A
+   * headless probe that builds a forest without a renderer gets the wood exactly
+   * as it was before this existed.
+   */
+  function pumpImpostors() {
+    if (!impostorBakes.length) return;
+    const renderer = bakeRendererReady();
+    if (!renderer) return;
+    /**
+     * IT YIELDS TO THE STREAMER, AND THAT IS NOT POLITENESS.
+     *
+     * A bake is about 37 ms of one frame. The forest ring takes ONE sector per
+     * frame and the workers reply between frames, so fifteen of them landing
+     * during the first fill do not merely slow the fill down — they push the
+     * whole arrival about half a second later in wall-clock. That is enough to
+     * break `check:potato`, which samples 400 ms after each `setMode` and then
+     * asserts that ultra restores to the triangle it started on: with the bake
+     * competing, its FIRST sample was of a world still arriving and the final
+     * ultra read 110 632 triangles higher, reported as a band mismatch when
+     * nothing about the bands had moved. The same race is what a player would
+     * see as the wood filling in more slowly behind the menu.
+     *
+     * So: bake only on frames where the field has nothing queued, in flight or
+     * waiting to be merged. At load that is after the first ring is complete —
+     * still several seconds before the gate can drop, because main.js waits for
+     * the terrain to settle AND for every shader to compile before it fades.
+     * If the player walks and the ring goes busy again, the bake simply pauses.
+     *
+     * THE DEADLINE IS THE HALF OF THIS THAT MATTERS. A ring that never goes
+     * quiet — a slow machine, a player sprinting from the first frame — would
+     * otherwise leave the band unbaked for ever, so after `IMPOSTOR_DEADLINE`
+     * frames it bakes anyway and takes the hitch. Five seconds of frames, which
+     * is longer than the gate has ever taken to come down and short enough that
+     * a session cannot get far without a treeline.
+     */
+    impostorCalls++;
+    /**
+     * BOTH RINGS, and the second one is the one that was actually being starved.
+     *
+     * The tree field was the obvious suspect and it was innocent: at the moment
+     * the gate drops, `field.pending` is already 0. What was still arriving was
+     * the GROUND — 110 632 triangles and one draw call of it, which is one
+     * chunk — and that is what made `check:potato`'s first ultra sample read
+     * short of the ultra it restored to two seconds later. Waiting eight seconds
+     * instead makes that test exact, which is how the ground was identified.
+     */
+    const busy = field.pending > 0 || (groundField.pending ?? 0) > 0;
+    if (busy && impostorCalls < IMPOSTOR_DEADLINE) return;
+    const job = impostorBakes.shift();
+    const layer = streamedLayers.find((l) => l.id === job.id);
+    const baked = bakeImpostor(renderer, job.parts, { seed: job.id });
+    impostorBytes += baked.bytes;
+    impostorBakeMs += baked.ms;
+    /**
+     * The bake materials are disposed and the GEOMETRIES ARE NOT.
+     *
+     * `job.parts` holds two throwaway Lambert materials built for this bake
+     * alone — but its geometries are `arch.grown.trunk` and `arch.grown.leaf`,
+     * the live buffers the whole wood is instanced from. Disposing a part
+     * wholesale here would take the forest's own geometry with it.
+     */
+    for (const p of job.parts) p.material.dispose();
+    layer.mesh.material = impostorMaterial(baked.texture, baked);
+    impostorFill += baked.fill;
+    if (impostorBakes.length) return;
+
+    /**
+     * The last one has landed, so the band can open — but only by re-applying
+     * the band `setReach` last asked for, not by inventing one.
+     *
+     * `setReach` runs several times before this point (the quality registry
+     * fires it at boot, and again for the shadow toggle), and each time it
+     * recorded what the impostor band SHOULD be and then wrote a shut one. This
+     * is the deferred half of those calls.
+     */
+    impostorsReady = true;
+    const shut = { min: impostorBand.min, max: impostorBand.min };
+    for (const l of streamedLayers) {
+      if (!l.id.startsWith('impostor:')) continue;
+      l.packer.setBand(impostorsOn ? impostorBand : shut);
+    }
+    culler.invalidate();
+  }
+
   return {
     group,
     field,
@@ -1965,6 +2528,35 @@ export function buildForest(scene, seed = 'grove-01') {
     culler,
 
     /**
+     * "Has the world finished arriving?" — one signal, because three separate
+     * instruments have now had to guess at it and all three guessed wrong.
+     *
+     * A test that waits a fixed time, or that waits for two readings to agree,
+     * is asking "is it changing right now" and calling the answer "is it
+     * finished". Those differ exactly when a straggler is slower than the
+     * polling interval, which is the common case rather than the exotic one:
+     * the ground ring accepts ONE 128 m chunk per frame, and one chunk is
+     * 110 632 triangles and a single draw call. `check:potato` spent two rounds
+     * reporting an ultra restore that missed by precisely that, and the same
+     * shortfall made `high` read as having more triangles than `ultra`.
+     *
+     * Both rings, not just the trees. The tree field is the obvious suspect and
+     * it is innocent — `field.pending` is already 0 by the time the gate drops.
+     * It was always the ground.
+     *
+     * The impostor bakes are in here too: fifteen atlases arrive one archetype
+     * per frame behind the menu, and a frame sampled before they land has the
+     * band drawing nothing.
+     */
+    get settled() {
+      return (
+        field.pending === 0 &&
+        (groundField.pending ?? 0) === 0 &&
+        impostorBakes.length === 0
+      );
+    },
+
+    /**
      * How far the wood is DRAWN, at runtime.
      *
      * WHY THIS EXISTS, MEASURED. `.perf/presets.json` records that the whole
@@ -2013,32 +2605,138 @@ export function buildForest(scene, seed = 'grove-01') {
      *   weight on any tier with shadows off — it is what keeps trees behind
      *   your head in the draw.
      */
-    setReach(lod, reach, { leafReach = reach, alwaysNear = null } = {}) {
+    setReach(
+      lod,
+      reach,
+      {
+        leafReach = reach,
+        alwaysNear = null,
+        impostorReach = IMPOSTOR_REACH,
+        geometryReach = Math.min(reach, leafReach),
+      } = {}
+    ) {
       if (!(lod > 0) || !(reach > lod)) {
         console.warn(`[forest] setReach(${lod}, ${reach}): need 0 < lod < reach`);
         return;
       }
+      /**
+       * THE FOURTH BAND JOINS THE CHAIN, AND IT JOINS IT AT `leafReach` RATHER
+       * THAN AT `reach`. That is the one thing in here that is not a
+       * straightforward extension, so it gets the argument.
+       *
+       * The pairing was `trunk.max === trunkFar.min` and it is now
+       * `trunk.max === trunkFar.min` AND `trunkFar.max === impostor.min` — the
+       * same rule applied once more. Every bucket is in exactly one of the three
+       * trunk-carrying bands. Overlap them and a distant tree is drawn twice, as
+       * a trunk AND as a picture of itself standing in the same place, which
+       * reads as a ghost rather than as z-fighting and is easier to miss.
+       *
+       * WHY THE HANDOVER MOVED IN TO `leafReach`. The whole reason `leafReach`
+       * is shorter than `reach` is that a leaf triangle costs about ten times a
+       * trunk triangle, so the canopy is cut first and the bare boles are left
+       * standing out to `reach` because they are cheap. An impostor is FOUR
+       * VERTICES. Past `leafReach` it is cheaper than the far sweep it replaces
+       * — 2 triangles against 216-594 — and it is a whole tree with its crown on
+       * rather than a bare pole. There is no reading on which the far sweep wins
+       * that stretch, and `impostor-ab.mjs` measures it at both handovers,
+       * against a full-reach reference, from 70 m above the canopy:
+       *
+       *     rung      cut today          at `reach`         at `leafReach`
+       *     medium    14.69%  mean 2.69   7.59%  mean 0.66   4.50%  mean 0.41
+       *     low       25.41%       4.28  16.49%       1.81  12.64%       1.01
+       *     potato    31.28%       6.01  19.73%       2.35  18.00%       1.49
+       *
+       * and at eye level all three are 0.00-0.02%, which is what a change to the
+       * far band is supposed to look like from inside a wood.
+       *
+       * SO `reach` STILL SELECTS THE ROW AND NO LONGER DRAWS THE EDGE. That is a
+       * real narrowing of what the knob means and it is deliberate: the outer
+       * edge of the wood is now always 384 m, and what the knob moves is how
+       * much of it is geometry. `geometryReach` is exposed so `impostor-ab.mjs`
+       * can put the old handover back without a rebuild; nothing else passes it.
+       *
+       * `Math.max(lod, ...)` because a caller may pass a `leafReach` inside the
+       * near/far handover. That collapses the far sweep to an empty band and
+       * hands straight from the full bole to the quad, which is coherent — what
+       * must never happen is a NEGATIVE-width band, because `inBand` tests
+       * `> min && <= max` and an inverted pair silently drops a ring of the
+       * world.
+       */
+      const geoReach = Math.max(lod, geometryReach);
+      const impostorMax = Math.max(geoReach, impostorsOn ? impostorReach : geoReach);
+      impostorBand = { min: geoReach, max: impostorMax };
       for (const layer of streamedLayers) {
         const kind = layer.id.split(':')[0];
         if (kind === 'trunk') {
           layer.packer.setBand({ max: lod, ...(alwaysNear === null ? {} : { near: alwaysNear }) });
         } else if (kind === 'trunk-far') {
-          // min === the near layer's max. This is the invariant.
-          layer.packer.setBand({ min: lod, max: reach });
+          // min === the near layer's max, max === the impostor layer's min.
+          // These two equalities are the invariant `check:potato` asserts.
+          layer.packer.setBand({ min: lod, max: geoReach });
         } else if (kind === 'leaf') {
           layer.packer.setBand({
             max: leafReach,
             ...(alwaysNear === null ? {} : { near: alwaysNear }),
           });
+        } else if (kind === 'impostor') {
+          // Held shut until the atlas exists — a quad with no picture on it is a
+          // white rectangle the size of a tree. `pumpImpostors` opens it.
+          layer.packer.setBand(
+            impostorsReady ? impostorBand : { min: impostorMax, max: impostorMax }
+          );
         }
       }
       culler.invalidate();
     },
 
+    /**
+     * Turn the impostor band off wholesale. For the A/B scripts, not for a knob.
+     *
+     * There is no quality preset for this and there should not be: the band is
+     * empty at `high` and `ultra` because their reach is already the world's,
+     * and at the three rungs below it is the difference between a treeline and a
+     * bare heightfield. What it is for is `impostor-ab.mjs`, which needs to
+     * render the same station with and without it inside one page session so
+     * that the difference is the band and not the machine.
+     */
+    setImpostors(on) {
+      impostorsOn = !!on;
+      // An empty band is min === max, not max = 0: `inBand` tests
+      // `> min && <= max`, so a zero max would put the whole ring in the band
+      // for any bucket the eye is standing inside, where `horizontal` is
+      // negative. Same trap `minDistance`'s own default block records.
+      const shut = { min: impostorBand.min, max: impostorBand.min };
+      for (const layer of streamedLayers) {
+        if (!layer.id.startsWith('impostor:')) continue;
+        layer.packer.setBand(impostorsReady && impostorsOn ? impostorBand : shut);
+      }
+      culler.invalidate();
+    },
+
+    /** What the atlases cost and what they cost to make. For the report. */
+    impostorStats() {
+      return {
+        ready: impostorsReady,
+        on: impostorsOn,
+        pending: impostorBakes.length,
+        atlases: archetypes.length - impostorBakes.length,
+        textureSize: IMPOSTOR_TEXTURE_SIZE,
+        spritesPerSide: IMPOSTOR_SPRITES_PER_SIDE,
+        views: IMPOSTOR_SPRITES_PER_SIDE * IMPOSTOR_SPRITES_PER_SIDE,
+        bytes: impostorBytes,
+        // Mean over the archetypes baked so far; 1.0 would be a square quad.
+        quadFill: impostorBakes.length === archetypes.length
+          ? 0
+          : impostorFill / (archetypes.length - impostorBakes.length),
+        bytesEach: IMPOSTOR_ATLAS_BYTES,
+        bakeMs: impostorBakeMs,
+      };
+    },
+
     /** What every tree layer currently believes its band is. For tests. */
     reachStats() {
       return streamedLayers
-        .filter((l) => /^(trunk|trunk-far|leaf):/.test(l.id))
+        .filter((l) => /^(trunk|trunk-far|leaf|impostor):/.test(l.id))
         .map((l) => ({ id: l.id, ...l.packer.band() }));
     },
 
@@ -2057,6 +2755,7 @@ export function buildForest(scene, seed = 'grove-01') {
      * whose position in the frame is a fresh opportunity to be one frame stale.
      */
     cull(camera, force = false) {
+      pumpImpostors();
       groundField.update(camera);
       /**
        * The forest ring BEFORE the repack, and the ordering is load-bearing.

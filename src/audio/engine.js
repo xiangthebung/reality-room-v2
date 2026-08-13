@@ -12,8 +12,12 @@ import { createImpulseResponse } from './impulse.js';
  *   world ────▶ worldBus ─▶ worldTrim ─▶ recede ────┤
  *   effects ──▶ sfxBus   ─▶ sfxTrim   ──────────────┼─▶ preMaster ─▶ limiter ─▶ masterTrim ─▶ master ─▶ out
  *   voices ───▶ voiceBus ─▶ voiceTrim ──────────────┘        │
- *                     │                                       └─ analyser (drives the visuals)
- *                     └─(music/world/effects only)─▶ roomSend ─▶ roomVerb ─▶ roomReturn ─▶ preMaster
+ *                 │   │                                       └─ analyser (drives the visuals)
+ *                 │   └─(music/world/effects only)─▶ roomSend ─▶ roomVerb ─▶ roomReturn ─▶ preMaster
+ *                 │
+ *                 └─▶ voiceRoomSend ─▶ 4 taps + caveVerb IR ─▶ voiceWet ─▶ voiceTrim
+ *                          ▲                                     (0 above ground)
+ *                          └── the local microphone's own wet tap, from net/voice.js
  *
  * `recede` is the trip's only insert and is transparent at rest — see its own
  * note below, and note that it sits downstream of every send, so the world's
@@ -47,6 +51,21 @@ import { createImpulseResponse } from './impulse.js';
  * Positional voice is still available and is the better default: run it through
  * `createSpatial(position, { bus: engine.voiceBus })`, which keeps the HRTF
  * panner and the distance low-pass without the room.
+ *
+ * …AND WHY THERE IS NOW A VOICE ROOM ANYWAY, WHICH DOES NOT CONTRADICT ANY OF
+ * THAT. Read the paragraph above carefully: the objection is to speech sitting
+ * on the forest tail, which is ALWAYS ON, applies at every position in the
+ * world, and is a property of the listener's surroundings that the talker has
+ * nothing to do with. `setVoiceRoom` is the opposite object on all three counts.
+ * It is silent everywhere except under rock, it is scaled by the same 0..1 the
+ * fog and the drips ride on, and the thing it models is real: a cave is the one
+ * place in this world where a person's own voice comes back at them, and a
+ * presenter standing in a chamber sounding exactly as dry as they do in a
+ * clearing is the tell that the cave is scenery. `voiceOcclusion` stays off for
+ * the reason the occlusion note gives — a filter would make speech unreadable
+ * for reasons the speaker cannot see — and this adds nothing to the direct path
+ * at all. The wet returns to `trims.voice`, NOT to `preMaster`: see
+ * `_buildVoiceRoom`, and net/voice.js:321 for the bug that rule comes from.
  *
  * NOTE ON THE TRIP. `trip-audio.js` connects its own output to `limiter`
  * directly rather than to a bus here, so it is deliberately outside all of
@@ -118,6 +137,45 @@ const VOLUME_EXPONENT = 2.8;
  * import this module by design (see that file's header comment).
  */
 export const VOLUME_BOOST_MAX = 1.5;
+
+/**
+ * THE SLAPS, in seconds, and why they are these four numbers.
+ *
+ * What a person means by "it echoes in here" is not a reverb tail, it is a small
+ * number of distinct returns they can count. Sound travels 343 m/s, so a wall
+ * eighteen metres off answers at 105 ms and one across a seventy-metre chamber
+ * at 400 ms — the range below is the range of rooms you can actually walk into
+ * in this world, and anything under about 80 ms fuses with the direct sound
+ * instead of repeating it.
+ *
+ * DELIBERATELY NOT COMMENSURATE. 100/200/300/400 is one delay heard four times
+ * and it rings at 10 Hz; the ratios here are 1.80, 1.56 and 1.51, so no tap
+ * lands on another tap's multiple and the pattern reads as a room rather than as
+ * a flutter. The levels fall faster than the spacing grows, which is what stops
+ * the fourth slap arriving as a surprise.
+ */
+const VOICE_TAPS_S = [0.104, 0.187, 0.291, 0.438];
+const VOICE_TAP_LEVELS = [0.5, 0.34, 0.22, 0.14];
+
+/**
+ * How dark the repeats are.
+ *
+ * Rock reflects, but not evenly: every bounce takes the top off, which is why a
+ * shouted word comes back as a vowel and not as a word. 2 kHz is above the first
+ * two formants and below most of the consonant energy, so the slaps stay
+ * clearly speech-shaped and clearly NOT the direct signal — and it keeps the
+ * whole wet path out of the 2–6 kHz band the harshness probe measures, which a
+ * bright multi-tap on a live microphone would otherwise walk straight into.
+ *
+ * Q 0.4, over-damped, like every other broad tilt in this project: a resonant
+ * corner on a delay network is a whistle waiting for a sustained vowel.
+ */
+const VOICE_DARK_HZ = 2000;
+
+/** Wet level at full depth. Well under the dry, which is the whole point. */
+const VOICE_ROOM_WET = 0.55;
+/** How much of the diffuse tail sits behind the slaps. See `_buildVoiceRoom`. */
+const VOICE_TAIL_LEVEL = 0.42;
 
 export function volumeToGain(v) {
   if (v <= 0) return 0;
@@ -319,6 +377,33 @@ export class AudioEngine {
     this.worldBus.connect(this._occlude.world.lp);
     this.sfxBus.connect(this._occlude.sfx.lp);
     this.voiceBus.connect(this.trims.voice);
+
+    /**
+     * THE VOICE ROOM'S SEND, and the only part of it that exists before anybody
+     * has been underground.
+     *
+     * One GainNode, which is free, and it goes nowhere until `setVoiceRoom` is
+     * first asked for something above zero — see `_buildVoiceRoom` for why the
+     * expensive half is built lazily. It has to exist from the start because
+     * `net/voice.js` connects the local microphone's own wet tap to it at the
+     * moment the mic is opened, which is long before and quite unrelated to
+     * anybody walking into a cave.
+     *
+     * `voiceBus` and not `trims.voice` is the tap, and getting that backwards is
+     * a feedback loop rather than a mix decision: the wet RETURNS to
+     * `trims.voice`, so a send taken from the same node would be the trim
+     * feeding itself round a delay line. Tapping the bus also means the send is
+     * pre-slider, which is right for the same reason the room send taps the trim
+     * and not the bus, read in the other direction — the wet is scaled by the
+     * trim once, on the way back, exactly like the dry.
+     */
+    this.voiceRoomSend = ctx.createGain();
+    this.voiceRoomSend.gain.value = 1;
+    this.voiceBus.connect(this.voiceRoomSend);
+    /** Built on demand. Null until the first metre of rock. */
+    this.voiceRoom = null;
+    /** 0 is the wood, 1 is underground. See `setVoiceRoom`. */
+    this._voiceRoom = 0;
 
     /**
      * The one bus that is NOT occluded, because it is what is doing the
@@ -659,6 +744,133 @@ export class AudioEngine {
     this.roomReturn.gain.setTargetAtTime(0.85 * Math.cos(angle), when, 0.045);
     this.caveReturn.gain.setTargetAtTime(0.95 * Math.sin(angle) * (0.34 + 0.66 * s), when, 0.045);
     this.roomSend.gain.setTargetAtTime((0.3 + 0.22 * v) * (0.48 + 0.52 * s), when, 0.045);
+  }
+
+  /**
+   * YOUR VOICE COMES BACK AT YOU, WHICH IS THE ONE THING A CAVE DOES THAT A
+   * WOOD DOES NOT.
+   *
+   * Built on the first frame anybody is actually under rock and never torn down
+   * after that. A session that stays in the wood — most of them — allocates one
+   * spare GainNode (`voiceRoomSend`, above) and nothing else: no convolver, no
+   * delay lines, no 3.6-second buffer reference. That is the cheap case and it
+   * is the common one, and it is why this is a method rather than eleven more
+   * lines in `start()`.
+   *
+   * TWO PATHS IN PARALLEL, AND THE SLAPS ARE THE HALF THAT MATTERS.
+   *
+   *   FOUR DISCRETE TAPS, no feedback, alternating pan, lowpassed. This is what
+   *   a person means by an echo — a few returns you can count — and a convolver
+   *   alone does not deliver it at any wet level, because a diffuse tail is by
+   *   construction the part of a room you cannot pick apart. Same shape and the
+   *   same argument as `_buildFarTail` in wildlife.js: an FIR with nothing
+   *   feeding back cannot accumulate, cannot self-oscillate and cannot click,
+   *   which matters far more here than it did there — the input to this network
+   *   is a live microphone in the same room as the speakers playing it out.
+   *
+   *   ONE CONVOLVER behind them, so the slaps sit in something rather than in
+   *   silence. Four taps alone are a delay effect; four taps over a tail are a
+   *   space.
+   *
+   * `cave` AND NOT `cathedral` FOR THE TAIL, having tried the argument both
+   * ways. The case for `cathedral` is real: our taps already supply the early
+   * pattern, so the convolver only has to diffuse, and cathedral is the smoother
+   * of the two (4 early taps against 14, spread 0.85 against 0.72). It loses on
+   * three counts. `cave` is already generated and memoised for `caveVerb`, so it
+   * costs one more reference to an existing buffer where cathedral would
+   * allocate 4.6 s of stereo — around 1.6 MB at 48 kHz — for this one node.
+   * 4.6 s under continuous speech is a wash rather than a room, and the whole
+   * point of the file's `cave` preset is the paragraph in impulse.js explaining
+   * that a passage is NOT a nave: sparse, because it is a tube with two ends.
+   * And the doubling-up worry does not arise — the cave IR's early taps are
+   * inside 190 ms and three of our four land past that, so they extend the slap
+   * pattern rather than smearing it.
+   *
+   * ONE WET GAIN GOVERNS THE PAIR, at the return, so the mix cannot drift
+   * between the two paths and there is exactly one number for `setVoiceRoom` to
+   * write. It returns to `trims.voice` and NOT to `preMaster`, which is the one
+   * rule in this method that is not a taste decision: `caveReturn` lands on
+   * preMaster and a wet path that joined it there would be speech the Voices
+   * slider does not govern — the exact bug net/voice.js:321 records having been
+   * fixed once already, arriving by a new route.
+   */
+  _buildVoiceRoom() {
+    const ctx = this.ctx;
+    const wet = ctx.createGain();
+    wet.gain.value = 0;
+
+    const dark = ctx.createBiquadFilter();
+    dark.type = 'lowpass';
+    dark.frequency.value = VOICE_DARK_HZ;
+    dark.Q.value = 0.4;
+    dark.connect(wet);
+
+    const taps = [];
+    for (let i = 0; i < VOICE_TAPS_S.length; i++) {
+      const delay = ctx.createDelay(0.5);
+      delay.delayTime.value = VOICE_TAPS_S[i];
+      const gain = ctx.createGain();
+      gain.gain.value = VOICE_TAP_LEVELS[i];
+      const pan = ctx.createStereoPanner();
+      // Alternating, and wide. A repeat arriving from the same place as the
+      // direct sound is heard as a smeared consonant rather than as a wall.
+      pan.pan.value = i % 2 ? 0.72 : -0.72;
+      this.voiceRoomSend.connect(delay).connect(gain).connect(pan).connect(dark);
+      taps.push(delay, gain, pan);
+    }
+
+    const verb = ctx.createConvolver();
+    verb.buffer = createImpulseResponse(ctx, 'cave');
+    const tail = ctx.createGain();
+    tail.gain.value = VOICE_TAIL_LEVEL;
+    // Through the same low-pass as the taps, so the tail darkens with them. A
+    // bright tail under dark slaps sounds like two different caves.
+    this.voiceRoomSend.connect(verb).connect(tail).connect(dark);
+
+    wet.connect(this.trims.voice);
+    this.voiceRoom = { wet, dark, verb, tail, taps };
+  }
+
+  /**
+   * How much of a cave your voice is in. 0 = none, and 0 is silent.
+   *
+   * Driven from `audio/cave.js` beside `setRoom` and `setOcclusion`, off the
+   * same `mix` — one number, already smoothed by the caller, for the same reason
+   * that file's header gives for having no state machine: a cave mouth is not a
+   * door, and anything with an edge in it flaps while somebody stands in the
+   * entrance.
+   *
+   * COSTS NOTHING WHEN NOBODY IS UNDERGROUND, in two independent ways, because
+   * one of them was not enough. Nothing is built until the first `t > 0`, so a
+   * session in the wood never allocates any of it. And once built, everything
+   * upstream of it is digital silence when nobody is talking — the microphone's
+   * gate sits at a hard zero between words (see net/voice.js) and `voiceBus`
+   * carries nothing at all in an empty room — so the delays and the convolver
+   * propagate silence and are skipped rather than convolving zeros. The wet gain
+   * at 0 would not have achieved that on its own: a gain of zero still has an
+   * input to process.
+   */
+  setVoiceRoom(t) {
+    if (!this.ready) return;
+    const v = clamp01(t);
+    if (Math.abs(v - this._voiceRoom) < 1e-3) return;
+    this._voiceRoom = v;
+    if (!this.voiceRoom) {
+      // Still on the surface and still never been anywhere else. Do not build a
+      // convolver to set its output to zero.
+      if (v <= 0) return;
+      this._buildVoiceRoom();
+    }
+    /**
+     * Ramped over 0.25 s rather than the 45 ms the room crossfade uses.
+     *
+     * That one is racing a footstep across a threshold and has to be seamless
+     * within a frame. This one is the size of the space a voice is in, which is
+     * a thing you notice over a sentence — and a quarter of a second is also
+     * long enough that the ramp cannot land inside a single slap and make one
+     * repeat louder than the one before it.
+     */
+    this.voiceRoom.wet.gain.setTargetAtTime(VOICE_ROOM_WET * v, this.ctx.currentTime, 0.25);
   }
 
   /**

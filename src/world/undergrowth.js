@@ -144,6 +144,167 @@ function featherEdges(g, w, h, margin, { keepBottom = false } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * HOW FAR A PROP'S SURFACE TRAVELS ALONG ITS OWN NORMAL, IN METRES, AT THE
+ * WORST MOMENT OF A TRIP.
+ *
+ * Three numbers, in three files, and this is the product of all of them:
+ * `director.js` caps `uBreathAmp` at `MAX_BREATH = 0.32`; `rrLung` is a sine of
+ * a sine and is bounded to ±1; and living.js's `#else` branch — the one every
+ * material built with `makeLiving(..., 'prop')` takes — multiplies by 0.3. So a
+ * fallen stick, a stump, a log, a boulder and a mushroom each move up to ±9.6 cm
+ * along their own normals, INWARD as well as outward.
+ *
+ * Nine and a half centimetres is a large number to hand to the forest floor and
+ * nothing on the floor was ever sized against it. It is 2.5 times the radius of
+ * a stick and roughly the whole height of a mushroom cap. If this changes,
+ * every `gaugeBreath` call in this file and in forest.js is now wrong.
+ */
+const PROP_BREATH_M = 0.32 * 0.3;
+
+/**
+ * The most of its own thickness a closed body may spend on breathing.
+ *
+ * living.js states the rule this implements — "how far a surface may breathe is
+ * set by how thick it is" — and states the failure precisely: push a tube inward
+ * by more than its radius and the surface passes through its own axis, comes out
+ * the far side with its winding reversed, and is deleted by back-face culling.
+ * The object does not look distorted, it is simply not there.
+ *
+ * A half, and not something more timid, because the term has to survive being
+ * useful. At 0.5 a tube swells to one and a half times its radius and shrinks to
+ * half, which on a 3.8 cm stick is a visible pulse and on a 15 cm mushroom cap
+ * is unmistakable — and the surface never comes within half a radius of the axis
+ * at any phase, so there is no value of the noise field that can invert it.
+ */
+export const BREATH_OF_THICKNESS = 0.5;
+
+/**
+ * Let a body breathe `allowed` metres instead of the full `worst`, by SHORTENING
+ * ITS NORMALS.
+ *
+ * This looks like a trick and is not, and the reason is an ordering fact in
+ * three's own vertex shader. `normal_vertex` runs BEFORE `begin_vertex` and ends
+ * with `vNormal = normalize( transformedNormal )`, and `normal_fragment_begin`
+ * normalizes again — so the LENGTH of the `normal` attribute reaches the
+ * lighting nowhere at all. The one place it survives is the line living.js
+ * splices in after `begin_vertex`:
+ *
+ *     transformed += objectNormal * rrBreath * rrBreathAmp;
+ *
+ * where `objectNormal` is the raw attribute, unnormalised. So the attribute's
+ * direction is the shading and its length is the displacement budget, and they
+ * can be set independently. Verified against three@0.185.1's
+ * `ShaderLib/meshlambert.glsl.js` and `ShaderChunk/normal_vertex.glsl.js`.
+ *
+ * THE ALTERNATIVES WERE BOTH WORSE. A per-object uniform means a material each,
+ * which means a program each and a draw call each for layers that exist as one
+ * `InstancedMesh` precisely to avoid that. A new vertex attribute — the trunk's
+ * `aFlex`, which is exactly this idea spelled out — costs a float per vertex and
+ * a shader edit in a file three other agents are working in, to carry a number
+ * that is constant over each of these geometries anyway.
+ *
+ * MUST BE THE LAST THING DONE TO A GEOMETRY. `BufferGeometry.applyMatrix4` —
+ * which is what `translate`, `scale` and `rotateZ` all call — runs the normals
+ * through `Vector3.applyNormalMatrix`, and that normalizes. So a `translate`
+ * after a gauge silently throws the gauge away, and the object goes back to
+ * turning itself inside out with no error anywhere.
+ */
+export function gaugeBreath(geo, allowed, worst = PROP_BREATH_M) {
+  const k = Math.min(1, allowed / worst);
+  const n = geo.attributes.normal;
+  for (let i = 0; i < n.count; i++) {
+    n.setXYZ(i, n.getX(i) * k, n.getY(i) * k, n.getZ(i) * k);
+  }
+  n.needsUpdate = true;
+  return geo;
+}
+
+/**
+ * Weld a solid prop shut and re-shade it from the welded mesh.
+ *
+ * THE BUG THIS FIXES IS THE ONE `rockGeometry` ALREADY RECORDS: two vertices in
+ * the same place, holding different normals, are pulled in different directions
+ * by the breath and what opens between them is a real crack, not a culling
+ * artefact. Every capped `CylinderGeometry` in this project has a ring of them
+ * at each end — three emits the rim twice, once with the cap's axial normal and
+ * once with the side's radial one — and at 9.6 cm of travel on a log that is an
+ * annular hole you can see the ground through.
+ *
+ * THE NORMALS ARE DELETED BEFORE THE WELD AND THAT IS THE WHOLE TRICK, because
+ * `mergeVertices` hashes EVERY attribute, not just the position. Two vertices in
+ * the same place holding different normals are two different vertices as far as
+ * it is concerned — so the attribute whose disagreement opens the crack is also
+ * the attribute that prevents the weld that would close it. The first version of
+ * this function kept them, and it did weld something: the log went from 79
+ * vertices to 58 and the rim stayed open at every one of its sixteen coincident
+ * pairs. What welded was the cap's centre fan and the u=0/u=1 seam, i.e. exactly
+ * the pairs that already agreed and had nothing wrong with them.
+ *
+ * The UVs go for the same reason and are a saving as well. A cylinder's rim
+ * disagrees on `uv` by construction — the cap is unwrapped as a disc and the
+ * side as a strip — and nothing built through here has a map: `twigMat`,
+ * `logMat`, `stemMat` and `capMat` are plain coloured `MeshLambertMaterial`s
+ * whose grain is generated in living.js's fragment half, so three never declares
+ * a `uv` attribute for their programs at all. Two floats a vertex, deleted.
+ *
+ * What is left is a weld on position alone, which is what "the same point"
+ * should have meant all along, and `computeVertexNormals` then shades the body
+ * that actually exists rather than the one three unwrapped.
+ */
+export function weldProp(geo) {
+  geo.deleteAttribute('uv');
+  geo.deleteAttribute('normal');
+  const welded = BufferGeometryUtils.mergeVertices(geo, 1e-4);
+  welded.computeVertexNormals();
+  geo.dispose();
+  return welded;
+}
+
+/**
+ * Give every pile of coincident vertices ONE normal, without welding them.
+ *
+ * For a surface that has to keep its UVs, which is every textured thing here.
+ * A cylinder is unwrapped by cutting it up one side, so the seam column exists
+ * twice — at u = 0 and at u = 1 — and `computeVertexNormals` gives each copy the
+ * average of only the faces its own index appears in, i.e. of one half of the
+ * seam each. On a six-sided stem those two averages are 30° apart, and the
+ * breath drives the two columns apart by twice its amplitude times the sine of
+ * half that angle: a slit up the whole length of the plant.
+ *
+ * Welding is the better fix and is not available when the UVs are load-bearing.
+ * This is the next best thing and is exactly as good for the displacement, which
+ * is the part that matters: `objectNormal` is the same vector on both copies, so
+ * they move together no matter what the amplitude is. It is also the normal they
+ * WOULD have had if they had been welded, so the shading gains a seam-free
+ * gradient as a side effect rather than losing anything.
+ */
+export function matchSeamNormals(geo) {
+  const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
+  const groups = new Map();
+  for (let i = 0; i < pos.count; i++) {
+    // The same tolerance `mergeVertices` uses, and by the same method — round to
+    // four decimal places and compare exactly — so the two agree about what "the
+    // same place" means.
+    const key = `${Math.round(pos.getX(i) * 1e4)},${Math.round(pos.getY(i) * 1e4)},${Math.round(pos.getZ(i) * 1e4)}`;
+    const found = groups.get(key);
+    if (found) found.push(i);
+    else groups.set(key, [i]);
+  }
+  const sum = new THREE.Vector3();
+  for (const ids of groups.values()) {
+    if (ids.length < 2) continue;
+    sum.set(0, 0, 0);
+    for (const i of ids) sum.x += nrm.getX(i), (sum.y += nrm.getY(i)), (sum.z += nrm.getZ(i));
+    if (sum.lengthSq() < 1e-12) continue;
+    sum.normalize();
+    for (const i of ids) nrm.setXYZ(i, sum.x, sum.y, sum.z);
+  }
+  nrm.needsUpdate = true;
+  return geo;
+}
+
+/**
  * Crossed cards in a rosette — the workhorse for everything leafy in here.
  *
  * A generalisation of `clumpGeometry` in forest.js rather than a copy of it:
@@ -387,6 +548,39 @@ export function palmGeometry(rng, { height = 9, fronds = 7, scale }) {
     stem.setAttribute('aFlex', new THREE.BufferAttribute(flex, 1));
     stem.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
     stem.computeVertexNormals();
+    /**
+     * A PALM STEM BREATHES DEEPER THAN IT IS WIDE, AND SO IT WAS TURNING ITSELF
+     * INSIDE OUT.
+     *
+     * This is a plant, not a prop, so it takes the RR_PLANT branch of the breath
+     * — `uBreathAmp * rrScale * 1.7` — and `scale` here is 0.5, the largest in
+     * the understorey. That is 0.32 × 0.5 × 1.7 = 27.2 cm of travel along the
+     * normal against a stem 10.6 cm in radius at the top. Two and a half times
+     * over the line living.js draws, and the branch that would have caught it —
+     * the `aFlex` thickness gauge — is inside `#ifdef RR_BARK`, which this
+     * material is not: it is `cardMaterial`, the same alpha-tested frond
+     * material the crown uses. A palm has the deepest breath in the wood and
+     * none of the protection a trunk has.
+     *
+     * ONLY THE STEM IS GAUGED. The crown is cards, and living.js already makes
+     * this exact distinction: a flat quad displaced along its cluster's outward
+     * normal has no inside to pass through, it is drawn DoubleSide, and it is
+     * the layer the effect is most worth seeing on.
+     *
+     * AND THE STEM STAYS `openEnded`, which is the opposite of what the stick
+     * and the log needed and is right for the same underlying reason. An open
+     * tube has no duplicated rim, so it has nothing to crack; the two things
+     * that make an open end a hole are `FrontSide` and an eye that can reach it,
+     * and this material is DoubleSide while `scatter.js` sinks the base 15 cm
+     * into the ground and puts the top opening six metres up inside the crown.
+     * Closing it would add twelve triangles a palm to fix nothing, and hand the
+     * rim its first pair of coincident vertices.
+     */
+    // And the one seam an open tube does have: the cut it was unwrapped along.
+    // See `matchSeamNormals` — at the old amplitude this was a 14 cm slit up the
+    // length of every palm in the wood.
+    matchSeamNormals(stem);
+    gaugeBreath(stem, rBase * 0.62 * BREATH_OF_THICKNESS, 0.32 * scale * 1.7);
   }
 
   /**
@@ -428,9 +622,29 @@ export function palmGeometry(rng, { height = 9, fronds = 7, scale }) {
  * Laid along X so an instance's yaw is the only rotation that matters, and
  * given a small random pitch and roll at the call site so it sits on the ground
  * rather than in it.
+ *
+ *
+ * IT WAS `openEnded: true` AND A STICK SEEN END-ON WAS THE INSIDE OF A
+ * HALF-PIPE.
+ *
+ * `twigMat` is `FrontSide`, so a face that does not exist is not a dark hole,
+ * it is a window: every face on the near half of the tube points away from an
+ * eye looking down its axis and is culled, and what you see is the far half's
+ * inside — which is also culled, so what you actually see is the forest behind
+ * it, with a hard curved edge where the stick's silhouette stops. Photographed
+ * end-on by `scripts/ground-shapes.mjs` it reads as a folded sheet of paper.
+ * The layer is 8192 instances at 3 m spacing, so a player crouching anywhere on
+ * the floor has several in reach. Ten triangles an instance buys the two ends.
+ *
+ * AND THEN THE STICK IS THINNER THAN THE BREATH IS DEEP. 1.7 cm at the broken
+ * end against ±9.6 cm of travel: at the bottom of every breath the tube passed
+ * through its own axis and came out inside-out, so the whole layer flickered.
+ * The gauge is against the THIN end because the displacement is in object space
+ * and the instance's own 0.7–1.35× thickness scale is applied to it afterwards,
+ * so a thin instance is not a special case, it is the same geometry seen small.
  */
 export function stickGeometry(rng, length, radius) {
-  const geo = new THREE.CylinderGeometry(radius * 0.45, radius, length, 5, 2, true);
+  const geo = new THREE.CylinderGeometry(radius * 0.45, radius, length, 5, 2, false);
   geo.rotateZ(Math.PI / 2);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
@@ -438,8 +652,11 @@ export function stickGeometry(rng, length, radius) {
     pos.setY(i, pos.getY(i) + Math.sin(t * 2.7 + 0.4) * radius * 1.9);
     pos.setZ(i, pos.getZ(i) + Math.sin(t * 4.1 + 1.3) * radius * 1.4);
   }
-  geo.computeVertexNormals();
-  return geo;
+  // The bend is a rigid translation of each cross-section — it is a function of
+  // X only — so the two copies of each rim vertex are still exactly coincident
+  // and the weld below is exact rather than approximate. Same argument as
+  // `rockGeometry`'s.
+  return gaugeBreath(weldProp(geo), radius * 0.45 * BREATH_OF_THICKNESS);
 }
 
 /**
@@ -450,11 +667,70 @@ export function stickGeometry(rng, length, radius) {
  * here. The top is a jagged ring rather than a disc: the vertices of the upper
  * cap are pushed up and down independently, so it reads as torn wood rather
  * than as a sawn cylinder, which is both truer and cheaper than modelling a cut.
+ *
+ *
+ * THE TEAR WAS DRAWN INSIDE THE VERTEX LOOP AND THAT TORE THE STUMP OPEN.
+ *
+ * This is `rockGeometry`'s bug, verbatim, in the one place nobody looked for it:
+ * "rng() is stateful, and drawing it inside the loop gave duplicate copies of
+ * the same vertex different multipliers — a real crack, not a culling artefact."
+ * A capped `CylinderGeometry` holds THREE copies of every point on the top rim
+ * (the side ring, the cap ring, and — because three unwraps the cap as a disc —
+ * a separate centre vertex per radial segment, nine of them all at the axis), so
+ * the old `rngRange(rng, ...)` per vertex handed twenty-eight independent
+ * heights to what is geometrically ten points. The top of every stump in the
+ * world was a shredded fan with daylight through it, SOBER, at up to 12 cm —
+ * bigger than the breath that made it obvious. Photographed at
+ * `.shots/ground/before/sober-stump-high-p0.png`.
+ *
+ * The tear is now a table of nine heights indexed by the vertex's own bearing,
+ * which is a pure function of position exactly as the flare and the fbm already
+ * were, so every copy of a point draws the same one and the weld closes them.
+ * The nine axis vertices all return `atan2(0, 0) === 0` and so collapse onto one
+ * height, which is what makes the middle of the break a point rather than a
+ * flower.
+ *
+ * The break edge itself is held by the ring spacing rather than by a second
+ * normal — see `STUMP_RINGS`.
+ *
+ * NO GAUGE HERE, and the arithmetic is worth writing down so the next person
+ * does not add one out of caution: the thinnest the wall gets is 0.82 × 0.4 m
+ * less the 0.18 × 0.4 m the fbm can bite out of it, which is 25.6 cm, and the
+ * breath is 9.6 cm — 37% of it, inside the half a body is allowed to spend. A
+ * stump is one of the few things down here that is genuinely thick enough.
  */
+/**
+ * WHERE THE FOUR RINGS OF THE WALL SIT, as fractions of the height.
+ *
+ * Evenly spaced is what `CylinderGeometry` gives and it is what cost the stump
+ * its break. Welding the top rim buys a body that cannot crack and pays for it
+ * with a single normal there, so the shading has to turn from "wall" to "top"
+ * gradually — and over the 23 cm between evenly spaced rings on a 70 cm stump
+ * that gradient is the whole upper half of the object. The first weld turned a
+ * broken stump into a smooth boulder; the picture is the proof and it is not a
+ * subtle difference.
+ *
+ * A supporting ring 7 cm under the rim is the standard answer and the only one
+ * available once two normals at one point are off the table: the surface really
+ * does turn sharply there, so it reads sharply, and every vertex is still
+ * singular so nothing can be pulled apart. It costs NOTHING — the ring already
+ * existed at two thirds and has only been moved.
+ */
+const STUMP_RINGS = [0, 0.3, 0.9, 1];
+
 export function stumpGeometry(rng, height, radius) {
-  const geo = new THREE.CylinderGeometry(radius * 0.82, radius * 1.25, height, 9, 3);
+  const SIDES = 9;
+  const geo = new THREE.CylinderGeometry(radius * 0.82, radius * 1.25, height, SIDES, 3);
   geo.translate(0, height / 2, 0);
+  const tear = Array.from({ length: SIDES }, () => rngRange(rng, -0.05, 0.26) * radius);
   const pos = geo.attributes.position;
+  // Ring index rather than a float comparison: the rings land on exact thirds of
+  // the height, but `height * (1 - 1/3)` and `height * 2/3` are not obliged to
+  // be the same double, and a vertex that misses the test is a vertex left
+  // behind at the old spacing with a fan of long thin triangles hanging off it.
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, height * STUMP_RINGS[Math.round((pos.getY(i) / height) * 3)]);
+  }
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const y = pos.getY(i);
@@ -465,11 +741,15 @@ export function stumpGeometry(rng, height, radius) {
     pos.setX(i, x * flare + fbm2(x * 3.1, z * 3.1, 2) * radius * 0.18);
     pos.setZ(i, z * flare + fbm2(z * 3.1 + 9, x * 3.1 - 4, 2) * radius * 0.18);
     // Tear the top. Only the topmost ring, and only upward-ish, so the splinters
-    // stand proud of the break instead of denting it.
-    if (t > 0.98) pos.setY(i, y + rngRange(rng, -0.05, 0.26) * radius);
+    // stand proud of the break instead of denting it. Read from the ORIGINAL
+    // x and z, before the flare above moved them, so the seam vertex at u = 1
+    // agrees with the one at u = 0.
+    if (t > 0.98) {
+      const bearing = (Math.atan2(z, x) + TAU) % TAU;
+      pos.setY(i, y + tear[Math.round((bearing / TAU) * SIDES) % SIDES]);
+    }
   }
-  geo.computeVertexNormals();
-  return geo;
+  return weldProp(geo);
 }
 
 /**

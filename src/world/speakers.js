@@ -109,6 +109,19 @@ const D = 0.62;
 /** The plinth it stands on, which is also how far the group sits off the ground. */
 const PLINTH = 0.07;
 
+/**
+ * How tall the whole thing stands, ground to the top of the box.
+ *
+ * EXPORTED BECAUSE A CABINET CAN NOW BE STOOD SOMEWHERE WITH A ROOF ON IT.
+ * `aimGround` hands back the clear height of the passage it aimed into and
+ * `placeSpeaker` compares it against this before committing, so the refusal
+ * underground is "this bit of the cave is too low" rather than the old blanket
+ * "not down here". Derived rather than written down twice: 1.79 m in a comment
+ * would be wrong the first time the box changed shape, and the symptom would be
+ * a speaker refused in a chamber it fits in.
+ */
+export const SPEAKER_STAND_HEIGHT = H + PLINTH;
+
 /** Where each driver sits on the baffle. */
 const WOOFER_Y = 0.98;
 const WOOFER_R = 0.3;
@@ -417,6 +430,26 @@ function buildCabinet(scene, index, position, rotationY) {
      *   nothing about the hillside.
      */
     place({ x, y, z, yaw }) {
+      /**
+       * A SUPPLIED `y` IS USED VERBATIM, AND THAT IS WHAT MAKES A CABINET STAND
+       * ON A CAVE FLOOR.
+       *
+       * Every placement that can be underground carries one. Locally it comes
+       * out of `aimGround`, which now marches against `caveFloorUnder` when the
+       * body is roofed; over the network it comes off the wire, where
+       * `sanitizeSpot` in server/rooms.js refuses a spot that has no finite `y`
+       * at all. Re-deriving it here would be actively wrong: there are two
+       * floors at most of this map — the hillside and whatever passage runs
+       * under it — and a receiver holding an `(x, z)` has no way to tell which
+       * of them the sender meant. The sender already decided; this stands the
+       * box where it was told.
+       *
+       * The fallback is reached from exactly one place, the construction call at
+       * the bottom of this function, which knows an x and a z and nothing about
+       * the hillside. It stays `groundUnder` — the SURFACE answer — because with
+       * no height to ask with there is no question a cave could answer, and
+       * `caveFloorUnder(x, z, undefined)` is `groundUnder(x, z)` anyway.
+       */
       const ground = y ?? groundUnder(x, z);
       group.position.set(x, ground + PLINTH, z);
       group.rotation.y = yaw;
@@ -466,11 +499,23 @@ function buildCabinet(scene, index, position, rotationY) {
      * A centimetre and a hundredth of a radian, which is far below what a
      * placement gesture can resolve and far above float round-tripping through
      * JSON.
+     *
+     * `y` IS IN THE TEST, AND IT WAS NOT. Two spots at one xz used to be one
+     * spot, which was true while the world was a height field: there was only
+     * ever one floor at a given (x, z), so height was a function of the other
+     * two and testing it would have been testing them twice. A passage under a
+     * hillside makes it false. Somebody standing a cabinet on a cave floor
+     * directly under the one it is already on sends a placement that differs
+     * only in `y`, and this said "same spot" and threw it away — the box stays
+     * on the mountain, on their screen and on everybody else's, with no error
+     * anywhere. Rare, silent, and free to close: the wire rounds `y` to two
+     * decimals, which is half this tolerance.
      */
     sameSpot(other) {
       const here = this.spot();
       return (
         Math.abs(here.x - other.x) < 0.01 &&
+        Math.abs(here.y - other.y) < 0.01 &&
         Math.abs(here.z - other.z) < 0.01 &&
         Math.abs(here.yaw - other.yaw) < 0.01
       );
@@ -713,6 +758,29 @@ export function buildSpeakers(scene, centre = new THREE.Vector3(6.5, 0, -5.5)) {
       const a = Math.hypot(left.speaker.x - x, left.speaker.z - z);
       const b = Math.hypot(right.speaker.x - x, right.speaker.z - z);
       return Math.min(a, b);
+    },
+
+    /**
+     * …and the floor that one is standing on.
+     *
+     * A SECOND METHOD RATHER THAN A RICHER RETURN FROM `distanceTo`, for two
+     * reasons that both point the same way. `distanceTo` is called every frame
+     * by `findInteractable` and returning an object from it would allocate one
+     * per frame for a number the caller usually throws away — that file reuses a
+     * single `_target` precisely to avoid that. And the height is only ever
+     * wanted once the flat distance has already passed, because it is the
+     * SECOND half of a reach test: horizontal distance alone said "press E to
+     * start the record" to somebody standing in a passage under the clearing,
+     * and a vertical gap is what tells a cabinet on your own cave floor from one
+     * on the hillside above your head. See the reach test in main.js.
+     *
+     * The ground rather than the base of the box, matching `spot()`, so a caller
+     * comparing it against a body's feet is comparing two floors.
+     */
+    nearestGroundY(x, z) {
+      const a = Math.hypot(left.speaker.x - x, left.speaker.z - z);
+      const b = Math.hypot(right.speaker.x - x, right.speaker.z - z);
+      return (a <= b ? left : right).group.position.y - PLINTH;
     },
 
     setPlaying(on) {

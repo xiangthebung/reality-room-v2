@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Clock, clamp01 } from './core/util.js';
 import { buildForest } from './world/forest.js';
 import { CAVE_BURIED, buildAtmosphere } from './world/atmosphere.js';
-import { buildSpeakers } from './world/speakers.js';
+import { SPEAKER_STAND_HEIGHT, buildSpeakers } from './world/speakers.js';
 import { aimGround } from './world/aim.js';
 import { buildFauna } from './world/fauna.js';
 import { buildShoal } from './world/shoal.js';
@@ -373,6 +373,15 @@ let music = null;
 let externalTrack = null;
 /** @type {Ambience|null} */
 let ambience = null;
+/**
+ * The streamed far chorus, or null — which is the normal state of a stock
+ * checkout, because no third-party recording has been licensed yet. See
+ * `audio/bed.js`, whose `load` returns null when `public/audio/beds/` is absent
+ * precisely so that every measuring script in `scripts/` keeps measuring the
+ * forest it measured yesterday.
+ * @type {import('./audio/bed.js').AmbienceBed|null}
+ */
+let ambienceBed = null;
 /** @type {TripAudio|null} */
 let tripAudio = null;
 /**
@@ -700,6 +709,43 @@ const NEAR_PATCH = 2.6;
 const NEAR_FERRY = 4.2;
 
 /**
+ * …and how far in the OTHER direction, which used not to be a question.
+ *
+ * The three above are horizontal reaches and they are generous because walking
+ * up to something is what a person does. This is the vertical one, and it is
+ * tighter than any of them for a reason that has nothing to do with arms: it is
+ * the number that has to separate a mushroom at your feet from a mushroom in the
+ * sunlight over a passage, and both of those are at zero horizontal distance.
+ *
+ * 2.2 m, AND THE ONLY THING THAT PINS IT IS `ROOF_CLEARANCE`. The body calls
+ * itself `roofed` when there is more than 2.4 m of rock between the surface and
+ * the floor it is standing on (see controller.js). Those two constants are the
+ * same claim about the same body — "that is another storey, not this one" — so
+ * this one must be the smaller of the pair, or there is a band of very shallow
+ * passage in which the roof test says you are underground and the reach test
+ * still hands you the hillside. 0.2 m of margin is enough to make it an
+ * inequality rather than a coincidence and leaves the number comfortably above
+ * anything on your own floor: a cabinet's ground, a seat's cushion and a
+ * mushroom's cap are all within a metre of the feet that can walk to them.
+ *
+ * Measured from the FEET rather than from the eye, because everything it is
+ * compared against is a floor. `position.y` is the eye — see `applyToCamera`.
+ */
+const REACH_Y = 2.2;
+
+/**
+ * Is a thing standing at height `y` on the same floor as feet at `feet`?
+ *
+ * Symmetrical on purpose. Down matters as much as up: standing on the hillside
+ * over a chamber, a speaker on the cave floor below is exactly as unreachable as
+ * a mushroom above one is from inside it, and a one-sided test would have fixed
+ * half the bug and left the half nobody had tried yet.
+ */
+function withinReach(feet, y) {
+  return Math.abs(y - feet) <= REACH_Y;
+}
+
+/**
  * Reused rather than allocated.
  *
  * The frame loop asks this question every frame and throws the answer away
@@ -761,27 +807,45 @@ function findInteractable() {
    * `_resolveBrush` names in controller.js, where a bush on the hillside
    * rustled at somebody thirty metres under it.
    *
-   * Giving each of the four a height and testing it would be four APIs changed
-   * to answer a question none of them is really about. The question is about
-   * the BODY: there is rock over your head, so the surface is not yours to
-   * touch. One guard, one place, and `controller.roofed` is already the frame's
-   * own answer rather than a second scan — see its note in controller.js.
+   * THIS WAS ONE LINE — `if (controller.roofed) return null;` — AND IT HAD TO
+   * STOP BEING ONE.
+   *
+   * The blanket guard was the right shape while nothing you could interact with
+   * was ever underground: the question was about the BODY, there is rock over
+   * your head, so the surface is not yours to touch. Then a speaker and a screen
+   * became things you stand wherever you are looking, including on a cave floor
+   * (see `placeSpeaker` and `aimGround`) — and the guard made the cabinet you
+   * had just put down two metres away unreachable. `E` did nothing, `U` would
+   * not open the link box, and the prompt never appeared, in the one place in
+   * the world where you had gone to the most trouble to put the thing.
+   *
+   * So the question moves from the body to the CANDIDATE, which is what it was
+   * always really about: not "is there rock over me" but "is that thing on my
+   * floor or on somebody else's". A vertical gap answers it for anything that
+   * has a height, and three of the four do.
+   *
+   * THE FERRY KEEPS THE OLD GUARD, and says so rather than pretending. Its
+   * `distanceTo` is a rectangle test in xz against a moving deck and there is no
+   * single y that is "where the raft is" for it — the deck rolls. It is also the
+   * one candidate that cannot be underground by construction: it runs on the
+   * river, on the surface, and a passage under the river is exactly the case the
+   * guard is for.
    *
    * BELOW the rod override on purpose. A rod is in your hands rather than in
    * the world, and somebody who walked into a passage with a fish on the line
    * should still be able to land it rather than be left holding a key that has
    * stopped meaning anything.
    */
-  if (controller.roofed) return null;
+  const feet = p.y - controller.eyeHeight;
 
   const seat = seats.nearest(p.x, p.z);
-  if (seat) {
+  if (seat && withinReach(feet, seat.position.y)) {
     _target.kind = 'sit';
     _target.seat = seat;
     _target.distance = Math.hypot(seat.position.x - p.x, seat.position.z - p.z);
   }
 
-  if (ferry && !seat) {
+  if (ferry && !seat && !controller.roofed) {
     const d = ferry.distanceTo(p.x, p.z);
     if (d < NEAR_FERRY) {
       _target.kind = 'ferry';
@@ -790,16 +854,22 @@ function findInteractable() {
   }
 
   // The NEARER of the two boxes — see `NEAR_SPEAKER`, and `distanceTo` in
-  // speakers.js. Either one is the whole rig as far as `E` is concerned.
+  // speakers.js. Either one is the whole rig as far as `E` is concerned. The
+  // height is asked for separately and only once the flat distance has passed;
+  // see `nearestGroundY` for why that is two calls and not one.
   const dj = speakers.distanceTo(p.x, p.z);
-  if (dj < NEAR_SPEAKER && (_target.kind === null || dj < _target.distance)) {
+  if (
+    dj < NEAR_SPEAKER &&
+    withinReach(feet, speakers.nearestGroundY(p.x, p.z)) &&
+    (_target.kind === null || dj < _target.distance)
+  ) {
     _target.kind = 'speakers';
     _target.distance = dj;
   }
 
   for (const patch of forest.patches) {
     const d = Math.hypot(p.x - patch.x, p.z - patch.z);
-    if (d < NEAR_PATCH && (_target.kind === null || d < _target.distance)) {
+    if (d < NEAR_PATCH && withinReach(feet, patch.y) && (_target.kind === null || d < _target.distance)) {
       _target.kind = 'mushroom';
       _target.distance = d;
       _target.patch = patch;
@@ -1266,23 +1336,30 @@ function speakerMoved(index) {
 
 function placeSpeaker() {
   /**
-   * …BUT NOT FROM UNDER A HILL, and this is the other half of the `roofed`
-   * guard in `findInteractable`.
+   * …AND FROM UNDER A HILL AS WELL, WHICH IT REFUSED TO DO UNTIL NOW.
    *
-   * `aimGround` marches against `heightAt`, which underground is the summit and
-   * is already behind you before the first sample: `above(t)` is negative from
-   * PLACE_MIN_M, the bisection converges immediately, and the cabinet is stood
-   * on the hillside three metres in front of where you are looking — thirty
-   * metres over your head, in daylight, audible and unreachable. Standing a
-   * speaker on a cave floor is a real thing to want and it is not this: it
-   * needs `caveFloorUnder` in the march, no waterline clamp, and an answer for
-   * a ray that leaves through the roof. Until then, say so and do nothing.
+   * The refusal was `if (controller.roofed) { toast('No ground to stand it on
+   * down here.'); return; }`, and it was correct rather than lazy: `aimGround`
+   * marched against `heightAt`, which underground is the SUMMIT and is already
+   * behind you before the first sample, so the cabinet went onto the hillside
+   * thirty metres over your head — in daylight, audible and unreachable. The
+   * comment that stood here listed what a real fix needed: `caveFloorUnder` in
+   * the march, no waterline clamp, and an answer for a ray that leaves through
+   * the roof. All three now live in `aimGround`; see its header.
+   *
+   * WHAT IS LEFT TO REFUSE IS A ROOF, and it is a much smaller and much more
+   * honest "no". A passage has a ceiling, a cabinet is 1.79 m tall, and a squeeze
+   * can be shorter than that — so the answer is about this bit of this cave
+   * rather than about being underground, and the player can walk ten metres and
+   * try again. `headroom` is `Infinity` on the surface, so the whole test is
+   * unreachable out there and the gesture in the wood is exactly what it was.
    */
-  if (controller.roofed) {
-    hud.toast('No ground to stand it on down here.', 3200);
+  const spot = aimGround(controller);
+  if (spot.headroom < SPEAKER_STAND_HEIGHT) {
+    hud.toast('Not enough headroom here.', 3200);
     return;
   }
-  const index = speakers.placeNext(aimGround(controller));
+  const index = speakers.placeNext(spot);
   speakerMoved(index);
   /**
    * Tell the room. On a solitary walk this is a no-op that costs a property
@@ -1940,6 +2017,38 @@ document.getElementById('enter').addEventListener('click', async () => {
     ambience.step(strength, wetness(controller.position.x, controller.position.z));
   controller.onBrush = (position, strength) => ambience.brush(position, strength);
 
+  /**
+   * THE RECORDED BED, FETCHED LATE AND ON PURPOSE.
+   *
+   * Not imported at the top of this file and not awaited here. Three reasons,
+   * and the ordering of them is the design:
+   *
+   *   TIME TO INTERACTIVE. The bundle is ~494 KB gzipped and three beds at Opus
+   *   64 kbps would be a few megabytes on top — several times the code. A static
+   *   import would put the module in the main chunk; awaiting the fetch here
+   *   would put the DOWNLOAD in front of the first frame after the gate drops,
+   *   which is the single worst moment in the session to add a network wait to.
+   *   This is a dynamic import inside an already-running click handler, so the
+   *   chunk is requested after first paint and the beds stream in behind it.
+   *
+   *   IT IS ALLOWED TO FAIL. `AmbienceBed.load` resolves to null on a missing or
+   *   malformed manifest and never throws, so the catch here is for the import
+   *   itself. Every outcome ends with `ambienceBed` still null and the forest
+   *   exactly as it was — see the `bedPresence` note in ambience.js for why that
+   *   is bit-identical rather than merely similar.
+   *
+   *   NOTHING WAITS ON IT. The frame loop null-checks it like every other
+   *   optional layer, so a bed that arrives four seconds in simply starts being
+   *   audible four seconds in, ramped over the six-second constant its own
+   *   `tick` uses.
+   */
+  import('./audio/bed.js')
+    .then(({ AmbienceBed }) => AmbienceBed.load(audio.ctx, audio))
+    .then((bed) => {
+      ambienceBed = bed;
+    })
+    .catch(() => {});
+
   // Rock underfoot rings where leaf litter thuds, and `captureStep` wraps the
   // controller's own callback rather than replacing it — the forest footsteps
   // above must keep working outside.
@@ -2378,6 +2487,32 @@ function frame() {
          */
         rain: atmosphere.rainLevel ?? 0,
       });
+    }
+    /**
+     * The recorded bed, and the one line that couples it back to the synthesis.
+     *
+     * UPDATED AFTER `ambience.update`, WHICH MEANS THE DUCK IS ONE FRAME LATE.
+     * That is deliberate and it is the cheap way round a circular dependency:
+     * the bed's weights come from the clock and the trip, the duck comes from
+     * the bed's weights, and the wind's level comes from the duck. Writing the
+     * presence before the ambience update would need the bed ticked first, which
+     * would need the rain and trip values read twice. One frame at 60 Hz against
+     * a gain whose time constant is half a second is 3% of one time constant —
+     * unmeasurable, let alone audible.
+     *
+     * It is NOT gated on the bed existing, because the interesting case is the
+     * bed going away: `dispose` is reachable from the console and a null bed has
+     * to put the wind back rather than leave it ducked for a layer that is no
+     * longer playing.
+     */
+    if (ambienceBed) {
+      ambienceBed.update(dt, {
+        tripLevel: director.level,
+        rain: atmosphere.rainLevel ?? 0,
+      });
+      ambience?.setBedPresence(ambienceBed.presence, ambienceBed.duck);
+    } else {
+      ambience?.setBedPresence(0);
     }
     // The camera as well as the clock: the pair's one lamp slides along the line
     // between the two boxes to whichever end the player is at. See speakers.js.
@@ -3125,6 +3260,19 @@ window.RR = {
    */
   get ambience() {
     return ambience;
+  },
+  /**
+   * The streamed far chorus, or null. A getter for the same reason `ambience` is,
+   * plus one of its own: this one is assigned by a `.then` some time AFTER the
+   * gate drops, so even a reader that waited for the audio context can find it
+   * null and has to be able to look again.
+   *
+   * `scripts/audio-bed-check.mjs` is the only consumer. It reads `report()` for
+   * the seam count and the media elements' `buffered` windows, which is the
+   * evidence that this layer is streaming rather than decoding.
+   */
+  get ambienceBed() {
+    return ambienceBed;
   },
   /**
    * The live uniform block.

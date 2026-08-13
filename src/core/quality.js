@@ -357,7 +357,48 @@ export const KNOBS = [
      * the wood to close in. It is just no longer something the quality ladder
      * has an opinion about.
      */
-    presets: [0.47, 1, 1, 1, 1],
+    /**
+     * FLAT AGAIN, AND THE TWO ROWS THAT WERE NOT ARE A MISTAKE I MADE AND
+     * MEASURED MY WAY BACK OUT OF.
+     *
+     * `potato` held 0.47 and `low` 0.70, on the arithmetic in the `treeReach`
+     * block: fog transmits `exp(-(d·ρ)²)`, so a 120 m reach needs ρ ≈ 0.0196
+     * against a sober 0.00921, or the shortened wood ends in a hard edge rather
+     * than in haze. The arithmetic is correct and the conclusion was wrong,
+     * because it assumed you can SEE to 120 m. In a rainforest at eye level you
+     * cannot — the trees a short reach removes were already behind nearer trees.
+     *
+     * Measured with `npm run impostor:fog`, which gives each density its own
+     * full-reach reference at that density, so what is compared is how far the
+     * cut frame sits from the frame it is pretending to be:
+     *
+     *     station     cut @ fog 1.00   cut @ fog 0.47   the haze itself
+     *     ridge        0.01% / 0.00     0.01% / 0.00    41.7% / 6.96
+     *     wood         0.03% / 0.00     0.01% / 0.00    52.0% / 7.26
+     *     clearing     0.04% / 0.01     0.04% / 0.00    71.7% / 16.08
+     *     stream       0.00% / 0.00     0.00% / 0.00    56.9% / 15.45
+     *
+     * At every eye-level station the cut is invisible at BOTH densities — mean
+     * error 0.00 to 0.01 of 255 either way. So the haze was hiding nothing, and
+     * charging 42–72% of the frame repainted by 7–16 levels for it. In the
+     * frames it washes the mid-storey to a pale grey-green and the wood loses
+     * its interior and its darkness, which is a large and permanent price paid
+     * where potato players actually stand.
+     *
+     * ABOVE THE CANOPY IT DID STILL WORK — 19.0% / mean 1.86 at sober density
+     * against 3.5% / 0.48 at 0.47 — and that is the honest cost of this change.
+     * It loses to the eye-level numbers on both counts: four times the mean
+     * error over 2.7 times as many pixels, at a station a player is rarely at.
+     * And the silhouette up there is now carried by the impostor band, which is
+     * what fog was standing in for and was never good at: with the band off,
+     * sober reads 31.4% and 0.47 reads 29.1%, so the haze was barely touching it.
+     *
+     * The original argument below therefore stands unamended, and this is one
+     * more instance of it: nothing culls on fog, so moving the density buys no
+     * frame time and repaints the wood. Adding something that DID cull on
+     * distance looked like it had made fog load-bearing. It had not.
+     */
+    presets: [1, 1, 1, 1, 1],
     format: (v) => `${v.toFixed(2)}×`,
     hint: 'Haze depth. Fog is what actually bounds the view here, not the far plane.',
   },
@@ -415,7 +456,75 @@ export const KNOBS = [
       { value: 250, label: 'Medium' },
       { value: 384, label: 'Full' },
     ],
-    presets: [120, 384, 384, 384, 384],
+    /**
+     * THE LADDER IS PAIRED WITH `fogDistance` ROW FOR ROW, and the pairing is
+     * arithmetic rather than taste. Sober density is ρ = 0.00921, and what a
+     * reach of `d` needs to end in haze rather than in an edge is
+     * `ρ >= sqrt(ln 255)/d`:
+     *
+     *     reach   transmits at the cut   in 1/255   ρ needed   fogDistance
+     *       384              3.7e-06        0.00     0.00613          1.50
+     *       250              5.0e-03        1.27     0.00942          0.98
+     *       180              6.4e-02       16.35     0.01308          0.70
+     *       120              3.0e-01       75.21     0.01962          0.47
+     *
+     * THAT TABLE IS ARITHMETIC, AND THE ARITHMETIC IS NOT THE ANSWER. It
+     * assumes you can SEE to the reach, and `reach-visible.mjs` — which pins
+     * the preset, fixes the camera and moves nothing but `forest.setReach` —
+     * shows how rarely that is true:
+     *
+     *     station      250 m     180 m     120 m
+     *     ridge        0.00%     0.01%     0.02%
+     *     wood         0.00%     0.01%     0.04%
+     *     canopy       0.00%     0.00%     0.00%
+     *     clearing     0.00%     0.00%     0.05%
+     *     stream       0.00%     0.00%     0.00%
+     *     glade/far    0.00%     0.00%     0.00%
+     *
+     * A rainforest at head height does not contain a 120 m sightline. The trees
+     * a reach cut removes were already behind other trees, so at every station
+     * a player can actually stand in, this lever is very nearly invisible — not
+     * because of the fog, but because of the wood. Fog is not what is hiding
+     * this, and the table above the table would have had us believe it was.
+     *
+     * THE ONE PLACE IT BREAKS IS ABOVE THE CANOPY, and there it breaks badly:
+     *
+     *     camera +55 m    1.61%     3.64%     4.46%
+     *     camera +70 m   14.66%    25.38%    31.27%
+     *
+     * With nothing in the way, every tree the reach removes is a tree you could
+     * have seen. `.perf/shots/above-flat-*.png` is what that looks like: at
+     * `medium` the canopy still reads as canopy fading into haze, and at
+     * `potato` it is gone — bare heightfield to the horizon with the river
+     * visible across it. Fog does not save it, because fog is hiding the
+     * distance uniformly and what is missing is the SILHOUETTE.
+     *
+     * BOTH OF THOSE HOLES ARE NOW FILLED, and the two paragraphs that used to
+     * stand here — "above the canopy potato stops looking like a forest, and an
+     * impostor canopy is the specific thing that would fix it" and "the fog on
+     * the two lowest rungs is kept anyway" — are superseded rather than merely
+     * out of date.
+     *
+     * The impostor band landed: past `leafReach` each tree is one camera-facing
+     * quad reading a hemi-octahedral atlas of itself, so the silhouette survives
+     * at 2 triangles. Above the canopy at +70 m the reach cut went from 31.27%
+     * of pixels to 18.42% at `potato` and from 14.69% to 4.64% at `medium`, with
+     * mean error down 4–6×. See `src/render/impostor.js`.
+     *
+     * And the fog went with it, because once the band carried the silhouette the
+     * haze was measured to be hiding nothing anywhere a player stands: the cut
+     * reads 0.00–0.01 of 255 at every eye-level station at SOBER density, while
+     * the haze itself repainted 42–72% of the frame by 7–16 levels. It was a
+     * large permanent price for a hole that had stopped existing. See the
+     * `fogDistance` block.
+     *
+     * WHY THE MIDDLE OF THE LADDER NEEDED THIS AT ALL. Before it, medium and
+     * high submitted 16.63 M and 16.70 M triangles — four parts in a thousand
+     * apart — so "medium" meant "high at 0.8 render scale with the
+     * anti-aliasing off" and nothing else. Three of the five rungs were the same
+     * scene. The knob existed by then; the rungs simply were not using it.
+     */
+    presets: [120, 180, 250, 384, 384],
     hint: 'How deep the wood is drawn. The only setting here that removes geometry rather than pixels.',
   },
   {

@@ -32,7 +32,7 @@ import { dawnAt } from '../world/daylight.js';
  *     instantly different birds. Play a beautiful timbre on a flat contour and
  *     it is a synthesiser.
  *
- * THE TWO WAYS THAT WENT WRONG ANYWAY, both fixed, both worth keeping written
+ * THE THREE WAYS THAT WENT WRONG ANYWAY, all fixed, all worth keeping written
  * down because the file argued itself into them while believing the paragraph
  * above.
  *
@@ -53,6 +53,29 @@ import { dawnAt } from '../world/daylight.js';
  *   song has its mean maximum at 3738 Hz against the old 1047. Being in the
  *   wrong octave is most of what made them read as an instrument, because that
  *   register is where instruments are and birds are not.
+ *
+ *   IT WAS TOO RICH, WHICH IS THE OPPOSITE OF THE COMPLAINT ANYBODY EXPECTS.
+ *   "A syrinx is very nearly a pure tone" is the sentence this file opens with
+ *   and it is correct; the table underneath it then set fifteen of twenty rows
+ *   to a modulation index of 0.55 or more, and two of them past 1.0, where the
+ *   second harmonic is louder than the note's own pitch. Nobody caught it
+ *   because every one of those numbers is comfortably under the 2.2 ceiling the
+ *   file spends four paragraphs defending — the ceiling is against a RASP, and
+ *   an index of 1.1 is not a rasp, it is a chord. The measured target is 23 dB
+ *   between f0 and 2f0 and it is now met or beaten on every whistling row. See
+ *   the Bessel table above `VOICES`, and `scripts/bird-harmonics.mjs`, which
+ *   exists because none of this project's other instruments could see it: a
+ *   five-second average of a forest with one call in it moves by two
+ *   hundredths when you halve the overtone content of the entire roster.
+ *
+ *   AND EVERY NOTE WAS PERFECT, which is the other half of the same pass and
+ *   is not about the spectrum at all. A note began as a pure sine fading up
+ *   from silence and then followed a piecewise-linear pitch track with no error
+ *   term in it. Nothing alive does either. `_note` now puts a few milliseconds
+ *   of band-passed noise at the front — the breath before the membranes lock
+ *   in — and `_jitterTrack` puts about six cents of continuous wander on the
+ *   contour. Neither is audible as a thing; both are audible as the absence of
+ *   a machine.
  *
  *   THE RAINFOREST ROSTER GOES BACK DOWN THERE ON PURPOSE, WHICH IS NOT THE
  *   SAME MISTAKE. Six of the twenty rows below sit under 1 kHz because the
@@ -269,6 +292,69 @@ import { dawnAt } from '../world/daylight.js';
  * 2.2: past about three an FM pair starts producing sidebands dense enough to
  * read as a rasp.
  *
+ * AND THE WHOLE COLUMN WAS RE-FITTED, BECAUSE IT WAS THE REASON THIS STILL
+ * SOUNDED ELECTRONIC — in the direction nobody expects.
+ *
+ * The usual complaint about a synthesised bird is that it is too pure. Ours was
+ * the opposite: too RICH. For sinusoidal FM the partial amplitudes are Bessel
+ * functions of the index, so `index` maps arithmetically onto how much harmonic
+ * content there is, and the mapping is much steeper than it looks:
+ *
+ *     index   2f0 vs f0   3f0 vs f0
+ *      0.14    -23.1 dB    -52.2 dB
+ *      0.30    -16.4 dB    -38.8 dB
+ *      0.55    -10.9 dB    -28.0 dB
+ *      0.90     -6.0 dB    -18.6 dB
+ *      1.50     +0.7 dB     -6.9 dB
+ *
+ * A real songbird is not merely "nearly a sine" as a figure of speech. It is
+ * actively suppressing its own overtones: the syrinx makes a harmonic source
+ * and the bird then tunes the oropharyngeal-esophageal cavity so that its
+ * resonance TRACKS f0 as the note slides, which filters the harmonics out. The
+ * measurement (PNAS 2006, pmc.ncbi.nlm.nih.gov/articles/PMC1459391) is f0 at 23
+ * dB above 2f0 and 33 dB above 3f0. That is index 0.14, and it is a moving
+ * target the bird holds for the whole note — which, remarkably, is exactly what
+ * `sweep` already does to the modulator for a different reason.
+ *
+ * The column was fifteen rows of twenty at 0.55 or above, and the aracari at
+ * 1.1 and the antshrike at 1.0 were past the point where f0 stops being the
+ * loudest thing in its own note. Reading that table back: a 1.1 aracari is
+ * putting its second harmonic within 4 dB of its fundamental, i.e. thirty
+ * decibels of overtone that no bird alive produces. THAT is the electronic
+ * sound, and no amount of contour work covers it.
+ *
+ * So the tonal rows now sit at 0.14 to 0.30 and the ROW DECIDES, because the
+ * roster genuinely contains four kinds of voice:
+ *
+ *   PURE WHISTLES AND HOOTS — motmot, solitaire, tinamou, potoo, musician wren,
+ *   honeycreeper, quetzal, trogon. 0.14 to 0.20. These are the rows the PNAS
+ *   number is literally about and they take it literally.
+ *
+ *   WHISTLES THAT ARE SHOUTED — piha, antbird, woodcreeper, hermit, tanager,
+ *   toucan. 0.22 to 0.30. A loud syrinx tracks its own filter less perfectly and
+ *   real spectrograms of these show a visible but weak second harmonic.
+ *
+ *   GENUINELY HARMONIC OR INHARMONIC VOICES — kiskadee (a shout with a real
+ *   harmonic stack), antshrike (nasal, and nasal means formants), aracari (a
+ *   rusty hinge, which is inharmonicity and not a whistle), bellbird (the one
+ *   row in this file that is allowed to clang). 0.45 to 0.55, which is still
+ *   half of what they had.
+ *
+ *   ROWS WHOSE ROUGHNESS IS ALREADY SOMEWHERE ELSE — manakin and toucan. Both
+ *   comments below already say the grain is in the 17-21 Hz warble rather than
+ *   in the spectrum, and both were nonetheless carrying an index that made the
+ *   claim untrue. Lowering them is what the comments were describing.
+ *
+ * WHAT THIS DOES NOT COST, and it is worth writing down because the obvious
+ * worry is wrong. Sinusoidal FM conserves total power: the Bessel amplitudes
+ * satisfy the sum of Jn² = 1 whatever the index, so pulling the index down moves
+ * energy INTO f0 rather than destroying it, and the per-note rms barely moves.
+ * `level` and `fade` therefore did not need re-fitting — which was checked
+ * rather than assumed; see the measured rms column in `fauna-audio.mjs`. What
+ * does move is the 2-6 kHz fraction, downward, because for a roster whose roots
+ * run 400 Hz to 3.1 kHz the harmonics were landing in that band and the
+ * fundamentals mostly are not.
+ *
  * THE FOUR NUMBERS THAT SHAPE A PHRASE RATHER THAN A NOTE, all optional and all
  * defaulting to the value that means "do nothing".
  *
@@ -359,7 +445,13 @@ const VOICES = [
     // to about 4.5 kHz, which is the bird.
     root: 99,
     ratio: 1.0,
-    index: 0.55,
+    // 0.30, from 0.55. A piha is a whistle that is SHOUTED, which is the one
+    // thing that stops a syrinx tracking its own filter perfectly, so it keeps
+    // more than the hooters do — but 0.55 put its second harmonic 11 dB under
+    // the fundamental at 5 kHz, and the fundamental is what carries a kilometre
+    // through closed forest. 0.30 is -16.4 dB, which is a scream with an edge
+    // rather than a scream with a chord in it.
+    index: 0.3,
     decay: 0.19,
     notes: [-7, -3, 12, 5],
     gaps: [0.27, 0.34, 0.17],
@@ -409,7 +501,19 @@ const VOICES = [
     // combination is what makes it carry through leaves.
     root: 111,
     ratio: 1.0,
-    index: 0.9,
+    /**
+     * THE HIGHEST INDEX IN THE TABLE, AND IT KEEPS THAT RANK ON PURPOSE — the
+     * paragraph above is the argument for the exception, so this is the row
+     * that gets it.
+     *
+     * 0.55, from 0.9. A bonk is a metallic clang and a clang has overtones; the
+     * species is one of the few here where the spectrum rather than the contour
+     * is the identifying feature. But 0.9 is 2f0 only 6 dB down, which at a
+     * root of 5 kHz put a strong partial at 10 kHz — above anything a bellbird
+     * radiates and squarely in the region where a sound reads as a digital
+     * artefact. 0.55 keeps the clang and loses the glitter.
+     */
+    index: 0.55,
     decay: 0.09,
     notes: [0, -15],
     gaps: [0.86],
@@ -447,7 +551,12 @@ const VOICES = [
     // The gurgle starts around 700 Hz and the whoop finishes above 3 kHz.
     root: 78,
     ratio: 1.0,
-    index: 0.7,
+    // 0.35, from 0.7. A gurgle is not a pure tone and this row is one of the
+    // places a little harmonic content does real work — but the LIQUID quality
+    // is the 7 Hz warble two lines down, not the index. The whoop ends 21
+    // semitones up at about 2.5 kHz, so at 0.7 it was putting a partial 8 dB
+    // down at 5 kHz on the loudest, highest, longest note of the phrase.
+    index: 0.35,
     decay: 0.15,
     notes: [0, 0, 2, 5, 9, 14, 21],
     gaps: [0.13, 0.15, 0.19, 0.24, 0.31, 0.4],
@@ -483,7 +592,11 @@ const VOICES = [
     // below the small-bird band this file usually defends.
     root: 84,
     ratio: 1.0,
-    index: 0.3,
+    // 0.20, from 0.3. "A low index and a long decay make it mellow" is the
+    // sentence above and it was three quarters true; mellow means the harmonics
+    // are gone, and 0.3 still had 2f0 at -16 dB. This is a soft slurred whimper
+    // and it is one of the purest things in the wood.
+    index: 0.2,
     decay: 0.3,
     notes: [0, 5, 0, 7],
     gaps: [0.33, 0.62, 0.33],
@@ -518,7 +631,12 @@ const VOICES = [
     // 392 Hz.
     root: 67,
     ratio: 1.0,
-    index: 0.2,
+    // 0.14, from 0.2, WHICH IS THE NUMBER THE COMMENT ABOVE ALREADY CLAIMED.
+    // That block has said "an index of 0.14, which is very nearly a pure sine"
+    // since the row was written and the code has said 0.2 the whole time. The
+    // comment was right and the field was wrong: 0.14 is the PNAS figure, and a
+    // motmot hoot at 392 Hz is the closest thing in this roster to a pure tone.
+    index: 0.14,
     decay: 0.4,
     notes: [0, 0],
     gaps: [0.21],
@@ -556,7 +674,10 @@ const VOICES = [
     // A shade under 1 kHz.
     root: 82,
     ratio: 1.0,
-    index: 0.2,
+    // 0.15, from 0.2. The longest notes in the table, and a long note is where
+    // an overtone has time to be identified as one. The character here is the
+    // 9 Hz tremolo; everything else about the row should get out of its way.
+    index: 0.15,
     decay: 0.6,
     notes: [0, 0, 2, 2, 4],
     gaps: [0.92, 1.0, 1.06, 1.12],
@@ -591,7 +712,11 @@ const VOICES = [
     // About 700 Hz.
     root: 77,
     ratio: 1.0,
-    index: 0.25,
+    // 0.18, from 0.25. HOLLOW IS A LOW INDEX — that is what the word means
+    // spectrally — and this row says "hollow" three times in the block above.
+    // It is also the row with the most notes per second of any of the hooters,
+    // so any overtone it has is repeated eleven times a phrase.
+    index: 0.18,
     decay: 0.2,
     notes: [0, 0, 0, 0, 0, 0, 0, -1, -1],
     gaps: [0.22, 0.225, 0.23, 0.24, 0.25, 0.26, 0.275, 0.29],
@@ -626,7 +751,11 @@ const VOICES = [
     // Starting around 1 kHz and ending near 400.
     root: 83,
     ratio: 1.0,
-    index: 0.18,
+    // 0.15, from 0.18, and this row barely moves because it was already nearly
+    // right. A potoo is a mournful pure whistle and the whole phrase is about
+    // what it sounds like to be a long way off; overtones are the first thing
+    // distance takes away, so having any at all was working against `fade`.
+    index: 0.15,
     decay: 0.45,
     notes: [0, -3, -6, -9, -12, -15],
     gaps: [0.76, 0.82, 0.86, 0.92, 0.98],
@@ -665,7 +794,12 @@ const VOICES = [
     // 2.1 kHz, rising through the phrase to about 3.5.
     root: 96,
     ratio: 1.0,
-    index: 0.9,
+    // 0.45, from 0.9, and this is one of the four rows that keeps real
+    // brightness. A kiskadee is not whistling, it is SHOUTING, and a shouted
+    // note has a genuine harmonic stack in it — a real spectrogram shows two or
+    // three visible partials on the DEE. 0.45 is 2f0 at -12.7 dB, which is
+    // about what those spectrograms show. 0.9 was -6, which is a chord.
+    index: 0.45,
     decay: 0.12,
     notes: [0, 4, 9],
     gaps: [0.13, 0.17],
@@ -712,7 +846,13 @@ const VOICES = [
     // 1.6 kHz. Pure, flute-like, and much lower than a temperate wren.
     root: 91,
     ratio: 1.0,
-    index: 0.35,
+    // 0.16, from 0.35, and this row is the strongest case in the table. The
+    // block above calls it "pure whistled intervals" and "flute-like", it is the
+    // one voice a listener hears for twenty unbroken seconds rather than for
+    // two, and it is the bird people claim sings in fifths and octaves — which
+    // is a claim about somebody hearing its fundamental clearly. An overtone on
+    // this row is a second, wrong interval sounding under every note of it.
+    index: 0.16,
     decay: 0.16,
     notes: [0, 7, 12, 5, 0, 9, 4, 12, 7, 2, 11, 5, 14, 7, 0, 9, 3],
     gaps: [0.29, 0.34, 0.26, 0.41, 0.31, 0.24, 0.37],
@@ -747,7 +887,11 @@ const VOICES = [
     name: 'antbird',
     root: 95,
     ratio: 1.0,
-    index: 0.85,
+    // 0.30, from 0.85. "The acceleration is the species; the pitches are almost
+    // incidental" is the sentence above, and if that is true then the TIMBRE is
+    // less than incidental. Ten short notes at 0.85 was ten spectral flashes a
+    // second, which is the closest this table came to a rattle made of metal.
+    index: 0.3,
     decay: 0.075,
     notes: [0, 2, 3, 5, 6, 8, 9, 11, 12, 12],
     gaps: [0.155, 0.14, 0.126, 0.114, 0.103, 0.094, 0.086, 0.08, 0.076],
@@ -784,7 +928,13 @@ const VOICES = [
     name: 'manakin',
     root: 99,
     ratio: 1.0,
-    index: 0.75,
+    // 0.40, from 0.75, AND THE COMMENT ABOVE IS WHY. It says the honest way to
+    // get grain out of this synthesiser is the 21 Hz vibrato, and that "push
+    // the depth and it becomes sidebands, which is the thing this file
+    // refuses". An index of 0.75 IS those sidebands, arrived at by the other
+    // door. The warble is untouched and it still carries the whole prrreet;
+    // what has gone is a second mechanism doing the same job badly.
+    index: 0.4,
     decay: 0.13,
     notes: [0, -2, -5],
     gaps: [0.09, 0.11],
@@ -813,7 +963,11 @@ const VOICES = [
     name: 'tanager',
     root: 102,
     ratio: 1.0,
-    index: 0.6,
+    // 0.25, from 0.6. "Thin" is a description of a spectrum and this row is
+    // described as thin, high and unmusical. It also sits at 2.35 kHz, so at
+    // 0.6 its second harmonic landed at 4.7 kHz — the middle of the band the
+    // harshness gate watches — for a bird whose whole job is to be small.
+    index: 0.25,
     decay: 0.055,
     notes: [0, 0, 2, 0, 5],
     gaps: [0.11, 0.13, 0.1, 0.16],
@@ -843,7 +997,11 @@ const VOICES = [
     name: 'honeycreeper',
     root: 105,
     ratio: 1.0,
-    index: 0.4,
+    // 0.16, from 0.4. The row above literally says "very nearly the thinnest
+    // sound this synthesiser can make" and "almost nothing in it", and then
+    // asked for four times the overtone content of a motmot. The thinnest sound
+    // this synthesiser can make is a low index; that is the only knob there is.
+    index: 0.16,
     decay: 0.06,
     notes: [0, -1, -3],
     gaps: [0.13, 0.15],
@@ -874,7 +1032,13 @@ const VOICES = [
     name: 'hermit',
     root: 107,
     ratio: 1.0,
-    index: 0.7,
+    // 0.28, from 0.7. A squeak IS broadband, which is what 0.7 was reaching
+    // for, but a 50 ms chip at the top of the table's range is the worst
+    // possible place to reach for it with FM: the root is 3.1 kHz, so every
+    // sideband was above 6 kHz where nothing else in this wood lives. The
+    // broadband part of a squeak is now the onset transient in `_note`, which
+    // is a burst of noise and is therefore the honest way to make one.
+    index: 0.28,
     decay: 0.05,
     notes: [0, 0, 1],
     gaps: [0.62, 0.66],
@@ -903,7 +1067,12 @@ const VOICES = [
     name: 'woodcreeper',
     root: 90,
     ratio: 1.0,
-    index: 0.7,
+    // 0.28, from 0.7. A whinny is a laugh made of whistles and this is the
+    // longest phrase in the table, so whatever the note timbre is, you hear it
+    // twenty times in two seconds. `pure: 0.45` still tapers it to 0.126 by the
+    // bottom of the fall, which is now a taper from thin to thinner rather than
+    // from bright to thin — and the dying fall is the point of the row.
+    index: 0.28,
     decay: 0.1,
     notes: [12, 11, 9, 8, 6, 5, 3, 2, 0, -1, -3, -4],
     gaps: [0.075, 0.08, 0.086, 0.093, 0.1, 0.108, 0.117, 0.127, 0.138, 0.15, 0.163],
@@ -935,7 +1104,12 @@ const VOICES = [
     name: 'antshrike',
     root: 88,
     ratio: 1.0,
-    index: 1.0,
+    // 0.45, from 1.0, and this is the second of the four rows that keeps real
+    // brightness. NASAL MEANS FORMANTS, which means partials — the block above
+    // describes fifteen nasal notes ending in a snarl, and a snarl with no
+    // second harmonic is a hoot. But at 1.0 the fundamental was only 5 dB above
+    // 2f0 and 15 above 3f0, which is not a nasal bird, it is an organ stop.
+    index: 0.45,
     decay: 0.085,
     notes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
     gaps: [0.2, 0.185, 0.17, 0.155, 0.142, 0.13, 0.12, 0.11, 0.1, 0.092, 0.085, 0.08],
@@ -968,7 +1142,13 @@ const VOICES = [
     name: 'aracari',
     root: 100,
     ratio: 1.0,
-    index: 1.1,
+    // 0.50, from 1.1, which was the highest value in the whole file and the
+    // single worst offender. At 1.1 the second harmonic is within 4 dB of the
+    // fundamental — the note's loudest partial is not its own pitch — and that
+    // is precisely the FM signature people identify as "electronic". A rusty
+    // hinge does need spectral content, so this is the third of the four
+    // bright rows; what it does not need is to stop being a pitch.
+    index: 0.5,
     decay: 0.11,
     notes: [0, 0, 0, -1],
     gaps: [0.31, 0.33, 0.36],
@@ -999,7 +1179,11 @@ const VOICES = [
     name: 'solitaire',
     root: 98,
     ratio: 1.0,
-    index: 0.22,
+    // 0.14, from 0.22 — the PNAS figure, on the row that has the best claim to
+    // it. "Pure, hollow, flute-like" is three synonyms for no overtones, and a
+    // Myadestes solitaire is one of the species people actually reach for when
+    // they want to describe a bird that sounds like a sine wave.
+    index: 0.14,
     decay: 0.26,
     notes: [0, 7, -5, 5, 0, 9, -3],
     gaps: [0.52, 0.66, 0.48, 0.74, 0.56, 0.62],
@@ -1039,7 +1223,11 @@ const VOICES = [
     // 587 Hz. Low, dry and hollow, and it holds still there.
     root: 74,
     ratio: 1.0,
-    index: 0.32,
+    // 0.22, from 0.32, for the manakin's reason: the comment above already
+    // states that the grain is in the pitch and that "the spectrum stays as
+    // thin as a whistle", so the spectrum should be as thin as a whistle. The
+    // 17 Hz warble is untouched and it is still the entire croak.
+    index: 0.22,
     decay: 0.14,
     notes: [0, 0, 0, 0],
     gaps: [0.33, 0.34, 0.33],
@@ -1115,6 +1303,136 @@ const SEMI = 2 ** (1 / 12);
 const _straightArc = [0];
 
 /**
+ * THE PITCH IS NEVER EXACTLY WHERE IT SAYS IT IS, WHICH IS THE OTHER REASON A
+ * SYNTHESISED WHISTLE READS AS A SYNTHESISER.
+ *
+ * Everything in `sweep` below is a straight line: `exponentialRampToValueAtTime`
+ * is exactly linear in semitones between two knots, so before this the contour
+ * was a piecewise-linear pitch track with no error term anywhere in it. Nothing
+ * alive does that. A syrinx is two membranes under muscular tension in a moving
+ * airstream and its fundamental wanders continuously by a few cents the whole
+ * time — that irregularity is a large part of what the ear uses to decide
+ * whether a tone came out of a body or out of an oscillator, and it is
+ * completely independent of the spectrum. Fix the index and leave the contour
+ * glassy and it still sounds made.
+ *
+ * So the contour is subdivided and each sub-point carries a small offset from a
+ * LEAKY RANDOM WALK rather than an independent draw. The leak is what makes it
+ * a wander instead of a dither: independent draws at 30 Hz would be a noise
+ * skirt, which is roughness, and roughness is the one thing this file refuses.
+ *
+ * THE THREE NUMBERS, AND WHY EACH IS AS SMALL AS IT IS.
+ *
+ *   `JITTER_HZ` is the target rate the sub-points are spaced at, so a long note
+ *   gets many and a short one gets few and the wander is the same SPEED on
+ *   both. It is a SAMPLING rate and not the rate of the wander itself, which is
+ *   the whole reason the leak is there — see the paragraph after next.
+ *
+ *   `JITTER_STEP` and `JITTER_LEAK` give a stationary spread of 5.8 cents
+ *   (measured over 200k samples of the real generator, not derived), and the
+ *   clamp stops any excursion past fifteen. Six cents is inaudible as a wrong
+ *   note and audible as a live one.
+ *
+ * WHY THIS IS NOT A NEW SOURCE OF ROUGHNESS, which is the question this file
+ * has to answer about anything that modulates a frequency. Roughness needs a
+ * modulation rate somewhere between about fifteen and three hundred hertz, and
+ * there is essentially nothing up there. The walk is a one-pole process with
+ * a = 0.6 sampled at 30 Hz, whose power spectrum has a median of 2.3 Hz and
+ * puts 86% of its energy below 8 Hz with a 12 dB tilt to Nyquist. So what this
+ * does to a spectrogram is thicken the fundamental's line by a few hertz and
+ * let it drift, which is what a real bird's line looks like — as against a
+ * discrete sideband pair, which is what a vibrato does and what the manakin's
+ * 21 Hz warble is deliberately near the edge of.
+ *
+ * The same track drives the carrier AND the modulator, which is not a detail.
+ * `_note`'s whole reason for sweeping the modulator is that a fixed modulator
+ * under a moving carrier is a drifting ratio, which is inharmonic, which is a
+ * bell. Jittering one and not the other would reintroduce exactly that at six
+ * cents of depth — small, but a bell nonetheless.
+ */
+/**
+ * How loud the onset breath is, as a fraction of the PEAK OF THE NOTE IT OPENS,
+ * before `lead` scales it per row. See `_note`.
+ *
+ * 0.28 is about eleven decibels under the note's own peak, which is where a
+ * broadband click stops being heard as a separate event and starts being heard
+ * as the front edge of the note. Louder and a phrase turns into a rattle with
+ * tones behind it; much quieter and the note goes back to fading in out of
+ * nothing, which is the thing it is here to stop.
+ *
+ * AND IT IS DIVIDED BY A MEASURED CONSTANT, WHICH IS THE WHOLE REASON THIS IS
+ * TWO NUMBERS AND NOT ONE.
+ *
+ * The obvious version of this line sets a gain node to 0.28 and assumes the
+ * breath comes out at 0.28. It does not, and the error is not small: the gain
+ * scales pink noise that has ALREADY been through a Q 0.9 band-pass, and both
+ * of those throw most of the signal away. Written the obvious way the transient
+ * rendered twenty-six decibels under the note instead of eleven — quiet enough
+ * that an offline render of a whole phrase with and without it came back
+ * identical to seven decimal places, i.e. the feature was not there at all and
+ * every aggregate in `fauna-audio.mjs` agreed that nothing had changed.
+ *
+ * So the loss is measured rather than guessed. Rendering the exact chain in
+ * `_note` — pink buffer, band-pass at Q 0.9, this envelope — at seven centre
+ * frequencies from 400 Hz to 5.6 kHz, twelve random buffer offsets each, gives
+ * a peak of 0.21 to 0.43 per unit of gain with a mean of 0.30. Two things about
+ * that spread are worth having written down:
+ *
+ *   IT IS A CREST FACTOR, so it is noisy by nature — the rms over the same
+ *   sweep runs 0.0142 to 0.0176, a spread of nine tenths of a decibel across
+ *   four octaves. That near-constancy is not luck, it is why the breath is pink
+ *   and not white: pink noise is scale-invariant, so a constant-Q band-pass
+ *   parked anywhere on it passes the same power. A motmot at 392 Hz and a
+ *   hermit at 3.1 kHz get breaths of the same weight with no per-row number.
+ *
+ *   THE MEAN IS THEREFORE THE RIGHT DIVISOR and the ±3 dB either side of it is
+ *   note-to-note variation in a burst of noise, which is what a breath is.
+ */
+const ONSET_LEVEL = 0.28;
+/** Peak output per unit of gain through the breath's filter. Measured; see above. */
+const ONSET_BAND_LOSS = 0.3;
+
+const JITTER_HZ = 30;
+const JITTER_STEP = 0.08;
+const JITTER_LEAK = 0.6;
+const JITTER_LIMIT = 0.15;
+/** The most sub-points one arc leg may be cut into. See `_jitterTrack`. */
+const JITTER_SUB_MAX = 8;
+
+/**
+ * One note's worth of wander, in semitones, as a reused scratch array.
+ *
+ * Same argument as `_shape` at the bottom of the file and the same condition on
+ * it: `_note` fills this and hands it to two `sweep` calls, both synchronous,
+ * both finished before the next note is scheduled. Sixty-five entries is eight
+ * sub-points on an eight-leg arc against a table whose longest contour is three
+ * legs, and `_jitterTrack` clamps to the length rather than trusting that.
+ */
+const _jitter = new Float32Array(65);
+
+/**
+ * Fill `_jitter[0..steps*sub]` and return how many sub-points each leg got.
+ *
+ * `sub` is chosen so the sub-points land at roughly `JITTER_HZ`, and it is at
+ * least 1 — at 1 the note is jittered only at the arc's own knots, which is
+ * what a 50 ms tanager chip gets and is the right answer for it: a note that
+ * short cannot carry a wander without the wander becoming its timbre.
+ */
+function _jitterTrack(rng, steps, dur) {
+  const cap = Math.max(1, Math.min(JITTER_SUB_MAX, Math.floor((_jitter.length - 1) / steps)));
+  const sub = clamp(Math.round((dur * JITTER_HZ) / steps), 1, cap);
+  const points = steps * sub;
+  let v = 0;
+  _jitter[0] = 0;
+  for (let j = 1; j <= points; j++) {
+    const step = rngRange(rng, -JITTER_STEP, JITTER_STEP);
+    v = clamp(v * JITTER_LEAK + step, -JITTER_LIMIT, JITTER_LIMIT);
+    _jitter[j] = v;
+  }
+  return sub;
+}
+
+/**
  * Walk an AudioParam through a pitch contour, in semitones, over `dur`.
  *
  * Used for the carrier and — critically — for the modulator as well, at the
@@ -1126,12 +1444,32 @@ const _straightArc = [0];
  * it is what articulates a note now that there is no spectral flash at the
  * front doing it. Ramps are exponential in frequency, which is linear in pitch,
  * so a contour written in semitones is heard as the interval it says.
+ *
+ * `sub` cuts every leg of the contour into that many equal ramps so that
+ * `_jitter` has somewhere to live. THE KNOTS ARE UNCHANGED BY CONSTRUCTION: the
+ * old code's target at the end of leg `s` is emitted verbatim as this one's
+ * `sub`-th sub-point, and the intermediate targets interpolate the same
+ * straight line Web Audio was drawing between them anyway. So no species'
+ * contour moved, which is the property that made this safe to do to twenty rows
+ * at once. (The single exception is cosmetic and is the first leg only: the old
+ * ramp began at `when + leadT` and the subdivision begins at `when`, so the
+ * first leg's slope differs over at most twelve milliseconds and arrives at the
+ * identical value.)
  */
-function sweep(param, base, when, dur, arc, glide, bend, lead) {
+function sweep(param, base, when, dur, arc, glide, bend, lead, sub) {
   const steps = arc.length;
-  // Short enough to be an articulation rather than a slur, and always inside
-  // the first contour leg so the ramp times stay in order.
-  const leadT = Math.min(0.012, dur * 0.12, dur / (steps + 1));
+  const points = steps * sub;
+  /**
+   * Short enough to be an articulation rather than a slur, and always inside
+   * the first SUB-point so the ramp times stay in order — which is why the last
+   * term counts `points` and not `steps`. In practice it never binds: the
+   * sub-points are spaced at about `JITTER_HZ`, so `dur / (points + 1)` is
+   * around 33 ms and the 12 ms ceiling or the 12% term wins on every row in the
+   * table. It is here so that a future row with a very long, very finely
+   * subdivided contour cannot silently put the lead ramp after the first
+   * contour ramp.
+   */
+  const leadT = Math.min(0.012, dur * 0.12, dur / (points + 1));
   /**
    * CLAMPED, because `bend` is not always near one. `call()` hands in ±2.4 for
    * a flight call and 0.12 for an alarm, which are deliberate statements about
@@ -1143,10 +1481,26 @@ function sweep(param, base, when, dur, arc, glide, bend, lead) {
   const leadS = clamp(-lead * bend, -2, 2);
   param.setValueAtTime(Math.max(40, base * SEMI ** leadS), when);
   param.exponentialRampToValueAtTime(Math.max(40, base), when + leadT);
+  let from = 0;
   for (let s = 0; s < steps; s++) {
     const k = (s + 1) / steps;
-    const semis = (arc[s] + glide * k) * bend;
-    param.exponentialRampToValueAtTime(Math.max(40, base * SEMI ** semis), when + dur * k);
+    const to = (arc[s] + glide * k) * bend;
+    for (let p = 1; p <= sub; p++) {
+      const w = p / sub;
+      /**
+       * The jitter is NOT multiplied by `bend`. `bend` scales how far this
+       * individual's notes swing and an alarm call sets it to 0.12 to say "this
+       * note refuses to move" — but a note that refuses to move is still coming
+       * out of an animal, and flattening the wander with the contour would make
+       * the alarm the most obviously synthetic thing in the wood.
+       */
+      const semis = from + (to - from) * w + _jitter[s * sub + p];
+      param.exponentialRampToValueAtTime(
+        Math.max(40, base * SEMI ** semis),
+        when + dur * ((s + w) / steps)
+      );
+    }
+    from = to;
   }
 }
 
@@ -1901,6 +2255,26 @@ export class Wildlife {
    * a filter parameter automated anywhere in the file, and the index ceiling is
    * still 2.2. A sine sliding around cannot rasp; there is nothing in it to
    * rasp with.
+   *
+   * AND THEN TWO MORE THINGS ARRIVED, both because the notes still read as
+   * synthetic after the index column was re-fitted (see the Bessel table above
+   * `VOICES`). Neither is a timbre; both are the kind of imperfection an
+   * oscillator cannot have and an animal cannot avoid.
+   *
+   *   A BREATH AT THE FRONT. Every note in this file used to begin as a pure
+   *   sine at amplitude zero and grow. Nothing that moves air does that: a
+   *   syrinx starting from rest passes through a few milliseconds of turbulent,
+   *   broadband, unpitched noise before the membranes lock into oscillation,
+   *   and that click is most of what a listener uses to tell a physical onset
+   *   from a fade-in. It is six to nine milliseconds of pink noise through a
+   *   wide band-pass parked on the note's own frequency — the band-pass is
+   *   because the tract the breath comes through is already shaped for the note
+   *   it is about to sing, so the breath is not white, it is the colour of the
+   *   note. Scaled by `lead`, which is already the table's column for "how hard
+   *   is this note articulated": a kiskadee shouts and gets the full click, a
+   *   motmot arrives on its hoot and barely gets one.
+   *
+   *   AND THE PITCH WANDERS. See `_jitterTrack`.
    */
   _note(dest, when, midi, voice, gain, shape = _flatShape) {
     if (this.voices > VOICE_CEILING) return;
@@ -1909,6 +2283,10 @@ export class Wildlife {
     const f = midiToFreq(midi);
     const bend = shape.glide ?? 1;
     const arc = voice.arc ?? _straightArc;
+    const lead = voice.lead ?? 1.4;
+    // Filled once and read by both sweeps below, so the carrier and the
+    // modulator wander together and the FM ratio holds. See `_jitterTrack`.
+    const sub = _jitterTrack(this.rng, arc.length, dur);
     /**
      * Scaled, never raised past the table's own ceiling.
      *
@@ -1922,11 +2300,11 @@ export class Wildlife {
 
     const carrier = ctx.createOscillator();
     carrier.type = 'sine';
-    sweep(carrier.frequency, f, when, dur, arc, voice.glide, bend, voice.lead ?? 1.4);
+    sweep(carrier.frequency, f, when, dur, arc, voice.glide, bend, lead, sub);
 
     const mod = ctx.createOscillator();
     mod.type = 'sine';
-    sweep(mod.frequency, f * voice.ratio, when, dur, arc, voice.glide, bend, voice.lead ?? 1.4);
+    sweep(mod.frequency, f * voice.ratio, when, dur, arc, voice.glide, bend, lead, sub);
     const modGain = ctx.createGain();
     modGain.gain.setValueAtTime(f * index, when);
     // A taper, not a collapse. The old line went to f * 0.005 in 0.7 of the
@@ -1972,6 +2350,80 @@ export class Wildlife {
     env.gain.exponentialRampToValueAtTime(gain, when + atk);
     env.gain.setValueAtTime(gain, when + hold);
     env.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+
+    /**
+     * THE BREATH. See the block above the method for what it is and why.
+     *
+     * THREE THINGS ABOUT HOW IT IS BUILT, in descending order of how much
+     * trouble getting them wrong would cause.
+     *
+     *   IT IS NOT COUNTED AGAINST `this.voices`, DELIBERATELY. The ceiling
+     *   exists to bound a scheduling spike — a thicket flush building forty-five
+     *   nodes in one turn — and it is enforced per node so that a burst thins
+     *   instead of vanishing. A transient is not an event that can thin: it is
+     *   part of a note that has ALREADY been counted and admitted, and dropping
+     *   it independently would leave that note naked, which is the exact defect
+     *   this code exists to fix. Counting it would also have doubled every
+     *   phrase's apparent footprint the instant it was scheduled — a twenty-note
+     *   woodcreeper would read as forty and start refusing its own tail — and
+     *   `fauna-audio.mjs` fails a run above 68 concurrent. It is torn down from
+     *   its own `onended` and never touches `_release`, which is the counter's
+     *   only decrement.
+     *
+     *   PINK, NOT WHITE, AND NO PLAYBACK-RATE TRICK. Pink noise is
+     *   scale-invariant, so resampling it does not change its spectrum — the
+     *   `rate` knob `_puff` uses would do nothing here. What matters is that
+     *   pink through a constant-Q band-pass delivers roughly the same power
+     *   wherever it is parked, so a 392 Hz motmot and a 3.1 kHz hermit get
+     *   breaths of comparable weight without a per-row number.
+     *
+     *   Q 0.9, WITH THE FILE'S USUAL RULE. `_puff` says never above 1.2,
+     *   because a band-pass at Q 4 on noise is a pitch and a train of them is a
+     *   buzz. This one fires on every note of every phrase, so it is the last
+     *   place in the wood that may be allowed to ring.
+     *
+     * `lead` runs 0.4 (tinamou) to 2.6 (owl) with a default of 1.4, so the
+     * clamp turns that into a quarter to one and a half times `ONSET_LEVEL` —
+     * seven per cent of the note's peak at the bottom, which is an articulation
+     * you would not notice was missing, and forty at the top, which is a shout.
+     * The rows at the two ends are the right ones: a tinamou's whistle swells
+     * out of the dark and a kiskadee hits its note.
+     */
+    const breathGain = (gain * ONSET_LEVEL * clamp(lead / 1.4, 0.25, 1.5)) / ONSET_BAND_LOSS;
+    if (this.noise && breathGain > 0.0006 && this.voices < VOICE_CEILING * 0.92) {
+      const bdur = clamp(dur * 0.12, 0.006, 0.009);
+      const breath = ctx.createBufferSource();
+      breath.buffer = this.noise;
+      breath.loop = true;
+      const breathBand = ctx.createBiquadFilter();
+      breathBand.type = 'bandpass';
+      // On the note's own pitch, a touch above it: the turbulence comes through
+      // a tract already shaped for the note, and a hair sharp reads as air
+      // rather than as a second, duller copy of the fundamental.
+      breathBand.frequency.value = clamp(f * 1.15, 100, 12000);
+      breathBand.Q.value = 0.9;
+      const breathEnv = ctx.createGain();
+      // Instant on and out inside nine milliseconds. The 1.2 ms ramp rather
+      // than a `setValueAtTime` is there only to stop the buffer's first sample
+      // arriving as a step, which is a click of its own.
+      breathEnv.gain.setValueAtTime(0.0001, when);
+      breathEnv.gain.linearRampToValueAtTime(breathGain, when + 0.0012);
+      breathEnv.gain.exponentialRampToValueAtTime(0.0001, when + bdur);
+      breath.connect(breathBand).connect(breathEnv).connect(dest);
+      // A random read offset, `_puff`'s trick: the same three metres of the
+      // buffer on every note in a phrase would be a repeating grain, which is a
+      // pitch, which is the thing this file refuses.
+      breath.start(when, this.rng() * 2);
+      breath.stop(when + bdur + 0.01);
+      breath.onended = () => {
+        try {
+          breathBand.disconnect();
+          breathEnv.disconnect();
+        } catch {
+          /* already gone */
+        }
+      };
+    }
 
     carrier.connect(env).connect(dest);
     carrier.start(when);
@@ -2776,7 +3228,13 @@ export class Wildlife {
       const bus = ctx.createGain();
       bus.gain.value = this.songGain * 1.6;
       bus.connect(spatial.input);
-      const alarm = { ...voice, decay: 0.05, index: 0.9, glide: -0.3 };
+      // 0.45, from 0.9, with the table. An alarm is a shout and keeps the
+      // shouted rows' index rather than the hooters' — but this is the species'
+      // own voice fourteen semitones up, so at 0.9 its second harmonic was
+      // arriving an octave above a note that is already the highest thing the
+      // bird makes. Thin, high and abrupt is the description two lines up; a
+      // pile of overtones is none of the three.
+      const alarm = { ...voice, decay: 0.05, index: 0.45, glide: -0.3 };
       for (let i = 0; i < 3; i++) {
         this._note(bus, t0 + i * 0.085, voice.root + 14 + rngRange(rng, -1, 1), alarm, 0.42);
       }
@@ -3123,7 +3581,21 @@ export class Wildlife {
     // motmots — and given an arc so it sags rather than sliding flat.
     const reed = {
       decay: 0.13,
-      index: 1.4,
+      /**
+       * 1.0, FROM 1.4, AND IT IS STILL THE BRIGHTEST FM VOICE IN THE FILE —
+       * because a squirrel is not a bird.
+       *
+       * The 23 dB rule the table was re-fitted to is a fact about an avian
+       * syrinx tracking its own vocal-tract resonance. A rodent has neither, and
+       * a squirrel's scold is genuinely nasal and genuinely rough, so this row
+       * is the one place a strong second harmonic is correct. What 1.4 got
+       * wrong is the arithmetic rather than the intent: J0(1.4) and J1(1.4) are
+       * within half a decibel of each other, so at 1.4 the note's loudest
+       * partial was the OCTAVE and the written pitch was a passenger. 1.0 puts
+       * 2f0 six decibels down, which is a reedy nasal note that still knows
+       * what pitch it is.
+       */
+      index: 1.0,
       glide: -3.2,
       ratio: 1.0,
       arc: [0.4, -1.0],
@@ -3453,10 +3925,10 @@ export class Wildlife {
    *
    * The note itself is nearly unchanged and did not need to be. A raptor's cry
    * is a hard rise onto pitch and then a long sag — `arc` says up 4.5 semitones,
-   * hold, down 3.9 — and that shape is common to both birds. `index` stays at
-   * 0.3, like the motmot and the potoo and for the same reason: this is very
-   * nearly a pure tone with a catch at the front of it, and any real brightness
-   * turns a raptor into a kazoo.
+   * hold, down 3.9 — and that shape is common to both birds. `index` sits just
+   * above the motmot and the potoo, for the reason those two are down there:
+   * this is very nearly a pure tone with a catch at the front of it, and any
+   * real brightness turns a raptor into a kazoo.
    */
   eagle(position) {
     if (!this.built || this.voices > VOICE_CEILING * 0.7) return;
@@ -3468,7 +3940,12 @@ export class Wildlife {
     bus.connect(spatial.input);
     const cry = {
       decay: 0.5,
-      index: 0.3,
+      // 0.22, from 0.3, moving with the table so the cross-reference above
+      // stays true: the motmot and the potoo are now 0.14 and 0.15, and a
+      // raptor scream is a shade rougher than a hoot but not a shade rougher
+      // than a shout. It is also the longest note in the file at 0.5 s held,
+      // and a long note is where an overtone gets time to be heard as one.
+      index: 0.22,
       glide: 0,
       ratio: 1.0,
       arc: [4.5, 1.0, -3.9],
@@ -3911,7 +4388,12 @@ export class Wildlife {
       // kink — it tears upward and then keeps going, rather than sliding.
       const shriek = {
         decay: 0.19,
-        index: 0.85,
+        // 0.45, from 0.85, with the shouted rows in the table. A kewick has a
+        // hard edge on it and that edge is real — but it is supplied by the
+        // 30 ms noise puff eight lines down, which is a broadband consonant and
+        // is the correct generator for one. The index was a second, worse copy
+        // of the same idea sitting under the whole note instead of its front.
+        index: 0.45,
         glide: 9.5,
         ratio: 1.0,
         arc: [3.5, 1.2],

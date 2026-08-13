@@ -91,8 +91,21 @@ const spot = await page.evaluate(async () => {
   R.controller.fly = true;
   R.controller.position.set(c0.x, 60, c0.z);
   R.controller.velocity.set(0, 0, 0);
-  // Long enough for the rescan (twice a second) plus the sliced build.
-  for (let i = 0; i < 400; i++) await raf();
+  /**
+   * WAIT FOR THE CAVE TO SAY IT IS FINISHED, NOT FOR A NUMBER OF FRAMES.
+   *
+   * This was `for (let i = 0; i < 400; i++) await raf()` with a comment saying
+   * that was "long enough for the rescan plus the sliced build", and it was —
+   * for the build as it stood when the line was written. The build is now cut
+   * against a millisecond deadline rather than a ring count, so how many frames
+   * it takes is a property of the machine and of how many mouths are in range;
+   * on this one it is three hundred to fifteen hundred, and 400 silently became
+   * "sometimes". What that produces is not a timeout, it is
+   * `no built passage within 900 m` — a script that reports the world is wrong
+   * because the script was early. Bounded generously so a build that genuinely
+   * never finishes still says so rather than hanging.
+   */
+  for (let i = 0; i < 6000 && !R.caves.caves.get(c0.k)?.ready; i++) await raf();
   const cave = R.caves.caves.get(c0.k);
   if (!cave?.ready) return null;
   const p = cave.path;

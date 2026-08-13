@@ -4,7 +4,7 @@ import { PeerMesh } from './mesh.js';
 import { Share } from './share.js';
 import { Microphone, PeerVoice } from './voice.js';
 import { Avatar } from '../player/avatar.js';
-import { ScreenGlow, ShareScreen } from '../world/video-surface.js';
+import { ScreenGlow, ShareScreen, screenStandHeight } from '../world/video-surface.js';
 import { aimGround } from '../world/aim.js';
 import { tripUniforms } from '../trip/living.js';
 import { quality } from '../core/quality.js';
@@ -761,18 +761,29 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
     /**
      * The one geographic fact this layer already had, asked a second way.
      *
-     * `aimGround` marches against the terrain, so underground it puts the
-     * screen on the hillside over your head rather than in the passage with
-     * you — see the longer note beside `placeSpeaker` in main.js, which is the
-     * same gesture and the same bug. This reads a flag the body publishes
-     * rather than sampling anything, so the boundary in this file's header is
-     * intact: still no geography here, still one import of the march.
+     * This was `if (controller.roofed) { say('Nowhere to stand a screen down
+     * here.'); return; }` — true at the time, because `aimGround` marched
+     * against the terrain and underground put the screen on the hillside over
+     * your head rather than in the passage with you. It marches against the cave
+     * floor now; see its header and the longer note beside `placeSpeaker` in
+     * main.js, which is the same gesture and was the same bug.
+     *
+     * What replaces it asks the same layer the same kind of question and keeps
+     * this file's boundary intact: `headroom` is a number the march hands back,
+     * not geography sampled here, so there is still exactly one import of the
+     * march and still nothing in the net layer that knows what a cave is.
+     *
+     * A SCREEN IS THE OBJECT THIS MATTERS MOST FOR. The default is 3.12 m tall
+     * and scroll takes it to sixteen metres wide, which is nine metres of
+     * picture — most caves in this world cannot take that, and the useful thing
+     * to tell somebody is the size rather than the place.
      */
-    if (controller.roofed) {
-      say('Nowhere to stand a screen down here.', 3200);
+    const spot = aimGround(controller);
+    if (spot.headroom < screenStandHeight(share.width)) {
+      say(`Not enough headroom for ${share.width.toFixed(1)} m here — scroll it smaller, or move.`, 4600);
       return;
     }
-    share.place(aimGround(controller));
+    share.place(spot);
     say(`Screen here, ${share.width.toFixed(1)} m across. Scroll to resize.`, 5200);
   }
 
@@ -1221,9 +1232,18 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
      * gives. Checked before the picker rather than after, because the picker is
      * several seconds of somebody choosing a window and the honest moment to
      * refuse is the one they pressed the key in.
+     *
+     * WHICH MEANS THE AIM IS TAKEN TWICE, and that is deliberate rather than an
+     * oversight. `adopt` asks `where()` again after the await — `startScreen`'s
+     * own comment explains why, and it is right: the aim IS the decision, and
+     * the direction that counts is the one they are facing when the picture
+     * arrives. This earlier read is not the placement, it is the refusal, and a
+     * refusal delivered after somebody has spent five seconds picking a window
+     * is a much worse thing than one that is a tenth of a degree stale.
      */
-    if (controller.roofed) {
-      say('Nowhere to stand a screen down here. <kbd>P</kbd> again outside.', 4000);
+    const spot = aimGround(controller);
+    if (spot.headroom < screenStandHeight(share.width)) {
+      say(`Not enough headroom for a ${share.width.toFixed(1)} m screen here. <kbd>P</kbd> again where it is taller.`, 4600);
       return;
     }
     if (await share.startScreen()) {
@@ -1250,10 +1270,13 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
     const file = [...(event.dataTransfer?.files ?? [])].find((f) => f.type.startsWith('video/'));
     if (!file) return;
     event.preventDefault();
-    // The third way a screen gets stood up, and it needs the same floor the
-    // other two do. See `moveScreen`.
-    if (controller.roofed) {
-      say('Nowhere to stand a screen down here. Drop it outside.', 4000);
+    // The third way a screen gets stood up, and it needs the same floor and the
+    // same roof the other two do. See `moveScreen`. `startFile` takes the aim
+    // itself, through the same `where()` seam the picker path uses, so this is
+    // the refusal and not the placement — the same split `toggleShare` makes.
+    const spot = aimGround(controller);
+    if (spot.headroom < screenStandHeight(share.width)) {
+      say(`Not enough headroom for a ${share.width.toFixed(1)} m screen here. Drop it where it is taller.`, 4600);
       return;
     }
     share.startFile(file).then((ok) => {

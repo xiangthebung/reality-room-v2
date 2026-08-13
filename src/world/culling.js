@@ -661,15 +661,43 @@ export function packSlab(
      *   thresholds; see InstanceCuller.update.
      */
     update(frustum, eye, poseUnchanged = false) {
-      if (buckets.length === 0) {
+      /**
+       * AN EMPTY BAND IS A FREE LAYER, AND SAYING SO HERE IS WHAT MAKES IT ONE.
+       *
+       * `inBand` tests `horizontal > minDistance && horizontal <= maxDistance`,
+       * so a layer whose two bounds are equal can never accept a bucket however
+       * many it holds — the scan below is guaranteed to reject all of them and
+       * then write nothing. That was a theoretical waste until the impostor band
+       * arrived: at `high` and `ultra` its reach EQUALS the tree reach, so all
+       * fifteen impostor layers sit on an empty band holding the trunk layers'
+       * full set of bucket spheres, and the two top rungs of the ladder would be
+       * paying about 5500 distance tests a repack for meshes that cannot draw.
+       *
+       * This is what lets the change claim the top of the ladder costs nothing,
+       * rather than claiming it costs nothing measurable.
+       */
+      /**
+       * THE EYE IS RECORDED BEFORE THE EARLY-OUTS, AND THAT IS NOT TIDINESS.
+       *
+       * `restoreAll` decides what belongs to this mesh with `inBand`, and
+       * `inBand` returns TRUE for everything while `eyeX` is still null, because
+       * "no update has run yet" has to mean "no band has been applied yet".
+       * Return above this line and an empty-band layer never records an eye — so
+       * `update` correctly draws nothing while `restoreAll` correctly draws
+       * every bucket it holds, and `check:cull` reports ten stations losing
+       * geometry with a worst delta of 616/765. It is the culled frame that is
+       * right in that comparison, which is exactly the shape of failure that is
+       * hardest to read.
+       */
+      eyeX = eye.x;
+      eyeZ = eye.z;
+      if (buckets.length === 0 || minDistance >= maxDistance) {
         mesh.count = 0;
         mesh.visible = false;
         writtenLength = -1;
         scanned = 0;
         return 0;
       }
-      eyeX = eye.x;
-      eyeZ = eye.z;
 
       /**
        * THE SECTOR-EVENT PATH: test the buckets that arrived and nothing else.

@@ -3300,10 +3300,26 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
    * keep: `authored × hour × knob × depth`, composed once, rather than four
    * systems assigning the same field and the frame loop deciding which of them
    * wins. Measured target for the cave work: 0.0092 / #7f9a86 in the open wood
-   * to 0.0179 / #090c0d at thirty metres down.
+   * to 0.0179 / #0a0d24 at thirty metres down.
    */
   let caveT = 0;
-  const CAVE_FOG_COLOUR = new THREE.Color(0x090c0d);
+  /**
+   * THE NEAR HALF OF A TWO-LAYER HAZE, AND IT STAYS DARK.
+   *
+   * This was 0x090c0d — a neutral near-black, so the foreground of a cave had
+   * no hue at all and the middle distance had the same no hue slightly lighter.
+   * It is now the same value in luminance with the energy moved into blue,
+   * which matches `uAmbient` in caves.js: everything unlit down there is
+   * indigo, and the fog is the largest unlit thing in the frame.
+   *
+   * IT IS DELIBERATELY NOT THE BLUE THE REFERENCE'S DISTANCE IS. That colour is
+   * `uHaze` in the cave material, which the fragment shader fades TO with
+   * distance — near-black at your feet, blue by fifty metres. Making this one
+   * the bright blue instead would put the far haze on the rock two metres away
+   * as well, which is the "uniformly lit purple tube" failure the whole pass is
+   * trying to avoid. Two layers, and this is the near one.
+   */
+  const CAVE_FOG_COLOUR = new THREE.Color(0x0a0d24);
   const CAVE_FOG_MUL = 1.95;
   /** Everything else the day is currently asking the lights for. */
   const dayLight = {

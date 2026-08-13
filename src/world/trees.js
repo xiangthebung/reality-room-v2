@@ -2665,6 +2665,35 @@ function makeLeafMaterial(leafTex) {
       // leaves that glow when backlit and leaves that look like plastic. Real
       // backlit foliage is never black — leave it too dark and every canopy card
       // seen against the sky becomes a hard silhouette.
+      /**
+       * THERE IS A REAL TRANSLUCENCY TERM NOW AND THIS STILL EARNS ITS KEEP.
+       *
+       * living.js grew a Barre-Brisebois transmission lobe on every foliage
+       * card (see LIGHTS_END_FRAGMENT), which is the physical version of what
+       * this constant is a stand-in for, so the obvious next move is to take
+       * the stand-in out. Measured instead of assumed: 0.72, 0.5, 0.3 and 0,
+       * all four rendered from ONE page session at the canopy station so the
+       * frames differ in nothing but this number.
+       *
+       * 0 is the old bug back. The crown filling the left of that frame
+       * returns to a flat black paper cut-out against the sky, which is the
+       * exact complaint the emissive was added for, and 0.3 and 0.5 are two
+       * points on the way there.
+       *
+       * The two terms are not substitutes and the reason is in the shape of
+       * the lobe. Transmission is pow(dot(V, -H), 3) — it pays out only where
+       * the eye is looking INTO the sun through the leaf, so it lights the
+       * crowns between you and the light and leaves every other crown in the
+       * frame exactly as dark as it found them. The emissive is
+       * omnidirectional and lifts the floor everywhere. One is the highlight
+       * and one is the floor; deleting the floor to pay for the highlight puts
+       * back the silhouettes.
+       *
+       * Nor is the sum too hot, which was the other half of the question:
+       * nothing in the canopy frame clips, because the transmission is added
+       * to reflectedLight and therefore goes through tone mapping, while this
+       * is modulated by the map's own texel.
+       */
       emissive: new THREE.Color(0x17260f),
       /**
        * `emissiveMap: leafTex` USED TO BE HERE AND IT WAS COSTING A VARYING.

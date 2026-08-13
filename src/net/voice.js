@@ -41,6 +41,20 @@ const GATE_HOLD_S = 0.22;
 const GATE_ATTACK_S = 0.008;
 const GATE_RELEASE_S = 0.09;
 
+/**
+ * How loudly you hear your own echo underground.
+ *
+ * BELOW THE REMOTE LEVEL ON PURPOSE, and it is not modesty. Everybody else's
+ * voice reaches the room send having already been through a PannerNode and the
+ * distance low-pass, so what feeds the taps is a voice that has crossed a
+ * chamber; yours has crossed nothing, and matching the numbers would put your
+ * own repeats well over everybody else's. This is also the one path in the whole
+ * graph where the source and the sink are in the same physical room, so the
+ * conservative number is the one that stays conservative when somebody turns
+ * their speakers up.
+ */
+const SELF_ECHO = 0.34;
+
 export class Microphone {
   /** @param {import('../audio/engine.js').AudioEngine} engine — must be started. */
   constructor(engine) {
@@ -125,6 +139,50 @@ export class Microphone {
      */
     this.destination = ctx.createMediaStreamDestination();
     this.presence.connect(this.destination);
+
+    /**
+     * AND THE ONE THING THIS FILE HAS NEVER DONE: LET YOU HEAR YOURSELF.
+     *
+     * Until now `presence` terminated on the MediaStreamDestination above and
+     * nowhere else, so local voice was never monitored at all — correctly, since
+     * a monitor of your own microphone is a person hearing themselves a few
+     * milliseconds late, which is the single most disruptive thing you can do to
+     * somebody trying to speak. A cave is the exception the whole feature exists
+     * for: standing in a chamber and presenting to a room, hearing nothing come
+     * back is what makes the rock read as wallpaper.
+     *
+     * WET ONLY, WHICH IS THE ENTIRE SAFETY ARGUMENT AND NOT A MIX PREFERENCE.
+     *
+     *   There is no connection from here to the dry path, at any level, ever. A
+     *   dry monitor is microphone → speakers → microphone with nothing between
+     *   the two, which is a feedback loop whose gain is set by how loud the
+     *   player happens to have their speakers, and it howls.
+     *
+     *   What this feeds is `engine.voiceRoomSend`, which is four delay taps and
+     *   a convolver and NO feedback at all (see `_buildVoiceRoom`). Nothing that
+     *   comes back can arrive sooner than 104 ms, by which time it is a distinct
+     *   event rather than part of the loop, and it arrives 6 dB down and rolled
+     *   off at 2 kHz.
+     *
+     *   The browser's own echo cancellation is on — see `open()`, where it stays
+     *   on because people play on speakers — and its job is exactly this path:
+     *   it has the far-end signal and subtracts it from the capture. A delayed,
+     *   darkened copy is the easy case for an AEC, unlike a near-zero-latency
+     *   one.
+     *
+     *   And the gate is upstream of it. Between words this tap is fed a hard
+     *   zero, so there is no idle path for a room to ring round even in
+     *   principle.
+     *
+     * It is silent everywhere except under rock regardless: the send's wet gain
+     * is zero until `setVoiceRoom` says otherwise, and until somebody has been
+     * underground once there is nothing on the other end of this connection at
+     * all.
+     */
+    this.selfEcho = ctx.createGain();
+    this.selfEcho.gain.value = SELF_ECHO;
+    this.presence.connect(this.selfEcho);
+    this.selfEcho.connect(this.engine.voiceRoomSend);
   }
 
   get track() {
@@ -243,6 +301,10 @@ export class Microphone {
       this.gate,
       this.compressor,
       this.presence,
+      // The wet tap goes with the rest of the capture chain. Left connected, a
+      // closed microphone would still be feeding the cave's delay lines from
+      // whatever was in flight when it closed.
+      this.selfEcho,
       this.destination,
     ]) {
       try {
@@ -338,6 +400,15 @@ export class PeerVoice {
      *   way to make it unintelligible.
      *
      * This is precisely the call the engine's own header comment recommends.
+     *
+     * THE CAVE ECHO IS NOT A REGRESSION OF ANY OF THAT, and this is the note to
+     * read before assuming it is. `engine.setVoiceRoom` puts a wet path on this
+     * bus, but it is not the forest send: it is silent above ground, it is
+     * scaled by how far underground the LISTENER is, and it returns to
+     * `trims.voice` rather than to `preMaster` — which is the specific thing
+     * that keeps the Voices slider governing every part of a voice, dry and wet,
+     * and is the rule this comment's own history exists to protect. The engine's
+     * header states the same distinction from the other end.
      */
     this.source = engine.createSpatial(position, {
       refDistance: VOICE_REF_DISTANCE,

@@ -661,6 +661,26 @@ const _mat = new Float64Array(16);
 const _col = new Float64Array(3);
 
 /**
+ * The two ends of the sward, in LINEAR light.
+ *
+ * See the long block in the grass loop for the field that picks between them
+ * and for the luma arithmetic that fixed the values. In short: the texture is
+ * near-neutral now and the material colour is white, so these two triples are
+ * the ONLY colour the commonest card in the world has, which is why they are
+ * up here as named data rather than buried in the loop as literals.
+ *
+ * Linear, not hex, because an instanceColor is multiplied into diffuseColor
+ * with no conversion — writing them as hex would put two of the three factors
+ * in sRGB and one in linear, which is the exact confusion this layer's history
+ * is made of. For anyone who wants to see them: WET is about #7ACC7D and DRY
+ * about #A08E61 once encoded.
+ *
+ * Rec.709 luma 0.4839 and 0.2762, a 1.75x range.
+ */
+const SWARD_WET = [0.19, 0.6, 0.2];
+const SWARD_DRY = [0.35, 0.27, 0.12];
+
+/**
  * Every tree in one 128 m sector — which, since the protected disc went, means
  * every tree in the world including the one you spawn under.
  *
@@ -919,22 +939,97 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
         const gz = rngRange(rng, 0.7, 1.5);
         yawMatrix(_mat, x, y - 0.04, z, rng() * TAU, gx, gy, gz);
         /**
-         * DARKER AND GREENER BY A LARGE MARGIN. 0.22 is a yellow-green at 79
-         * degrees and the old lightness ran up to 0.72, which is a hay meadow
-         * in July — it was the brightest thing in every frame and it read as
-         * lawn. 0.27 centres the hue at 97 degrees, and 0.20-0.44 lightness
-         * puts the sward BELOW the leaf litter it grows out of rather than
-         * above it, which is what ground cover in deep shade actually does.
-         * Costs nothing: this is an instance colour either way.
+         * ==== THE SWARD'S COLOUR COMES OUT OF A FIELD, NOT OUT OF A DIE ====
+         *
+         * The tint before this was three independent uniform draws per tuft —
+         * hue, saturation and lightness, each rolled fresh. That is a correct
+         * description of "varied" and the wrong description of a MEADOW,
+         * because the variation had no spatial extent: every tuft was
+         * statistically independent of the one beside it, so the layer read as
+         * a uniform green with salt-and-pepper noise on it, and the noise
+         * averaged out to a single colour at any distance past a few metres.
+         * The one thing a real sward has that this did not is PATCHES — a
+         * damp hollow that is a different green from the dry rise ten paces
+         * away, big enough to see as a shape.
+         *
+         * So the colour is now a lerp between two authored ends, driven by a
+         * value-noise field of the world position. x0.03 per metre over two
+         * octaves puts the coarse features at about 33 m and the fine at 16 m,
+         * which is the scale at which a difference is a PLACE rather than a
+         * texture. Sampled at 160 000 points on a 1.6 km square the remapped
+         * field has mean 0.491 and its 10th and 90th percentiles sit at 0.01
+         * and 0.98 — so the x1.5 gain is what makes the two ends actually get
+         * reached instead of everything hugging the middle. It costs two
+         * hash-lattice taps on a candidate that has already survived the
+         * acceptance test, in a worker, once per sector.
+         *
+         *
+         * ==== THE LUMA ARITHMETIC, BECAUSE THIS IS THE FOUR-PER-CENT TRAP ==
+         *
+         * A card's screen colour is texture x material colour x instance tint,
+         * and the note at forest.js:580 and the bramble block in
+         * undergrowth.js both record what happens when those are chosen one at
+         * a time by eye. All three of them moved in this change, so all three
+         * were measured. Every number below is LINEAR light, alpha-weighted
+         * over the texels that survive alphaTest 0.4, Rec.709 luma
+         * 0.2126R + 0.7152G + 0.0722B:
+         *
+         *   BEFORE
+         *     texture  herbTuft sat 42   (0.0540, 0.3726, 0.0809)
+         *     material 0x9ecc94          (0.3419, 0.6038, 0.2961)
+         *     tint     mean of the HSL   (0.2806, 0.4511, 0.1888)
+         *     product                    (0.00518, 0.10149, 0.00452)
+         *     LUMA                        0.07401
+         *
+         *   AFTER
+         *     texture  herbTuft sat 10   (0.1286, 0.2195, 0.1411)
+         *     material 0xffffff          (1, 1, 1)
+         *     tint     mean at m=0.491   (0.2714, 0.4322, 0.1593)
+         *     product                    (0.03490, 0.09489, 0.02249)
+         *     LUMA                        0.07691
+         *
+         * +3.9%, which satisfies "at or above" without turning the floor into
+         * a lawn — the sward has to stay BELOW the litter it grows out of.
+         *
+         * WHY DESATURATING THE TEXTURE IS THE POINT AND NOT A SIDE EFFECT. The
+         * old texture's red channel is 0.054. Multiply anything by that and it
+         * is gone: a dry, straw-coloured tint could not render as dry, because
+         * the factor that was supposed to carry the red had already deleted
+         * it, and the same for blue at 0.081. That is why every tuft in the
+         * world came out the same green whatever the die said. A near-neutral
+         * texture carries the SHAPE and the within-blade shading and leaves
+         * the hue entirely to the tint, which is the only arrangement in which
+         * a two-ended colour ramp can actually reach both of its ends.
+         *
+         * Note that desaturating at constant HSL lightness LOWERS luma — green
+         * carries 0.7152 of it, so pulling G toward the grey point costs more
+         * than raising R and B pays back: 0.2838 to 0.1945 on the texture
+         * alone, a 31% drop. Dropping the material colour, whose own luma is
+         * 0.5259, is what pays for that and for the wider tint range.
+         *
+         * THE TWO ENDS. Healthy is a wet lush green and dry is a straw olive;
+         * their lumas are 0.4839 and 0.2762, a 1.75x range, which is what
+         * makes a patch legible as a patch. They are written in linear light
+         * because that is what an instanceColor IS — three multiplies it into
+         * diffuseColor with no conversion — and authoring them as hex would
+         * mean two of the three factors here were sRGB and one was not.
+         *
+         * EXACTLY THREE rng DRAWS, as before, and that is not tidiness. This
+         * generator is shared by every layer in the sector and consumed in
+         * order, so taking a different number of values here would re-roll
+         * every fern, stone, log and mushroom placed after it — the whole
+         * world would move, and the before/after screenshots this change was
+         * judged on would be of two different forests.
          */
-        _tint.setHSL(
-          0.27 + rngRange(rng, -0.03, 0.04),
-          rngRange(rng, 0.3, 0.52),
-          rngRange(rng, 0.2, 0.44)
-        );
-        _col[0] = _tint.r;
-        _col[1] = _tint.g;
-        _col[2] = _tint.b;
+        const patchy = clamp01(fbm2(x * 0.03 + 61.3, z * 0.03 + 17.7, 2) * 1.5 + 0.5);
+        // Per-tuft jitter ON TOP of the field, so neighbours inside one patch
+        // are not identical. Zero-mean, so it cannot move the luma above.
+        const wet = clamp01(patchy + rngRange(rng, -0.13, 0.13));
+        const lift = rngRange(rng, 0.86, 1.14);
+        const warm = rngRange(rng, -0.03, 0.03);
+        _col[0] = (SWARD_DRY[0] + (SWARD_WET[0] - SWARD_DRY[0]) * wet + warm) * lift;
+        _col[1] = (SWARD_DRY[1] + (SWARD_WET[1] - SWARD_DRY[1]) * wet) * lift;
+        _col[2] = (SWARD_DRY[2] + (SWARD_WET[2] - SWARD_DRY[2]) * wet - warm) * lift;
         const grow = Math.max(gx, gy, gz);
         push(l, _mat, _col, x, y - 0.04 + bound.cy * grow, z, bound.r * grow);
       }

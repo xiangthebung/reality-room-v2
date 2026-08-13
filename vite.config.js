@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { readFileSync } from 'node:fs';
 
 /**
  * The signalling server runs as its own process (`npm run server`, or both at
@@ -122,8 +123,44 @@ if (SIGNALLING_PORT === DEV_PORT) {
  */
 const PERF = process.env.RR_PERF === '1';
 
+/**
+ * CREDITS.md HAS TO TRAVEL WITH THE BUILD, AND IT IS A LICENCE OBLIGATION
+ * RATHER THAN A COURTESY.
+ *
+ * The ambience beds are CC BY, which requires attribution to accompany the
+ * work in any reasonable manner for the medium. `CREDITS.md` sits at the repo
+ * root, and Vite copies `public/` — not the root — so a deployed build shipped
+ * the audio and left the attribution behind in a git repository the player
+ * never sees. That is a licence violation with no symptom: everything works,
+ * nothing errors, and nobody notices until the recordist does.
+ *
+ * Emitting it as an asset is the smallest fix that is actually correct, and it
+ * is deliberately not the WHOLE answer. A file in `dist/` that nothing links to
+ * is defensible for a repo-shaped distribution and thin for a hosted one; the
+ * durable version is a line of fine print on the gate screen pointing at it,
+ * which is a user-visible design choice and therefore not mine to make
+ * unilaterally. This guarantees the text ships; where it is surfaced is still
+ * open. See the note at the top of CREDITS.md.
+ *
+ * It reads the file at `generateBundle` rather than at config time so that
+ * editing credits does not require restarting the dev server, and it fails the
+ * BUILD if the file is missing — silently shipping without attribution is the
+ * exact failure this exists to prevent, so it must not degrade quietly.
+ */
+function emitCredits() {
+  return {
+    name: 'rr-emit-credits',
+    apply: 'build',
+    generateBundle() {
+      const source = readFileSync('CREDITS.md', 'utf8');
+      this.emitFile({ type: 'asset', fileName: 'CREDITS.md', source });
+    },
+  };
+}
+
 export default defineConfig(({ command }) => ({
   root: '.',
+  plugins: [emitCredits()],
   define: {
     // `command === 'serve'` is `npm run dev`, where the instrument is always
     // available — that is what the console handle `RR.perf` is for.

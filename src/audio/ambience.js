@@ -198,6 +198,57 @@ export class Ambience {
      * has far fewer simultaneous callers and a frog is a dozen grains.
      */
     this.voices = 0;
+
+    /**
+     * ==== WHAT THE RECORDED BED TAKES FROM THIS FILE ==========================
+     *
+     * `audio/bed.js` streams a real field recording of a rainforest onto
+     * `worldBus` — the unresolvable far chorus, which is the one thing here that
+     * cannot be synthesised. When it is playing, two of the layers above are
+     * saying the same thing twice, and this is where they give way.
+     *
+     * DUCKED, NOT DELETED, AND THE WIND IS THE ONE THAT MATTERS. `windGain` and
+     * `windBand` follow the gust value main.js derives from `uWind`, which is the
+     * SAME gust the trees are visually bending to — hearing the gust arrive a
+     * moment before the canopy moves is, per this file's own header, most of what
+     * makes the forest feel like one system rather than two. A recorded bed has
+     * air in it but it has no idea what this forest's trees are doing, so
+     * switching the synthesised wind off would leave the canopy waving in silence
+     * and would sever the one coupling this file was built around. It goes to
+     * roughly half instead, and the gust modulation is preserved exactly because
+     * the duck is a MULTIPLIER on the whole expression rather than a new target:
+     * the ratio between calm and squall is untouched, only the depth moves.
+     *
+     * THE INSECT WALL GIVES UP MORE, because it is a direct duplicate. The long
+     * block by `cicadaSource` describes that layer as a stand-in for a continuous
+     * enveloping chorus, built out of two resonant bands because that was the
+     * only way to get one without a recording. With a recording, it is a second
+     * chorus half an octave off the first, and two insect walls beating against
+     * each other is worse than either alone. How far it gives way is declared PER
+     * BED in the manifest, because it is a fact about the file: a night recording
+     * that is wall-to-wall katydids should push this most of the way out, and a
+     * sparse dawn one should barely touch it.
+     *
+     * ZERO PRESENCE IS BIT-IDENTICAL TO NOT HAVING A BED. Both factors below
+     * evaluate to exactly 1 when `bedPresence` is 0, and `x * 1` is `x` for every
+     * float, so every audio measurement in this repo keeps meaning what it meant
+     * until somebody puts a file in `public/audio/beds/`.
+     */
+    this.bedPresence = 0;
+    this.bedDuck = { wind: 1, insects: 1 };
+  }
+
+  /**
+   * @param {number} presence 0..1 — how much recorded bed is audible
+   * @param {{wind: number, insects: number}} [duck] the floor each layer falls
+   *   to at full presence, as an amplitude multiplier. 1 is untouched.
+   */
+  setBedPresence(presence, duck = null) {
+    this.bedPresence = clamp01(presence);
+    if (duck) {
+      if (Number.isFinite(duck.wind)) this.bedDuck.wind = clamp01(duck.wind);
+      if (Number.isFinite(duck.insects)) this.bedDuck.insects = clamp01(duck.insects);
+    }
   }
 
   build(streamPosition) {
@@ -1515,12 +1566,26 @@ export class Ambience {
     // — a continuous bed does not get to sit at the same gain as an event and
     // read as equally loud. The frequency sweeps that give the gust its
     // brightness are untouched; only how much of it there is moved.
-    this.windGain.gain.setTargetAtTime(0.022 + g * 0.055 * leafy, now, 0.5);
+    /**
+     * The recorded bed's share of these two layers. See `setBedPresence`.
+     *
+     * Both are exactly 1 with no bed loaded, so the four writes below are the
+     * same four writes they have always been. Only the LEVELS are ducked — the
+     * two frequency sweeps are untouched, because the point of keeping the wind
+     * at all is that it moves with the gust the trees bend to, and a wind that
+     * got quieter without also getting duller is what a gust half a mile off
+     * actually sounds like.
+     */
+    const bed = clamp01(this.bedPresence);
+    const windDuck = 1 - bed * (1 - this.bedDuck.wind);
+    const insectDuck = 1 - bed * (1 - this.bedDuck.insects);
+
+    this.windGain.gain.setTargetAtTime((0.022 + g * 0.055 * leafy) * windDuck, now, 0.5);
     this.windBand.frequency.setTargetAtTime(520 + g * 1500 * leafy, now, 0.7);
     // The lid rides the gust too, so a squall still gets brighter — it just
     // stops taking two octaves of hiss with it. See windTop.
     this.windTop.frequency.setTargetAtTime(2600 + g * 2800 * leafy, now, 0.7);
-    this.windLowGain.gain.setTargetAtTime(0.014 + g * 0.032, now, 0.9);
+    this.windLowGain.gain.setTargetAtTime((0.014 + g * 0.032) * windDuck, now, 0.9);
 
     /**
      * THE INSECT WALL, CROSSFADED ON THE HOUR. See the build block for what the
@@ -1547,7 +1612,11 @@ export class Ambience {
     // Squared, so the cicadas hold up through most of the daylight and then
     // drop away quickly at the end of it rather than fading linearly all
     // afternoon. Real ones do exactly this: they stop almost together.
-    this.cicadaGain.gain.setTargetAtTime(0.55 * day * day * (1 - clamp01(rain) * 0.8), now, 6);
+    this.cicadaGain.gain.setTargetAtTime(
+      0.55 * day * day * (1 - clamp01(rain) * 0.8) * insectDuck,
+      now,
+      6
+    );
     // The wall gets brighter as it gets louder — an insect chorus at full cry
     // is genuinely higher in pitch than a few stragglers, because the loudest
     // species are the highest.
@@ -1563,7 +1632,7 @@ export class Ambience {
      * the gain. A katydid bed as loud as the cicada one is a wall of whistles
      * and it is unbearable within about ninety seconds.
      */
-    this.katydidGain.gain.setTargetAtTime(0.4 * night * night, now, 8);
+    this.katydidGain.gain.setTargetAtTime(0.4 * night * night * insectDuck, now, 8);
 
     /**
      * THE RAIN, AND THE TWO TIME CONSTANTS ARE THE FEATURE. See the build block.

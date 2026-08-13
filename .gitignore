@@ -17,3 +17,11 @@ dist-perf/
 .env
 .env.*
 !.env.example
+
+# The ambience beds. Generated, or licensed from somewhere else — either way not
+# ours to commit. `scripts/audio-bed-make.mjs` writes a synthesised placeholder
+# here so the player can be tested without licensing anything, and a real bed
+# would be a third-party recording with its own terms. `AmbienceBed.load` returns
+# null when this directory is absent, which is what keeps a stock checkout
+# measuring exactly the forest every script in scripts/ was calibrated against.
+public/audio/beds/

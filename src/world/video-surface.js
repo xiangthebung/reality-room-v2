@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { NOISE3, makeLiving, tripUniforms } from '../trip/living.js';
-import { WATER_LEVEL, heightAt } from './terrain.js';
+import { STAND_PROBE_M, standingFloor } from './aim.js';
 
 /**
  * A screen, standing in a forest.
@@ -1008,8 +1008,25 @@ export class VideoSurface {
  */
 const baseFor = (w) => Math.min(2.4, Math.max(0.35, w * 0.18));
 
+/**
+ * How tall a screen of this width stands, ground to top edge, in metres.
+ *
+ * EXPORTED BECAUSE SOMEWHERE HAS A ROOF ON IT. Every caller that stands a screen
+ * up now has to ask whether it fits before it does — `aimGround` hands back the
+ * clear height of the passage you are aiming into and this is the number to
+ * compare it against. Derived from `baseFor` and the 16:9 rather than written
+ * down again, because the two would drift the first time either was tuned and
+ * the symptom would be a screen refused in a chamber it fits in.
+ *
+ * It is a surprisingly big number. The 4.2 m default stands 3.12 m tall, which
+ * is more than a squeeze in rock has; that is a property of screens rather than
+ * a problem with this, and it is exactly why the question is asked.
+ */
+export const screenStandHeight = (w) => baseFor(w) + w * (9 / 16);
+
 /** Legs, as a fraction of half the width. Inboard of the corners, like an easel. */
 const LEG_SPAN = 0.82;
+
 
 /**
  * Brightness, and why it is not 1.
@@ -1144,13 +1161,31 @@ export class ShareScreen extends VideoSurface {
       const lx = at.x + cos * side * off;
       const lz = at.z - sin * side * off;
       /**
-       * Clamped to the waterline for the same reason the jetty's deck is: on a
-       * riverbed `heightAt` keeps going down under the water, so a screen put
-       * down at the edge of the stream grew a pair of two-metre stilts
-       * disappearing into it. Standing on the surface is both cheaper and what
-       * it looks like from the bank.
+       * THE SAME FLOOR THE SCREEN ITSELF WAS STOOD ON, asked the same way.
+       *
+       * This was `Math.max(heightAt(lx, lz), WATER_LEVEL)` — clamped to the
+       * waterline for the same reason the jetty's deck is: on a riverbed
+       * `heightAt` keeps going down under the water, so a screen put down at the
+       * edge of the stream grew a pair of two-metre stilts disappearing into it.
+       * `standingFloor` still does exactly that on the surface, and the clamp is
+       * still the reason it does.
+       *
+       * What it adds is the other floor. A screen standing in a passage is at
+       * `at.y`, which came out of a march against the CAVE floor, while the legs
+       * sampled the height field and reached for the hillside thirty metres
+       * overhead — so `topY - groundY` went hugely negative, `drop` collapsed to
+       * its 12 cm minimum, and a screen underground stood on two stubs with a
+       * gap under them. Fixing the placement alone would have left exactly that,
+       * which is why the two questions are now one function.
+       *
+       * `at.y + STAND_PROBE_M` and not `at.y`: the answer depends on the height
+       * it is asked from as well as the xz, and a point exactly ON a floor is
+       * the one height that does not say. The constant is imported rather than
+       * written as a 1 because `aimGround` resolved the placement from the same
+       * height — if the two ever disagreed, the legs would end on a different
+       * ring's floor from the picture they hold up. See `STAND_PROBE_M`.
        */
-      const groundY = Math.max(heightAt(lx, lz), WATER_LEVEL);
+      const groundY = standingFloor(lx, lz, at.y + STAND_PROBE_M);
       /**
        * ONE NUMBER, USED FOR BOTH THE LENGTH AND THE POSITION.
        *

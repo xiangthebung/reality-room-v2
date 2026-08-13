@@ -669,9 +669,52 @@ const VERTEX_BODY = /* glsl */ `
     // read as one body of air.
     float gust = sin(dot(rrWorld.xz, vec2(0.055, 0.037)) - uWind.x) * 0.5 + 0.5;
     gust = 0.35 + gust * 0.65;
-    float flutter = sin(uWind.x * 2.7 + rrPhase * 6.2831) * 0.5
-                  + sin(uWind.y * 1.31 + rrPhase * 12.9) * 0.5;
-    float amp = rrFlex * gust * (0.16 + 0.25 * uSway) * rrScale;
+    /**
+     * ==== WOOD IS ON A SLOWER BAND THAN FOLIAGE ==========================
+     *
+     * Every plant in this world moved at the same two frequencies. uWind.x
+     * runs at 0.55 rad/s and uWind.y at 0.83, so the pair below are 1.485 and
+     * 1.087 rad/s — 0.236 Hz and 0.173 Hz, a four-second sway. That is a
+     * defensible number for a frond and it is the wrong number for a
+     * twenty-metre bole, and the reason a wood full of it reads as ONE
+     * material is that mass is the main thing the eye uses to tell wood from
+     * leaf. A trunk and the leaves hanging off it oscillating in lockstep at
+     * one period is the visual signature of a single object being wobbled.
+     *
+     * So RR_BARK gets its own pair, a third the rate: 0.495 and 0.365 rad/s,
+     * which is a thirteen- and a seventeen-second period. Trunks and boughs
+     * now lean and come back over a dozen seconds while the canopy on them
+     * moves four times as often — the two bands beat against each other and
+     * nothing in the wood repeats on a period you can count.
+     *
+     * AMPLITUDE 0.72, and the mask is already there. There is no separate
+     * trunk mask because aFlex IS one: it is 0 at the root and 1 at the
+     * outermost shoot, so the bole barely moves and the whips at the ends move
+     * fully, which is the mask a hand-authored one would be trying to draw.
+     * The 0.72 is on top of that — wood of a given flex is stiffer than a leaf
+     * card of the same flex.
+     *
+     * THE ONE HONEST COST: THE CANOPY IS NO LONGER WELDED TO THE BOUGHS.
+     * A leaf card carries the flex of the branch it hangs on (see leafCard in
+     * trees.js) and used to evaluate an identical formula, so a card and its
+     * branch tip displaced by exactly the same vector. On two bands they
+     * disagree. The bound is small and worth writing down: peak displacement
+     * is rrFlex x gust x 0.16 x aScale, and PLANT_SCALE.tree is 0.6, so a
+     * flex-1 twig travels at most 0.096 m sober. Worst case the two bands are
+     * in antiphase and the card sits 19 cm from where its branch tip is — on
+     * a leaf CLUSTER 2 to 4 m across, hung on a branch tip that is inside the
+     * foliage and not visible from outside it. Checked in the canopy shot.
+     */
+    #ifdef RR_BARK
+      float flutter = sin(uWind.x * 0.90 + rrPhase * 6.2831) * 0.55
+                    + sin(uWind.y * 0.44 + rrPhase * 12.9) * 0.45;
+      float stiff = 0.72;
+    #else
+      float flutter = sin(uWind.x * 2.7 + rrPhase * 6.2831) * 0.5
+                    + sin(uWind.y * 1.31 + rrPhase * 12.9) * 0.5;
+      float stiff = 1.0;
+    #endif
+    float amp = rrFlex * gust * (0.16 + 0.25 * uSway) * rrScale * stiff;
     transformed.x += flutter * amp;
     transformed.z += flutter * amp * 0.62;
     // Plants bend, they do not stretch: pull the tip down as it swings out so
@@ -1466,6 +1509,97 @@ const EMISSIVEMAP_FRAGMENT = /* glsl */ `
 `;
 
 /**
+ * ==== LEAF TRANSLUCENCY, AND IT IS NOT A TRIP EFFECT ======================
+ *
+ * The one thing a hundred-thousand-triangle Unity walking sim was doing that
+ * seventeen million triangles here were not: light coming THROUGH the foliage
+ * rather than only off it. Every leaf in this wood was an opaque Lambert
+ * surface with a constant emissive bolted on, and the tell is the canopy shot —
+ * every crown between the eye and the sky was a black paper cut-out, because a
+ * Lambert term is dot(N, L) and a leaf seen against the sun has N pointing away
+ * from L by construction. Real foliage does the opposite: backlit is the
+ * BRIGHTEST a leaf ever gets, and the whole reason a canopy reads as a canopy
+ * is that its far side is lit and glowing while its near side is in shade.
+ *
+ * The approximation is Colin Barre-Brisebois and Marc Bouchard, GDC 2011,
+ * "Approximating Translucency for a Fast, Cheap and Convincing Subsurface
+ * Scattering Look". Five lines, no new texture, no new pass:
+ *
+ *   H = normalize(L + N * distortion)      the light vector, bent by the normal
+ *   I = pow(saturate(dot(V, -H)), power)   view-dependent: you see it when you
+ *                                          are looking INTO the light
+ *   out += lightColour * I * thickness * albedo
+ *
+ * WHY THE DISTORTION TERM IS THE WHOLE TRICK, since it is the part that looks
+ * arbitrary. Without it (distortion 0) this is a pure back-lobe: it lights the
+ * exact silhouette of the sun and nothing else, which is a specular star, not
+ * scattering. Bending -L toward the surface normal spreads the lobe around the
+ * shape of the object, so the glow wraps the crown's rim the way light actually
+ * leaks around a mass of leaves. 0.38 here — enough wrap that a card angled 60
+ * degrees off the sun still catches some, short of the value at which the term
+ * stops being direction-dependent and becomes a second ambient.
+ *
+ * WHY IT GOES IN `lights_fragment_end` AND NOT IN FRAGMENT_BODY WITH EVERYTHING
+ * ELSE IN THIS FILE. FRAGMENT_BODY runs after `dithering_fragment`, which is
+ * after tone mapping, after the sRGB encode and after the fog mix. Light added
+ * there is added to an encoded, fogged pixel: it would not be tone-mapped, it
+ * would not be bloomed by the pipeline (the bloom threshold reads the HDR
+ * buffer), and at range it would be painted on top of the fog instead of behind
+ * it, which puts a bright fringe on every distant crown. Adding to
+ * `reflectedLight.directDiffuse` means it is light, and everything downstream
+ * treats it as light. This is the same argument the rrShade block in
+ * FRAGMENT_BODY makes in reverse, and that block is a MULTIPLY, which is why it
+ * is allowed to live after the fog.
+ *
+ * `directionalLights[0]` IS THE SUN, and the invariant has two independent
+ * reasons behind it. atmosphere.js constructs exactly two directional lights in
+ * the whole project and adds the sun first; and three sorts the light array
+ * with `shadowCastingAndTexturingLightsFirst` (WebGLLights.js:233), which puts
+ * the shadow-casting sun ahead of the fill whatever the traversal said. With
+ * shadows off both are non-casting and the sort is stable, so the add order
+ * decides and the answer is the same. Taking the sun's own uniform is also what
+ * makes this free across the day cycle: three folds `intensity` into the colour
+ * uniform, so the glow goes orange at dusk and black at midnight with no code.
+ *
+ * `directionalLights[0].direction` is VIEW space and points from the surface
+ * toward the light; `vViewPosition` is the surface-to-camera vector in the same
+ * space; `geometryNormal` is the view normal, already flipped by
+ * `normal_fragment_begin` for the back face of a DoubleSide card. So all three
+ * vectors are in one space and no matrix is needed.
+ *
+ * ONLY THIN THINGS. `RR_PLANT && !RR_BARK` is every foliage card in the world —
+ * canopy, sward, ferns, the nine understorey layers — and excludes trunks,
+ * boughs and fallen logs, which are the two places a translucency term looks
+ * obviously wrong. Wood is not thin.
+ *
+ * THICKNESS. Under RR_LEAF this reads `vRrCore`, which the vertex stage now
+ * ships as the canopy's own occlusion factor (see the block at the end of
+ * VERTEX_BODY) — so a card on the sunlit rim of a crown glows and a card buried
+ * six deep in the middle of one does not, which is exactly what thickness
+ * means. Everything else gets a constant: a frond is a frond wherever it is.
+ *
+ * COST is one normalize, one dot, one pow and a mad, on fragments that have
+ * already survived the alpha test. See the measured numbers in the report; it
+ * is inside the run-to-run noise of `perf:stations`.
+ */
+const LIGHTS_END_FRAGMENT = /* glsl */ `
+#include <lights_fragment_end>
+#if defined( RR_PLANT ) && !defined( RR_BARK ) && NUM_DIR_LIGHTS > 0
+  {
+    #ifdef RR_LEAF
+      float rrThick = 0.30 + 0.70 * vRrCore;
+    #else
+      float rrThick = 0.85;
+    #endif
+    vec3 rrLtL = normalize( directionalLights[ 0 ].direction + geometryNormal * 0.38 );
+    float rrLt = pow( max( dot( geometryViewDir, -rrLtL ), 0.0 ), 3.0 );
+    reflectedLight.directDiffuse +=
+      directionalLights[ 0 ].color * ( rrLt * rrThick * 0.62 ) * diffuseColor.rgb;
+  }
+#endif
+`;
+
+/**
  * The fragment half.
  *
  * Runs on the material's final colour, after three's lighting, so it modulates
@@ -1529,9 +1663,104 @@ const FRAGMENT_BODY = /* glsl */ `
      * is already a deep shade. 0.4 encoded is 0.13 linear, and at that point the
      * interior of every tree is black rather than shaded.
      */
+    /**
+     * ==== AND THE CROWN HAS A TOP AND A BOTTOM ============================
+     *
+     * The block above gives a crown an inside. This gives it an UP. They are
+     * the two halves of the same fake — canopy self-occlusion without a
+     * shadow map or an AO bake — and neither alone is enough: aCore is
+     * measured as a distance from the crown's centre and takes ABS of the
+     * vertical component (see normaliseCore in trees.js), so it cannot tell
+     * the sunlit top of a crown from the shaded underside of it. Every tree
+     * in the wood was therefore lit as though the sky were a full sphere.
+     *
+     * THE SIGNAL IS THE WORLD-SPACE Y OF THE CARD'S OWN NORMAL, and it costs
+     * ONE dot product. A leaf card's normal points away from the centre of
+     * its cluster rather than off the face of the quad (see leafCard in
+     * trees.js), so it is a direction out of the crown: +1 on top of the
+     * crown, -1 underneath it, 0 around the sides. That is a hemispherical
+     * sky-occlusion term, which is what a vertical gradient is an
+     * approximation OF — a leaf turned up sees sky and a leaf turned down
+     * sees the tree above it.
+     *
+     * THE HONEST DIFFERENCE from the world-height gradient this is modelled
+     * on: theirs is (worldY - base) / height, which needs the tree's own base
+     * and extent in the shader. Nothing here has either. The crown geometry is
+     * merged and instanced, so the only per-tree quantities available in the
+     * vertex stage are the instance matrix's translation and scale, and
+     * normalising by a height the material does not know would darken a 7 m
+     * sapling uniformly and leave a 29 m kapok untouched. Adding an attribute
+     * for it is 4 bytes on 7.45 M vertices plus a varying, on the layer this
+     * file has spent the most effort taking exports OFF. The normal is already
+     * fetched, already interpolated, and carries a strictly better signal.
+     *
+     * ONE dot, not a mat3 multiply. worldN = transpose(mat3(viewMatrix)) *
+     * viewN, and only the y component is wanted, so it is dot(viewMatrix[1].xyz,
+     * normal) — three multiplies. faceDirection undoes the DOUBLE_SIDED flip
+     * that normal_fragment_begin applied: without it the term would invert
+     * as you walked around a tree, because the flipped normal always faces the
+     * camera and a card seen from behind would claim to be pointing the other
+     * way.
+     *
+     * SQUARED, and the floor is 0.66. The square is the same argument
+     * normaliseCore makes for its own square — absorption through foliage is
+     * exponential, so a linear ramp puts the half-dark contour halfway up the
+     * crown, far higher than the eye expects. 0.66 in sRGB-encoded space is
+     * about 0.39 of the linear light, and it MULTIPLIES the interior term
+     * above, so an interior card on the underside of a crown lands at 0.52 x
+     * 0.66 = 0.34 encoded, 0.09 linear. That is as dark as anything in this
+     * forest gets and it is the right place for it: the middle of the bottom
+     * of a crown is the darkest place in a wood.
+     *
+     * THE TRANSLUCENCY DOES NOT READ THIS, deliberately, and it is the same
+     * distinction. Reflected light and transmitted light are opposites here:
+     * the underside of a crown gets the least of the first and the most of the
+     * second, which is why backlit foliage reads as a bright rim against a
+     * dark mass. Folding this into the thickness would have cancelled the
+     * effect the translucency exists to produce. See LIGHTS_END_FRAGMENT.
+     */
     float rrLdist = distance(vTripWorld, uEye);
-    float rrShade = mix(0.52, 1.0, vRrCore);
+    float rrUpN = dot(viewMatrix[1].xyz, normal);
+    #ifdef DOUBLE_SIDED
+      rrUpN *= faceDirection;
+    #endif
+    float rrLift = rrUpN * 0.5 + 0.5;
+    float rrShade = mix(0.52, 1.0, vRrCore) * mix(0.66, 1.0, rrLift * rrLift);
     gl_FragColor.rgb *= mix(1.0, rrShade, 1.0 - smoothstep(22.0, 68.0, rrLdist));
+  #elif defined(RR_PLANT) && !defined(RR_BARK)
+    /**
+     * ==== THE SAME GRADIENT ON EVERY CARD THAT IS NOT A CROWN =============
+     *
+     * Grass, ferns, bushes, the nine understorey layers. Here the vertical
+     * gradient is not a fake at all — it is the contact shadow that a tuft of
+     * anything has at its own root, where the plant is standing inside its own
+     * litter and its own neighbours. Every one of these layers was lit as a
+     * flat card from root to tip, which is why the floor of this wood reads as
+     * a printed pattern rather than as things standing IN something.
+     *
+     * IT IS FREE, and that is the whole reason it looks like this. aFlex is
+     * already t-squared up every card in the project (cardClump in
+     * undergrowth.js and clumpGeometry in forest.js both write it), it is
+     * already exported as vTripFlex for the wind, and t-squared is already
+     * the gradient power the effect wants — 2.0, against the 1.74-2.56 the
+     * reference uses. So this is one mix on a varying that was already paid
+     * for, with no new attribute, no new export and no new fetch.
+     *
+     * The floor is 0.60 rather than the crown's 0.66 because these cards are
+     * SHORT: the gradient is compressed into half a metre of grass instead of
+     * eight metres of crown, so it has less room to be gentle in. flexBase
+     * lifts the curve for anything attached by a stem rather than rooted (a
+     * bush's lowest leaves are not on the ground), which is exactly the right
+     * behaviour and comes for free with the attribute.
+     *
+     * Same distance fade and the same reason as the crown: this multiplies a
+     * pixel that has already been mixed toward the fog, so at range it would
+     * be dirt on the air rather than shade on a plant. Faded sooner, because a
+     * tuft of grass at forty metres is two pixels tall.
+     */
+    float rrLdist = distance(vTripWorld, uEye);
+    float rrShade = mix(0.60, 1.0, vTripFlex);
+    gl_FragColor.rgb *= mix(1.0, rrShade, 1.0 - smoothstep(14.0, 44.0, rrLdist));
   #endif
 
   #ifdef RR_BARK
@@ -2787,6 +3016,13 @@ ${FRAGMENT_LIB}
       )
       .replace('#include <map_fragment>', MAP_FRAGMENT)
       .replace('#include <emissivemap_fragment>', EMISSIVEMAP_FRAGMENT)
+      /**
+       * The only splice in this file that adds LIGHT rather than modulating the
+       * finished pixel — see the header on LIGHTS_END_FRAGMENT for why it has to
+       * be here and not with the rest of the fragment work. Unlit materials have
+       * no such chunk and the replace is a no-op on them.
+       */
+      .replace('#include <lights_fragment_end>', LIGHTS_END_FRAGMENT)
       .replace(
         '#include <dithering_fragment>',
         `#include <dithering_fragment>\n${FRAGMENT_BODY}`

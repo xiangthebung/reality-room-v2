@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tripUniforms, NOISE3 } from '../trip/living.js';
 import { FASTEST_USEFUL_PERIOD } from '../core/quality.js';
+import { provideRenderer } from './impostor.js';
 
 /**
  * The render pipeline.
@@ -279,6 +280,17 @@ export class Pipeline {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
+    /**
+     * The forest's impostor band needs a renderer and cannot be given one.
+     *
+     * `buildForest(scene, seed)` runs at main.js:182 and takes no renderer;
+     * this constructor runs at 288 and owns the only one there is. Publishing
+     * it here — rather than adding a hook to main.js, which is not this
+     * change's file — is what lets `forest.cull()` bake its atlases a few
+     * frames later, while the entry gate is still up. See the block at the top
+     * of impostor.js for the two alternatives and why both are worse.
+     */
+    provideRenderer(renderer);
     this.size = new THREE.Vector2(1, 1);
     this.bloomEnabled = true;
     /** The luminous wake has its own switch. Debug only. */

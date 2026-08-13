@@ -45,12 +45,54 @@ const sample = () =>
     };
   });
 
+/**
+ * SAMPLE UNTIL THE WORLD STOPS CHANGING, NOT UNTIL A STOPWATCH SAYS SO.
+ *
+ * This waited 400 ms after each `setMode` and it was wrong for the reason this
+ * repo has now been caught by five separate times: a fixed wait photographs a
+ * half-arrived world, and the numbers it prints look entirely reasonable. The
+ * symptom here was an ultra restore that missed by **110 632 triangles and one
+ * draw call** — which is exactly one 128 m ground chunk, and is how the ground
+ * ring was identified as the straggler rather than the tree field, whose
+ * `pending` is already 0 by the time the gate drops.
+ *
+ * It got worse when the impostor bake landed, because that adds fifteen more
+ * slabs and an atlas bake to the queue, and 400 ms stopped covering it. But the
+ * bake did not CAUSE it — disabling the bake entirely still failed two runs in
+ * three. A longer timeout would only move the failure rate, not remove it.
+ *
+ * So this polls instead: take a reading, take another, and only accept when two
+ * consecutive readings agree on both the triangle count and the draw count. That
+ * is self-calibrating — it does not need to know which subsystem is still
+ * arriving, which matters because the answer has already changed once — and it
+ * fails loudly rather than silently if the world never settles.
+ */
+const STABLE_TRIES = 80;
+async function settled(label) {
+  let prev = null;
+  for (let i = 0; i < STABLE_TRIES; i++) {
+    // The world's OWN signal first — both streaming rings drained and every
+    // impostor atlas baked. Polling for two equal readings was not enough on
+    // its own: the ground ring takes one chunk per frame, and two samples 250 ms
+    // apart can agree while a chunk is still inbound. That is the difference
+    // between "not changing right now" and "finished", and it cost this test
+    // two rounds of a mismatch that was always exactly one ground chunk.
+    if (await page.evaluate(() => window.RR.forest.settled)) {
+      const s = await sample();
+      if (prev && s.tris === prev.tris && s.calls === prev.calls) return s;
+      prev = s;
+    }
+    await page.waitForTimeout(250);
+  }
+  console.log(`  (${label}: never settled in ${STABLE_TRIES} tries — reporting last reading)`);
+  return prev;
+}
+
 console.log('level      tris        draws  reach                        scale  fog   shad  dens');
 const rows = {};
 for (const level of ['ultra', 'high', 'medium', 'low', 'potato']) {
   await page.evaluate((l) => window.RRSettings.setMode(l), level);
-  await page.waitForTimeout(400);
-  const s = await sample();
+  const s = await settled(level);
   rows[level] = s;
   console.log(
     `${level.padEnd(10)} ${String(s.tris).padStart(10)}  ${String(s.calls).padStart(5)}  ` +
@@ -63,8 +105,7 @@ for (const level of ['ultra', 'high', 'medium', 'low', 'potato']) {
 // Back to ultra and confirm it is bit-for-bit what it was, i.e. the new rung
 // costs the existing ladder nothing.
 await page.evaluate(() => window.RRSettings.setMode('ultra'));
-await page.waitForTimeout(400);
-const again = await sample();
+const again = await settled('ultra restore');
 console.log(`\nultra restored: ${again.tris} tris (was ${rows.ultra.tris}) ${
   again.tris === rows.ultra.tris ? '— exact' : '— MISMATCH'
 }`);

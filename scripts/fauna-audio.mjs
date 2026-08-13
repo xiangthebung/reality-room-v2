@@ -310,6 +310,28 @@ async function voice(label, body, ms = 5000, every = 700) {
   return { label, ...result };
 }
 
+/**
+ * `--only=music`: MEASURE THE COMPOSITE AND ITS REFERENCES, AND NOTHING ELSE.
+ *
+ * DEBUG ONLY, and it announces itself in the output for exactly that reason —
+ * it skips the ~50 voice rows and with them the 0.12 wildlife ceiling, which is
+ * the check in this file with the most teeth. `npm run check:fauna-audio` does
+ * not pass it and nothing in package.json does.
+ *
+ * It exists because the composite check is a RATIO of two windows a few seconds
+ * apart, and calibrating a ratio needs many samples of it, while a full run
+ * spends five minutes on fifty rows that cannot affect it. This turns a
+ * five-minute sample into a thirty-second one, which is the difference between
+ * six samples and thirty when working out how much of the lift is drift.
+ *
+ * What it cannot answer: whether the lift is the same at the END of a full run
+ * as it is thirty seconds in. Calibrate the exploration here, then confirm the
+ * margin on full runs — that is what was done, and the two distributions are
+ * recorded together beside MARGIN_DB.
+ */
+const MUSIC_ONLY = args.only === 'music';
+if (MUSIC_ONLY) console.log('[--only=music] voice rows SKIPPED — this is not a gate run\n');
+
 const rows = [];
 rows.push(await measure('baseline (no music)', 5000));
 
@@ -397,7 +419,7 @@ for (const name of Object.keys(SPECIAL)) {
   }
 }
 
-for (let i = 0; i < VOICE_COUNT; i++) {
+for (let i = 0; i < VOICE_COUNT && !MUSIC_ONLY; i++) {
   const name = VOICE_NAMES[i];
   const { before = '', ms = 5000, every = 700 } = SPECIAL[name] ?? {};
   rows.push(await voice(name, `${before}${sing(i)}`, ms, every));
@@ -539,32 +561,136 @@ for (const [name, body, ms] of [
   ['owl', 'w.nightGain = 0.3; w.owl(at(50))'],
   ['insects', 'w.nightGain = 0.3; w.stridulate(at(7))'],
 ]) {
+  if (MUSIC_ONLY) break;
   rows.push(await voice(name, body, ms ?? 5000));
 }
 
-// Everything at once, with the jukebox running and the trip at its peak: the
-// worst case for both level and node count.
-await page.evaluate(() => {
-  window.RR.music.start();
-  window.RR.director.seek(190);
-});
-await page.waitForTimeout(2500);
-rows.push(
-  await voice(
-    'all + music + peak',
-    // The roster size comes from the module (`window.__voices`), not from a
-    // literal 12 — which is what this was, and what silently stopped
-    // exercising the newest rows the moment they landed. The bolt and the
-    // hooves are a big stag, because the worst case for level and node count
-    // is the biggest animal in the wood leaving at speed.
-    'w.tripLevel = 1; w._songBudget = 5; w.song(at(8), Math.floor(Math.random()*window.__voices), {answer:true}); w.flush(at(5),1,1); w.bolt(at(6),"deer",1,1.54); w.hoof(at(5),"deer",1,1.54);',
-    7000
-  )
-);
+/**
+ * THE COMPOSITE, AND THE THREE WINDOWS IT TAKES TO MEASURE IT HONESTLY.
+ *
+ * Everything at once, with the jukebox running and the trip at its peak: the
+ * worst case for both level and node count. The row is the only one in the file
+ * that deliberately plays the record, and that is what made it impossible to
+ * judge against an absolute number — see the comment on MARGIN_DB below.
+ *
+ * So it is measured against a REFERENCE captured in the same run, on the same
+ * analyser, over the same window length, with the record and the trip in the
+ * same place and ZERO wildlife events fired. Two of them, one either side of
+ * the composite:
+ *
+ *   - The record is a step sequencer, not a loop of audio. Its own level moves
+ *     bar to bar, and the trip's level moves with `state.time`, which advances
+ *     in real seconds while a window is open. A single reference taken before
+ *     the composite is therefore taken at a different point in both. Bracketing
+ *     measures that drift instead of inheriting it: the composite sits midway
+ *     between the two, so the mean of them removes the linear part of whatever
+ *     is moving. The gap between them is printed on every run and gated
+ *     separately — see SPREAD_MAX_DB — because a bracket wide enough to be
+ *     hiding something should void the run rather than pass it.
+ *
+ * `stage()` runs before every one of the three windows and not once before all
+ * three, for the same reason. Pinning `step16` puts every window at the same
+ * bars of the same record; re-seeking the director puts every window at the
+ * same trip level. Both are free, and between them they delete the largest
+ * within-run term in the ratio.
+ */
+const REF_MS = 7000;
+
+const stage = async () => {
+  await page.evaluate(() => {
+    const m = window.RR.music;
+    if (!m.playing) m.start();
+    // The sequencer's position. The track loops every `bars * 16` steps, so
+    // zeroing it hands every window the same bars in the same order.
+    m.step16 = 0;
+    window.RR.director.seek(190);
+  });
+  // Long enough for `startAt`'s gain ramp (setTargetAtTime, tau 0.4) to be
+  // inaudibly short of 1 — six time constants. It is spent before every window
+  // and not just the first, because the point of `stage` is that the three
+  // windows are preceded by IDENTICAL conditioning, not merely sufficient
+  // conditioning.
+  await page.waitForTimeout(2500);
+};
+
+/**
+ * The reference body FIRES NOTHING, and it goes through `voice()` rather than
+ * `measure()` on purpose: identical code path, identical loop, identical
+ * accumulation, identical window, right down to the no-op function being called
+ * on the same 700 ms cadence. The only difference between this row and the
+ * composite is what that function does — here, nothing at all.
+ *
+ * `w.tripLevel = 1` is set anyway. It is a wildlife field and with no events it
+ * changes nothing, but a reference that differs from the composite in any state
+ * at all is a reference that has to be argued about later.
+ */
+const REF_BODY = 'w.tripLevel = 1;';
+const COMPOSITE_BODY =
+  // The roster size comes from the module (`window.__voices`), not from a
+  // literal 12 — which is what this was, and what silently stopped
+  // exercising the newest rows the moment they landed. The bolt and the
+  // hooves are a big stag, because the worst case for level and node count
+  // is the biggest animal in the wood leaving at speed.
+  'w.tripLevel = 1; w._songBudget = 5; w.song(at(8), Math.floor(Math.random()*window.__voices), {answer:true}); w.flush(at(5),1,1); w.bolt(at(6),"deer",1,1.54); w.hoof(at(5),"deer",1,1.54);';
+
+/**
+ * STAGE, MEASURE, THEN CHECK THE STAGING SURVIVED THE WINDOW.
+ *
+ * `voice()` calls `ready()`, and `ready()` rebuilds the world if the page has
+ * reloaded underneath it — which it does, because four agents are editing this
+ * repo and Vite reloads on every save. A rebuild ends with `music.stop()` and
+ * `director.ground()`. So a reload landing between `stage()` and the window it
+ * staged leaves that window measuring a SOBER, SILENT forest under a label
+ * saying it played the record.
+ *
+ * That is not a hypothetical rounding error, it inverts the answer. A destaged
+ * reference reads around 0.02 against a composite near 0.13 and invents a lift
+ * of +16 dB; a destaged COMPOSITE is worse, because it reads far too quiet, the
+ * lift goes hugely negative, and the run PASSES. A silent failure that passes is
+ * the only kind this file cannot afford.
+ *
+ * So the state is read back after every window and the window is retaken if it
+ * was not what it claimed. `__at` catches the reload itself — it is the last
+ * thing `ready()` assigns and therefore the honest witness that the probe
+ * standing now is the one that was standing then.
+ */
+async function stagedVoice(label, body, attempt = 0) {
+  await stage();
+  const row = await voice(label, body, REF_MS);
+  const intact = await page
+    .evaluate(() => ({
+      probe: !!window.__at,
+      playing: window.RR.music?.playing === true,
+      // `active` is false once `time` runs past `total`, which is the other way
+      // a window can quietly become a sober one. TRIP_SECONDS is 290 and the
+      // seek is 190, so this can only be a reload, but it costs nothing to say
+      // which of the two happened.
+      trip: window.RR.director?.state?.active === true,
+    }))
+    .catch(() => ({ probe: false, playing: false, trip: false }));
+  if (intact.probe && intact.playing && intact.trip) return { ...row, music: true };
+  if (attempt >= 2) {
+    problems.push(
+      `[harness] ${label}: window was not staged (probe ${intact.probe}, playing ${intact.playing}, trip ${intact.trip}) after ${attempt + 1} attempts`
+    );
+    return { ...row, music: true };
+  }
+  await ready();
+  return stagedVoice(label, body, attempt + 1);
+}
+
+const refA = await stagedVoice('ref: music+peak, no fauna', REF_BODY);
+const composite = await stagedVoice('all + music + peak', COMPOSITE_BODY);
+const refB = await stagedVoice('ref: music+peak, no fauna (2)', REF_BODY);
+rows.push(refA, composite, refB);
 
 const pad = (s, n) => String(s).padEnd(n);
+// 30 and not 22: the reference rows have the longest labels in the file and a
+// truncated one would print as an unrecognisable stub in the row it matters
+// most to read.
+const LABEL_W = 30;
 console.log(
-  pad('voice', 22),
+  pad('voice', LABEL_W),
   pad('rms', 8),
   pad('peak', 8),
   pad('centroid', 10),
@@ -576,7 +702,7 @@ console.log(
 );
 for (const r of rows) {
   console.log(
-    pad(r.label, 22),
+    pad(r.label, LABEL_W),
     pad(r.rms.toFixed(4), 8),
     pad(r.peak.toFixed(3), 8),
     pad(`${r.centroid.toFixed(0)} Hz`, 10),
@@ -607,12 +733,269 @@ for (const r of rows) {
   // The ceiling in wildlife.js is 58 and it is enforced per node, so a handful
   // over is a burst that started under the limit and finished just past it.
   if (r.maxVoices > 68) fails.push(`${r.label}: ${r.maxVoices} concurrent nodes — scheduling burst`);
-  // Nothing in this file may be as loud as the record on the jukebox.
-  if (r.rms > 0.12) fails.push(`${r.label}: rms ${r.rms.toFixed(3)} — louder than the music`);
+  /**
+   * NOTHING IN THIS FILE MAY BE AS LOUD AS THE RECORD ON THE JUKEBOX — except
+   * the three rows that are deliberately playing the record.
+   *
+   * `r.music` IS A FLAG ON THE ROW, NOT A TEST ON ITS LABEL, and that is a
+   * deliberate correction rather than a tidy-up. This was `/\+ music/` against
+   * the label, and before that it was very nearly `/music/`, which would have
+   * quietly exempted `baseline (no music)` — the QUIETEST row in the file — from
+   * the ceiling it exists to enforce. A rule that decides what a measurement
+   * means by pattern-matching its display name will keep doing that every time
+   * somebody adds a row or rewords one. The rows that play the record are
+   * constructed a few lines apart from each other; they can say so.
+   */
+  if (!r.music && r.rms > 0.12) {
+    fails.push(`${r.label}: rms ${r.rms.toFixed(3)} — louder than the music`);
+  }
+}
+
+/**
+ * THE COMPOSITE IS JUDGED AGAINST THE RECORD, NOT AGAINST A NUMBER.
+ *
+ * `all + music + peak` starts the jukebox and seeks the trip to its peak on
+ * purpose, so holding it to a ceiling defined as "quieter than the record"
+ * asked it to be quieter than itself. It failed for that reason and for no
+ * other, for two commits.
+ *
+ * WHY THE FLAT NUMBER THAT REPLACED IT WAS ALSO WRONG. Twelve full runs, six of
+ * a clean tree at HEAD against six of the working tree, strictly alternated on
+ * isolated worktrees on separate ports:
+ *
+ *     clean HEAD   0.1105 0.1212 0.1350 0.1357 0.1357 0.1365   fails 5/6 at 0.12
+ *     working tree 0.0946 0.1146 0.1171 0.1342 0.1345 0.1362   fails 3/6 at 0.12
+ *
+ * A 3.2 dB swing on IDENTICAL CODE — and the clean tree is the one that fails
+ * more often. The metric is load-sensitive on top of that: slower runs read
+ * quieter, so a busy machine passes a build a quiet one rejects. Any fixed
+ * ceiling has to clear that 3.2 dB before it starts having an opinion about the
+ * animals, and a 0.20 ceiling clears it by about 1.3 dB — which is to say it
+ * would have failed randomly, which is the exact thing it was written to stop.
+ *
+ * Layer attribution settled what is actually in the number. A window firing the
+ * record and the trip peak with ZERO wildlife events reads 0.127–0.165, over
+ * the old 0.12 ceiling by itself; across a full run all 49 wildlife-only rows
+ * sit at 0.019–0.045, never within a factor of 2.6 of it. Measured composite
+ * peaks are 0.45–0.66 against a limiter at −5 dBFS, ratio 18. The row was
+ * reporting the master limiter's output level and nothing whatsoever about the
+ * animals, and it will go on doing that however the threshold is set.
+ *
+ * So the composite is compared to a reference captured in the SAME RUN, on the
+ * same analyser, over the same window, with the record and the trip staged
+ * identically and no wildlife fired — which is what the original rule meant all
+ * along. Not "is it quiet", which it cannot be, but "does the wildlife add more
+ * than MARGIN_DB on top of the record". Every term the twelve runs above were
+ * swinging on — machine load, the state of the tree, the bed, the limiter's
+ * operating point — is in the reference as much as it is in the composite, and
+ * divides out.
+ *
+ * WHAT THIS WAS CALIBRATED AGAINST, because it is the first thing that will
+ * change. There was NO AMBIENCE BED IN THE TREE when the numbers below were
+ * taken: `public/audio/beds/manifest.json` was renamed to `.off` and
+ * `AmbienceBed.load` returns null, the stock bed-free state the repo ships. A
+ * placeholder bed at gain 0.3 had briefly been live and put roughly 1.5 dB of
+ * pink noise into every window; those readings were discarded rather than
+ * averaged in. A real bed is coming and will raise every window again. The
+ * PREDICTION — and it is a prediction, not something measured here — is that a
+ * music-relative ceiling absorbs it, because the bed lands in the reference and
+ * the composite alike and cancels in the ratio. That is the entire reason this
+ * check is relative. If the bed lands and this line starts arguing, check that
+ * prediction first: re-measure the lift with and without the bed before touching
+ * MARGIN_DB.
+ */
+/**
+ * HOW MUCH THE WILDLIFE MAY ADD ON TOP OF THE RECORD, IN dB.
+ *
+ * MEASURED, NOT CHOSEN. Twelve full runs of this file on a quiet machine, bed
+ * off, nothing else on the GPU — refA / composite / refB / lift dB / spread dB.
+ * The first seven set the margin; the last five were run afterwards, unchanged,
+ * to confirm it:
+ *
+ *     0.1303 0.1353 0.1111   +1.00   1.39
+ *     0.1343 0.1376 0.1115   +0.98   1.62
+ *     0.1274 0.1343 0.1051   +1.26   1.67
+ *     0.1281 0.1305 0.1117   +0.74   1.19
+ *     0.1247 0.1328 0.1074   +1.17   1.30
+ *     0.1271 0.1343 0.1114   +1.04   1.15
+ *     0.1282 0.1406 0.1104   +1.43   1.30
+ *     ---- margin fixed at 2.5 here, nothing below it fed the choice ----
+ *     0.1110 0.1321 0.1141   +1.40   0.24
+ *     0.1276 0.1318 0.1105   +0.88   1.25
+ *     0.1289 0.1345 0.1118   +0.97   1.23
+ *     0.1278 0.1346 0.1145   +0.92   0.95
+ *     0.1239 0.1337 0.1076   +1.26   1.22
+ *
+ *     lift       0.739 … 1.430   mean 1.09, sd 0.22, peak-to-peak 0.69 dB
+ *     reference  0.1125 … 0.1229                     peak-to-peak 0.77 dB
+ *     spread     0.238 … 1.672
+ *
+ * 2.5 dB is 1.07 dB above the worst of those twelve, which is about six
+ * standard deviations, and 1.5x the widest peak-to-peak swing the lift has ever
+ * shown here. Compare what it replaced: a flat 0.20 sat about 1.3 dB above the
+ * loudest of the twelve runs quoted above, against a metric that swings 3.2 dB
+ * — 0.4x its own noise, i.e. a coin toss.
+ *
+ * WHAT IT TAKES TO TRIP IT, measured, because a gate nobody has seen fail is a
+ * gate nobody should trust. The composite body's wildlife was scaled up by
+ * multiplying `songGain` and `bodyGain` together, full runs, everything else
+ * untouched:
+ *
+ *     1x   (shipped)   lift +1.09 mean of twelve      pass
+ *     3x   (+9.5 dB)   lift +1.87                     PASS — still under
+ *     16x  (+24.1 dB)  lift +4.29                     fail, and the only fail
+ *
+ * Interpolating the upper leg, the margin trips at about 4.6x — call it +13 dB
+ * on the wildlife layer. THAT IS BLUNT, AND THE BLUNTNESS IS THE LIMITER, NOT
+ * THE MARGIN: 24 dB of extra animal bought 3.2 dB of extra composite, roughly
+ * 7:1 compression, because the master limiter is already pinned by the record
+ * before the first bird opens its mouth. No threshold on this row can be sharp,
+ * whatever number it is set to, and tightening the margin toward the noise
+ * would buy a little sharpness at the price of the random failures this change
+ * exists to stop. The sharp instrument for wildlife level is the 0.12 per-row
+ * ceiling above, which measures the animals with no record playing at all and
+ * is nowhere near its limit (49 rows, 0.019–0.045). This row is the coarse
+ * backstop behind it. Read it that way.
+ *
+ * THE EVIDENCE THAT THE RATIO ACTUALLY CANCELS THE SWING, which is the whole
+ * claim and is not demonstrated by the seven runs above — that machine was too
+ * quiet, its absolute composite moved only 0.65 dB all day. Fourteen
+ * `--only=music` samples caught the metric in two distinct absolute states, a
+ * quiet cluster around reference 0.104 and a loud one around 0.129:
+ *
+ *     reference  0.1034 … 0.1297   =  1.97 dB of common-mode swing
+ *     composite  0.1331 … 0.1666   =  1.95 dB, i.e. it moved with it
+ *     lift        1.887 … 2.679    =  0.79 dB
+ *
+ * A 2 dB shift in what the master bus was doing produced 0.79 dB of movement in
+ * the lift. That is the common-mode term dividing out, measured rather than
+ * asserted. It is not perfect and the residual has a direction worth knowing:
+ * the loud cluster read ~0.33 dB LOWER lift than the quiet one, which is what a
+ * limiter should do — the deeper it is in, the harder it squashes whatever the
+ * animals add on top.
+ *
+ * Those fourteen samples sit ~1.2 dB hotter than a gate run and their lift is
+ * NOT comparable to it. `--only=music` skips the voice rows, and the voice rows
+ * leave `w.dark` and `w.nightGain` mutated (the potoo, tinamou, owl and insect
+ * rows each set them and nothing puts them back), so the composite in a full
+ * run fires a quieter set of animals than the composite in a fast one. A fast
+ * sample can therefore exceed this margin without meaning anything, which is
+ * one more reason it prints that it is not a gate run.
+ *
+ * `--margin=` overrides it. That exists so the gate's teeth can be demonstrated
+ * without editing the file — `--margin=-3` on a healthy tree must fail — and it
+ * is a debug knob, not a way to get a red build to go green. Nothing in
+ * package.json passes it.
+ */
+const MARGIN_DB = Number(args.margin ?? 2.5);
+
+/**
+ * WHEN THE BRACKET IS TOO WIDE TO INTERPOLATE ACROSS.
+ *
+ * Its own constant and not MARGIN_DB, because the two numbers measure different
+ * things and tying them together was wrong. `refSpread` is the SLOPE of the
+ * drift across ~26 s, not the error in the mean: the composite sits midway
+ * between the two references, so the mean already removes the linear part of
+ * whatever is drifting, and only the curvature survives into the lift. That is
+ * why a spread of 1.1–1.7 dB coexists with a lift that repeats to a fifth of a
+ * dB.
+ *
+ * The drift is real and nearly always in the same direction — refA is the
+ * louder end in eleven of the twelve runs recorded above, by 0.24–1.67 dB, the
+ * twelfth being the one that came in at 0.24 and leaned the other way. It is
+ * NOT the animals: `maxVoices` reads 0 in the first reference row against 48–59
+ * in the composite, so nothing of the wildlife is sounding before it.
+ *
+ * The SECOND reference is not always quite as clean — it has been seen with
+ * `maxVoices` 3, which is the composite's own tail still ringing 2.5 s later,
+ * against 59 at its peak. That biases refB up, the reference up, and therefore
+ * the lift DOWN, so it makes the gate slightly more forgiving and never more
+ * severe. It was left alone rather than fixed with a longer settle: widening
+ * the gap between the brackets to chase three nodes would have traded a known
+ * conservative bias for more of the drift above, and it would have invalidated
+ * the twelve-run distribution the margin is built on. If it ever grows past a
+ * handful of nodes, that trade is worth revisiting.
+ *
+ * The
+ * leading suspicion is the trip ducking the world back down after `ready()`
+ * grounded it, plus the drone's own gain LFOs, which run at 0.017–0.085 Hz —
+ * periods of 12 to 59 s, against a bracket 26 s wide. That is a hypothesis and
+ * nobody has measured it; do not repeat it as fact.
+ *
+ * So 3.0 dB is not a tolerance on the drift, it is a floor under GROSS failure:
+ * a window that lost the record entirely reads around 0.02 against 0.13 and
+ * shows up here as ~16 dB. It is 1.8x the worst honest spread seen and an order
+ * of magnitude under the thing it is looking for.
+ */
+const SPREAD_MAX_DB = 3.0;
+
+const dbRatio = (a, b) => 20 * Math.log10(a / Math.max(b, 1e-9));
+const reference = (refA.rms + refB.rms) / 2;
+const lift = dbRatio(composite.rms, reference);
+/**
+ * How far the two reference windows — identical conditioning, their centres
+ * about 26 s apart, one composite between them — disagree with each other.
+ *
+ * Printed on every run rather than assumed, because it is the number that says
+ * how much drift the bracket had to absorb before the lift meant anything. It
+ * is measured at 1.15–1.67 dB and is a SLOPE, not an error bar; see
+ * SPREAD_MAX_DB for why those are not the same thing.
+ */
+const refSpread = Math.abs(dbRatio(refB.rms, refA.rms));
+// Sign carried rather than a hardcoded '+', which printed the debug knob's own
+// limit as "+-3.00 dB" — the one line whose whole job is to be read carefully.
+const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+console.log(
+  `\nmusic-relative: composite ${composite.rms.toFixed(4)} vs reference ${reference.toFixed(4)} ` +
+    `(${refA.rms.toFixed(4)} / ${refB.rms.toFixed(4)}, spread ${refSpread.toFixed(2)}/${SPREAD_MAX_DB.toFixed(2)} dB)` +
+    `\n                lift ${signed(lift)} dB, limit ${signed(MARGIN_DB)} dB`
+);
+if (lift > MARGIN_DB) {
+  fails.push(
+    `all + music + peak: wildlife adds ${signed(lift)} dB over the record ` +
+      `(rms ${composite.rms.toFixed(4)} vs reference ${reference.toFixed(4)}, limit ${signed(MARGIN_DB)} dB)`
+  );
+}
+/**
+ * A REFERENCE THAT DISAGREES WITH ITSELF CANNOT JUDGE ANYTHING.
+ *
+ * If the two halves of the bracket are further apart than SPREAD_MAX_DB, the
+ * run did not hold the record and the trip still enough for the lift to be a
+ * measurement of the wildlife, and the correct answer is "this run is void",
+ * not a pass. Failing is right rather than warning: a gate that prints a caveat
+ * and exits 0 is a gate nobody reads.
+ */
+if (refSpread > SPREAD_MAX_DB) {
+  fails.push(
+    `reference disagrees with itself by ${refSpread.toFixed(2)} dB ` +
+      `(${refA.rms.toFixed(4)} vs ${refB.rms.toFixed(4)}, limit ${SPREAD_MAX_DB.toFixed(2)} dB) ` +
+      `— the run cannot judge the composite`
+  );
 }
 if (problems.length) fails.push(...problems);
 
-writeFileSync(`${OUT}/fauna-audio.json`, JSON.stringify({ rows, fails }, null, 2));
+writeFileSync(
+  `${OUT}/fauna-audio.json`,
+  JSON.stringify(
+    {
+      rows,
+      // The music-relative verdict, broken out so a run can be compared with
+      // another run without re-deriving it from the row list.
+      music: {
+        refA: refA.rms,
+        refB: refB.rms,
+        reference,
+        composite: composite.rms,
+        liftDb: lift,
+        refSpreadDb: refSpread,
+        marginDb: MARGIN_DB,
+      },
+      fails,
+    },
+    null,
+    2
+  )
+);
 console.log(fails.length ? `\nPROBLEMS:\n  ${fails.join('\n  ')}` : '\nno problems');
 await browser.close();
 process.exitCode = fails.length ? 1 : 0;

@@ -380,6 +380,24 @@ export class CaveAudio {
      */
     this.engine.setRoom(this.mix, 0.25 + 0.75 * clamp01(room));
     this.engine.setOcclusion(this.mix);
+    /**
+     * …and the one room that is NOT on the send above.
+     *
+     * Voice is deliberately outside `setRoom` — engine.js argues it at length
+     * and net/voice.js records the bug that came of getting it wrong — so speech
+     * is the one thing in the mix that would otherwise be exactly as dry sixty
+     * metres inside a mountain as it is in the clearing. That is the single most
+     * noticeable dead spot down here, because a cave is precisely the place a
+     * person expects to hear themselves come back.
+     *
+     * ON `mix` ALONE AND NOT ON `room`. The size argument that `setRoom` makes
+     * is about how wet a crawl is against a chamber, and it is right about the
+     * world's own sounds. A voice is not one of them: the taps in engine.js are
+     * fixed distances chosen to be countable, and scaling their level by how
+     * wide the passage happens to be at your feet would make somebody's speech
+     * pulse as they walked, which is a thing no room does.
+     */
+    this.engine.setVoiceRoom(this.mix);
 
     /**
      * The draught, on the SQUARE of tightness, so it is genuinely absent in the

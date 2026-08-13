@@ -665,6 +665,31 @@ export class Controller {
     }
 
     /**
+     * …and the closed end, which is the one direction the wall push cannot hold.
+     *
+     * A SECOND CORRECTION RATHER THAN A CHANGE TO THE FIRST, deliberately. The
+     * push above is perpendicular to the passage on purpose — a push aimed at the
+     * ring's centre has a backward component that exactly cancels a walking pace
+     * in a keyhole's slot, which cost a day to find and reads as being blocked by
+     * geometry that is not there. Giving it any forward-backward authority
+     * reopens that. So `caveSample` measures the overrun past the last ring with
+     * standing room in it and reports it separately, and this puts the body back
+     * on that plane along the passage's own tangent and does nothing else.
+     *
+     * Displacement only, and the velocity is left alone, exactly like the wall
+     * and the trunks: walking into the back of a chamber at an angle should slide
+     * you along it rather than stop you dead. Without this the passage's far end
+     * is not solid at all — the mesh there faces inward and is not drawn from
+     * behind, so you walk through the rock, out of containment, and the floor
+     * clamp puts you on the hillside overhead. Same failure as the roof clamp
+     * below, one axis over.
+     */
+    if (s.axial > 0) {
+      this.position.x -= s.axX * s.axial;
+      this.position.z -= s.axZ * s.axial;
+    }
+
+    /**
      * …and out of a pillar, which is the one thing down here you go ROUND.
      *
      * Breakdown blocks are reported as floor and climbed. A column is a post
