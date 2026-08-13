@@ -780,6 +780,41 @@ body.locked .help {
   display: block;
   border-radius: 5px;
 }
+/* THE FREEZE CALL-OUT, under the graph. Absent until something has actually
+   frozen — see `_paintFreezeBadge` in ui/stats.js — because alarm furniture on
+   a healthy session is how a reader learns to stop seeing it.
+
+   `.hot` is the state where the dip that produced it is still inside the
+   graph's own window, and it is deliberately the loudest thing this overlay can
+   draw. A 100 ms freeze is two pixels of trace; the whole point of this element
+   is that nobody should have to find them. */
+#stats-freeze {
+  margin-top: 6px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  white-space: nowrap;
+  color: #8a9a8d;
+  background: rgba(255, 255, 255, 0.05);
+}
+#stats-freeze[hidden] {
+  display: none;
+}
+#stats-freeze.hot {
+  color: #fff1ef;
+  background: #d8281a;
+  box-shadow: 0 0 10px rgba(255, 68, 56, 0.55);
+}
+/* ...and the panel's own edge with it, so a freeze registers in the corner of
+   the eye rather than only for somebody already reading the numbers. */
+#stats.froze {
+  border-color: rgba(255, 68, 56, 0.85);
+  box-shadow: 0 0 14px rgba(255, 68, 56, 0.35);
+}
 
 /* ---- settings menu -------------------------------------------------------
    The one piece of chrome in this project that is allowed to be a full panel,

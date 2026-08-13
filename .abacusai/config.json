@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx vite build *)"
+      "Bash(npx vite build *)",
+      "Bash(cd \"c:\\Users\\bing bong\\Projects\\reality room v2\" && try { (Invoke-WebRequest -Uri http://127.0.0.1:5180/ -UseBasicParsin…)"
     ]
   }
 }

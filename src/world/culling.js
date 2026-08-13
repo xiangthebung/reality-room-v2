@@ -99,18 +99,70 @@ const _sphere = new THREE.Sphere();
  * hundred small objects rather than a few million floats.
  *
  *
- * A SECTOR EVENT FORCES A FULL REPACK, DELIBERATELY.
+ * A SECTOR EVENT USED TO FORCE A FULL REPACK, AND NOW FORCES A SUFFIX.
  *
  * The incremental path below remembers the bucket list it last wrote, by
- * INDEX. Insert or remove a bucket and every index after it means
- * something different, so the prefix the packer believes is already correct is
- * not — and the failure mode is not a crash or a blank screen, it is a buffer
- * that looks entirely plausible and draws the wrong trees. There is a version
- * of this that keeps the incremental path alive across sector changes, with
- * tombstoned buckets and stable indices, and it is not worth the class of bug
- * it invites for a saving of well under a millisecond on one frame in a
- * thousand. `writtenLength = -1` on every mutation; the arrays are regrown to
- * match; the next repack is a full one.
+ * INDEX. Insert or remove a bucket and every index after it means something
+ * different, so the prefix the packer believes is already correct is not — and
+ * the failure mode is not a crash or a blank screen, it is a buffer that looks
+ * entirely plausible and draws the wrong trees. That argument was right, and
+ * `writtenLength = -1` on every mutation was the safe answer to it. What it
+ * missed is that the two mutations are not symmetric:
+ *
+ *   INSERT APPENDS. `owned` is a Map and a new sector is a new key, so its
+ *   buckets go on the END of the flattened list. Every index that already
+ *   existed still means what it meant. `written` is therefore still true, and
+ *   because `update` builds its candidate list in ascending bucket order the
+ *   new buckets can only ever appear AFTER every old one — so the diff
+ *   diverges at the first new visible bucket and copies from there. A tree
+ *   sector landing 384 m behind the player is out of the frustum entirely and
+ *   the repack it forces is now literally zero bytes, where it used to be the
+ *   whole visible set.
+ *
+ *   REMOVE SHIFTS, but only from the removed span onwards. Everything before
+ *   the evicted sector's first bucket keeps its index, and `written` is
+ *   strictly ascending, so the prefix of it that is still valid is exactly the
+ *   entries below that index. Truncating to there is the same argument the
+ *   incremental path already makes about the camera moving, applied to the
+ *   bucket list instead of the frustum.
+ *
+ * THE COUNT HAS TO COME DOWN WITH THE TRUNCATION, and this is the one trap in
+ * here. `update` early-returns without touching `mesh.count` when the candidate
+ * list matches what was written — so if a removal shortened `writtenLength`
+ * without shortening `count`, the very next repack could decline to do anything
+ * while the mesh still drew instances belonging to the sector that was just
+ * evicted. Their slab span is already back on the free list, so those bytes are
+ * whatever the last tenant left. `truncateWritten` therefore recomputes the
+ * count of the prefix it keeps, which is O(visible buckets) and correct by the
+ * same arithmetic `update` uses.
+ *
+ * What is NOT attempted is a stable-index scheme with tombstones: it buys
+ * nothing over this, since the prefix argument already covers the case that
+ * matters, and it is the version that invites the plausible-but-wrong buffer.
+ *
+ *
+ * THE ONE THING THIS GIVES UP, STATED PLAINLY.
+ *
+ * A sector-event repack used to re-test every bucket against the CURRENT
+ * frustum, so it doubled as a free refresh of the whole visible set. It does
+ * not any more: the buckets that were already resident keep the answer they
+ * were given at the last repack, and only the arriving ones are tested now.
+ *
+ * That is not a new approximation, it is the existing one. `InstanceCuller`
+ * only repacks after 2.5 m of travel or ~3° of turn, so between repacks the
+ * visible set is ALREADY up to that stale, and the 12 m bucket margin exists
+ * precisely to cover it — "Between repacks the visible set is simply a couple
+ * of metres generous", as this file has said from the start. A sector event no
+ * longer resets that clock early, so the staleness is bounded by the same
+ * threshold it always was and by nothing new. What used to happen was a bonus,
+ * not a guarantee, and it cost a full repack to get.
+ *
+ * Both halves of that are checked rather than argued: over four thousand
+ * randomised sector events and camera moves, the incremental buffer is
+ * byte-identical to a full repack for as long as the pose holds, and once the
+ * pose has drifted below the threshold no instance INSIDE the frustum is ever
+ * missing from it. The second property is the one `cull-check`'s zero-pixel
+ * diff is really testing, and it still passes.
  *
  *
  * CAPACITY GROWS, AND GROWTH IS THE ONE EXPENSIVE THING IN HERE.
@@ -176,6 +228,22 @@ export function packSlab(
   let written = new Int32Array(0);
   let candidate = new Int32Array(0);
   let writtenLength = -1;
+  /**
+   * How many buckets the last repack actually LOOKED at, from the front.
+   *
+   * The distance and frustum test for a bucket depends on the bucket and the
+   * camera and on nothing else, so when the camera has not moved since the last
+   * repack the answer for every bucket below this index is already recorded in
+   * `written` and re-deriving it is pure waste. It is only ever below
+   * `buckets.length` because a sector event moved the list underneath it —
+   * appended past it, or removed a span at `at` and set this to `at` — which is
+   * exactly the case where a repack is forced with the camera standing still.
+   *
+   * A ring holds thousands of buckets per layer across dozens of layers, and a
+   * forced full scan of all of them was up to 4.3 ms in the phase table. This
+   * turns a sector arrival into a scan of that sector's own buckets.
+   */
+  let scanned = 0;
   let grows = 0;
 
   mesh.instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
@@ -249,6 +317,27 @@ export function packSlab(
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
       mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     }
+    /**
+     * THE DESTINATION BUFFER IS BRAND NEW AND EMPTY, so nothing the packer
+     * believes about what it last wrote survives this.
+     *
+     * The two lines above replace `mesh.instanceMatrix` outright and
+     * deliberately do NOT copy the old attribute's contents across — there is
+     * no point, since the next repack rewrites the whole visible set from the
+     * slab. That was safe for as long as every mutation reset `writtenLength`,
+     * which is exactly what `insert` used to do and no longer does: with the
+     * incremental insert path, a growth would otherwise leave the packer
+     * convinced that a prefix it never wrote is already correct, and the mesh
+     * would draw that many instances of a zero matrix.
+     *
+     * Found by the randomised equivalence check rather than by reading, and it
+     * took 3800 steps to appear, because a growth only happens when a sector
+     * will not fit and the capacities are sized so it should never happen at
+     * all. `scanned` goes with it for the same reason: an answer recorded
+     * against a buffer that no longer exists is not an answer.
+     */
+    writtenLength = -1;
+    scanned = 0;
     grows++;
     onGrow?.(cap);
   }
@@ -299,17 +388,56 @@ export function packSlab(
     coalesce();
   }
 
-  /** Flatten the per-sector bucket lists and resize the diff bookkeeping. */
-  function rebuild() {
-    buckets = [];
-    for (const list of owned.values()) for (const b of list) buckets.push(b);
-    if (written.length < buckets.length) {
-      written = new Int32Array(buckets.length);
-      candidate = new Int32Array(buckets.length);
-    }
-    writtenLength = -1;
-    mesh.visible = buckets.length > 0;
+  /**
+   * Room in the diff bookkeeping for `buckets.length` entries.
+   *
+   * `written` is COPIED across the growth and `candidate` is not, and the
+   * difference is not an oversight: `candidate` is refilled from scratch at the
+   * top of every `update`, while `written` is the memory of the last repack and
+   * throwing it away here would silently turn the append path below back into
+   * the full repack it exists to avoid. Doubling rather than fitting, so a ring
+   * that gains a sector every few seconds does not reallocate every few seconds.
+   */
+  function ensureIndexRoom() {
+    if (written.length >= buckets.length) return;
+    const size = Math.max(buckets.length, written.length * 2);
+    const grown = new Int32Array(size);
+    grown.set(written);
+    written = grown;
+    candidate = new Int32Array(size);
   }
+
+  /**
+   * Keep the first `p` entries of the last repack and forget the rest.
+   *
+   * See the header: the count must come down with it, or the next `update` can
+   * early-return on a matching prefix while the mesh is still drawing instances
+   * past it. `buckets[written[k]]` is safe for k < p precisely because p was
+   * chosen as the first entry whose index moved.
+   */
+  function truncateWritten(p) {
+    if (writtenLength < 0) return;
+    if (p >= writtenLength) return;
+    let n = 0;
+    for (let k = 0; k < p; k++) n += take(buckets[written[k]]);
+    writtenLength = p;
+    mesh.count = n;
+    mesh.visible = n > 0;
+  }
+
+  /**
+   * THE INVARIANT `insert` AND `remove` MAINTAIN BETWEEN THEM:
+   *
+   *   buckets === [...owned.values()].flat()
+   *
+   * There used to be a `rebuild()` here that asserted it by recomputing it, and
+   * both mutations called it. Nothing calls it now — `insert` appends and
+   * `remove` splices, which is the whole point — and a flatten that nothing
+   * runs is a second definition of the bucket order waiting to disagree with
+   * the first. That is the same argument this file's header makes for having
+   * deleted `packInstances`, so it goes the same way. `scripts/perf/
+   * slab-equiv.mjs` checks the invariant where it belongs: in the output.
+   */
 
   return {
     mesh,
@@ -353,16 +481,56 @@ export function packSlab(
       }
       spans.set(id, { start, count: n });
       owned.set(id, list);
-      rebuild();
+      /**
+       * APPEND, rather than reflatten. `owned` is a Map and `id` is a new key,
+       * so the flattened order this produces is exactly what `rebuild` would
+       * have produced — the same buckets in the same order — and every index
+       * that already existed is untouched, which is what lets `writtenLength`
+       * survive. See the header. The cost also stops depending on how much of
+       * the world is resident: this is O(this sector) where reflattening was
+       * O(every bucket in the layer), and the layer count and the ring are both
+       * expected to grow.
+       */
+      for (const b of list) buckets.push(b);
+      ensureIndexRoom();
+      // `scanned` deliberately stays where it was: the appended buckets are the
+      // only ones whose answer is not already known.
+      if (writtenLength < 0) mesh.visible = buckets.length > 0;
     },
 
     remove(id) {
       const span = spans.get(id);
       if (!span) return;
+      /**
+       * Where this sector's buckets start in the flattened list. O(sectors),
+       * not O(buckets) — the ring holds a dozen or so of the former and
+       * thousands of the latter.
+       */
+      let at = 0;
+      for (const [key, earlier] of owned) {
+        if (key === id) break;
+        at += earlier.length;
+      }
+      const list = owned.get(id);
       spans.delete(id);
       owned.delete(id);
       release(span.start, span.count);
-      rebuild();
+      buckets.splice(at, list.length);
+      /**
+       * `written` is strictly ascending, so the entries still meaning what they
+       * meant are exactly those below `at`, and they are a prefix. Everything
+       * from the first entry at or past `at` shifted and is forgotten.
+       */
+      if (writtenLength > 0) {
+        let p = 0;
+        while (p < writtenLength && written[p] < at) p++;
+        truncateWritten(p);
+      }
+      // Everything from `at` on has moved down by this sector's bucket count,
+      // so its recorded answer is filed under the wrong index and has to be
+      // taken again. Everything before it has not moved.
+      if (scanned > at) scanned = at;
+      if (writtenLength < 0) mesh.visible = buckets.length > 0;
     },
 
     has(id) {
@@ -374,6 +542,51 @@ export function packSlab(
       if (next === density) return;
       density = next;
       writtenLength = -1;
+    },
+
+    /**
+     * Move this layer's level-of-detail band at runtime.
+     *
+     * `minDistance`, `maxDistance` and `alwaysNear` were closure constants until
+     * the potato tier needed them, and the reason they need to move is measured:
+     * `.perf/presets.json` records that the whole quality ladder changes the
+     * triangle count by ONE PER CENT, so every rung from low to ultra submits
+     * the same ~16 M triangles and buys its 44% with pixels and shadow texels
+     * alone. Reach is the only lever that removes geometry, and geometry is
+     * 75% of the frame at low.
+     *
+     * WHATEVER MOVES THESE MUST KEEP THE NEAR AND FAR BANDS COMPLEMENTARY.
+     * A tree is two packers over one payload — see the `mirrorOf` block in
+     * forest.js — and the bands meet exactly, `maxDistance` being `<=` and
+     * `minDistance` being `>`. Set them independently and a bucket either lands
+     * in both bands, so every distant trunk is drawn twice at two resolutions
+     * z-fighting with itself, or in neither, so a ring of the wood is missing.
+     * `forest.setReach` is the only caller that knows the pairing, and it is
+     * where that invariant is enforced.
+     *
+     * `writtenLength = -1` and nothing else, exactly as `setDensity` does: it
+     * forces the next update down the full-repack path, which re-tests every
+     * bucket and resets `scanned` itself at the end of the loop. Resetting
+     * `scanned` here as well would be harmless and is not needed.
+     *
+     * It does NOT forget the camera pose — the culler owns that thresholding
+     * and would decline to repack at all until the player walked 2.5 m. See
+     * `InstanceCuller.setBand`, which is what callers should use.
+     */
+    setBand({ min, max, near } = {}) {
+      const nextMin = min ?? minDistance;
+      const nextMax = max ?? maxDistance;
+      const nextNear = near ?? alwaysNear;
+      if (nextMin === minDistance && nextMax === maxDistance && nextNear === alwaysNear) return;
+      minDistance = nextMin;
+      maxDistance = nextMax;
+      alwaysNear = nextNear;
+      writtenLength = -1;
+    },
+
+    /** What band this layer is drawing, for `forest.setReach` and for tests. */
+    band() {
+      return { name: mesh.name, minDistance, maxDistance, alwaysNear };
     },
 
     /**
@@ -437,17 +650,91 @@ export function packSlab(
       mesh.count = write;
       mesh.visible = write > 0;
       writtenLength = -1;
+      scanned = 0;
     },
 
-    update(frustum, eye) {
+    /**
+     * @param {boolean} poseUnchanged  the camera is in the same place, facing
+     *   the same way, with the same field of view as at the last repack — so
+     *   this repack was forced by a sector event and by nothing else. The
+     *   culler is the only thing that can know this, because it owns the
+     *   thresholds; see InstanceCuller.update.
+     */
+    update(frustum, eye, poseUnchanged = false) {
       if (buckets.length === 0) {
         mesh.count = 0;
         mesh.visible = false;
         writtenLength = -1;
+        scanned = 0;
         return 0;
       }
       eyeX = eye.x;
       eyeZ = eye.z;
+
+      /**
+       * THE SECTOR-EVENT PATH: test the buckets that arrived and nothing else.
+       *
+       * `written` is still true for everything below `scanned` (see its
+       * declaration), the appended buckets all sort after it, and `mesh.count`
+       * is by invariant the instance count of exactly the prefix `written`
+       * describes — so the new buckets can simply be tested, appended to
+       * `written`, and their instances written on the end of the buffer. The
+       * region below `count` is untouched, which is also why the update range
+       * flagged for upload starts there.
+       *
+       * When nothing new is visible this costs one distance test per arriving
+       * bucket and zero bytes, which is the common case: a tree sector becomes
+       * newly wanted when it crosses the 384 m ring, and that is behind the
+       * player as often as not and outside the frustum most of the rest of the
+       * time.
+       */
+      if (poseUnchanged && writtenLength >= 0) {
+        if (scanned >= buckets.length) return 0;
+        let added = 0;
+        for (let i = scanned; i < buckets.length; i++) {
+          const b = buckets[i];
+          const dx = b.x - eye.x;
+          const dz = b.z - eye.z;
+          const horizontal = Math.sqrt(dx * dx + dz * dz) - b.radius;
+          if (horizontal > maxDistance || horizontal <= minDistance) continue;
+          if (horizontal > alwaysNear) {
+            _sphere.center.set(b.x, b.y, b.z);
+            _sphere.radius = b.radius + margin;
+            if (!frustum.intersectsSphere(_sphere)) continue;
+          }
+          written[writtenLength + added] = i;
+          added++;
+        }
+        scanned = buckets.length;
+        if (added === 0) return 0;
+
+        const dstMatrix = mesh.instanceMatrix.array;
+        const dstColor = mesh.instanceColor ? mesh.instanceColor.array : null;
+        const keep = mesh.count;
+        let write = keep;
+        for (let k = 0; k < added; k++) {
+          const b = buckets[written[writtenLength + k]];
+          const c = take(b);
+          dstMatrix.set(srcMatrix.subarray(b.start * 16, (b.start + c) * 16), write * 16);
+          if (dstColor && srcColor) {
+            dstColor.set(srcColor.subarray(b.start * 3, (b.start + c) * 3), write * 3);
+          }
+          write += c;
+        }
+        writtenLength += added;
+        mesh.count = write;
+        mesh.visible = write > 0;
+        mesh.instanceMatrix.clearUpdateRanges();
+        mesh.instanceMatrix.addUpdateRange(keep * 16, (write - keep) * 16);
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) {
+          mesh.instanceColor.clearUpdateRanges();
+          mesh.instanceColor.addUpdateRange(keep * 3, (write - keep) * 3);
+          mesh.instanceColor.needsUpdate = true;
+        }
+        return write - keep;
+      }
+
       let diverged = writtenLength < 0 ? 0 : -1;
       let keep = 0;
       let length = 0;
@@ -468,6 +755,7 @@ export function packSlab(
         }
         candidate[length++] = i;
       }
+      scanned = buckets.length;
 
       if (diverged < 0 && length === writtenLength) return 0;
       if (diverged < 0) diverged = length;
@@ -565,6 +853,20 @@ export class InstanceCuller {
     this._lastPosition.set(Infinity, Infinity, Infinity);
   }
 
+  /**
+   * "Whatever you concluded about the camera last time, forget it."
+   *
+   * The same correction `setDensity` and `restoreAll` already make by hand,
+   * named once so that anything else changing a packer out from under the
+   * culler can say so. Without it `update` looks at a camera that has not
+   * moved 2.5 m or turned 3°, declines to repack, and the change does not
+   * reach the buffer until the player next walks — which reads as a control
+   * that does nothing, and then works a moment later, which is worse.
+   */
+  invalidate() {
+    this._lastPosition.set(Infinity, Infinity, Infinity);
+  }
+
   update(camera, force = false) {
     const moved =
       camera.position.distanceToSquared(this._lastPosition) > 2.5 * 2.5;
@@ -573,11 +875,25 @@ export class InstanceCuller {
     const zoomed = Math.abs(camera.fov - this._lastFov) > 0.25;
     if (!force && !moved && !turned && !zoomed) return false;
 
+    /**
+     * A FORCED REPACK WITH THE CAMERA STANDING STILL is a sector event and
+     * nothing else, and the packers can do far less work when they are told so.
+     *
+     * This is the only place that can say it: `_lastPosition`, `_lastQuaternion`
+     * and `_lastFov` are updated at the end of every repack, so all three tests
+     * reading false means the pose is bit-for-bit the one the last repack was
+     * given. `restoreAll` and `setDensity` both reset `_lastPosition` to
+     * Infinity precisely so that they can never be mistaken for this.
+     */
+    const poseUnchanged = !moved && !turned && !zoomed;
+
     camera.updateMatrixWorld();
     this._matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(this._matrix);
     this.uploaded = 0;
-    for (const packer of this.packers) this.uploaded += packer.update(this._frustum, camera.position);
+    for (const packer of this.packers) {
+      this.uploaded += packer.update(this._frustum, camera.position, poseUnchanged);
+    }
 
     this._lastPosition.copy(camera.position);
     this._lastQuaternion.copy(camera.quaternion);

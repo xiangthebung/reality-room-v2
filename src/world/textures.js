@@ -616,7 +616,7 @@ export function leafCluster({
 }
 
 /**
- * A tuft of grass blades on a transparent card.
+ * A tuft of the ground layer, on a transparent card.
  *
  * THE BLADES MUST NOT MEET AT THE BOTTOM. The first version drew each blade as a
  * quad whose base spanned a tenth of the card's width, all of them starting on
@@ -625,41 +625,105 @@ export function leafCluster({
  * rectangle sitting under every single tuft in the forest, and it read as a
  * shadow bug rather than as grass.
  *
- * So each blade is a spindle: a point at the root, widest a third of the way up,
- * a point at the tip. That is also what a blade of grass actually looks like.
+ * So each blade is a spindle: a point at the root, widest partway up, a point at
+ * the tip.
+ *
+ *
+ * ==== IT IS NOT GRASS ANY MORE, AND THAT IS THE POINT =====================
+ *
+ * This is the commonest card in the world — twenty thousand of them inside
+ * seventy metres — so whatever it draws is what the floor of this forest IS.
+ * It drew six narrow spindles with a straw-bleached tip, which is a tuft of
+ * meadow grass, and the report was that parts of the wood do not look like a
+ * rainforest. This layer is the largest single reason: THERE IS ALMOST NO GRASS
+ * ON A RAINFOREST FLOOR. Grass is a full-sun plant and the floor of a closed
+ * tropical forest gets one or two per cent of the light that lands on the
+ * canopy. What grows down there instead is broad and soft — palm and Calathea
+ * seedlings, aroids, Selaginella, the odd sprouting nut — because in that little
+ * light the only strategy that works is a large, thin, cheap collector.
+ *
+ * SO THE BLADES BECAME LEAVES. Seven of them rather than six, three times as
+ * wide, with a pale midrib and a blunt tip instead of a wire taper.
+ * That is the whole edit. The card is the same 128², the same count, the same
+ * geometry, the same draw call and the same fill — a wider mark on the same
+ * canvas costs nothing to rasterise and, per the note at the head of the
+ * undergrowth textures, an opaque texel is cheaper than the discard it
+ * replaces.
+ *
+ * AND THE TIP STOPPED BEING BLEACHED. The old gradient ran to 1.75× lightness
+ * at the top of every blade — hay in July, and the most temperate thing in the
+ * frame. This runs the other way: darkest at the margins, slightly lifted along
+ * the midrib, which is how a thin shade leaf actually sits against the light.
  */
-export function grassBlade({ key = 'grass', hue = 88, sat = 40, light = 30, seed = 'blade' } = {}) {
+export function herbTuft({ key = 'herb', hue = 128, sat = 40, light = 30, seed = 'blade' } = {}) {
   return memo(`blade:${key}`, () => {
     const size = 128;
     const c = canvas(size);
     const g = c.getContext('2d');
     const rng = makeRng(seed);
-    // The tip must land inside the card. A blade that ran off the side was
+    // The tip must land inside the card. A leaf that ran off the side was
     // clipped into a straight vertical cut, on every tuft in the forest.
     const EDGE = size * 0.07;
-    for (let i = 0; i < 6; i++) {
-      const root = size * rngRange(rng, 0.3, 0.7);
-      const w = size * rngRange(rng, 0.035, 0.062);
-      const reach = size * 0.38;
+    for (let i = 0; i < 7; i++) {
+      const root = size * rngRange(rng, 0.2, 0.8);
+      const w = size * rngRange(rng, 0.11, 0.18);
+      /**
+       * SPLAYED, not gathered. At a reach of 0.34 all five leaves left the same
+       * narrow column and the tuft filled about half its card, leaving a hard
+       * empty margin down one side — which on a 128² texture instanced twenty
+       * thousand times is a fifth of the layer's rasterised area spent on
+       * nothing. A ground rosette lies OUT, nearly flat, because that is how a
+       * plant in one per cent of full sun presents the most area to the sky.
+       */
+      const reach = size * 0.46;
       const bend = Math.max(
         EDGE + w - root,
         Math.min(size - EDGE - w - root, rngRange(rng, -reach, reach))
       );
-      const top = size * rngRange(rng, 0.04, 0.34);
-      const belly = size - (size - top) * 0.36;
+      const top = size * rngRange(rng, 0.08, 0.44);
+      /**
+       * The belly sits HIGH — two thirds of the way to the tip rather than a
+       * third. That is the difference between a spindle and a leaf: a blade of
+       * grass is widest near its base and tapers for the rest of its length, and
+       * a shade leaf holds its width almost to the end and then closes quickly.
+       * Same four control points, and it is the whole silhouette.
+       */
+      const belly = size - (size - top) * 0.62;
       const grad = g.createLinearGradient(0, size, 0, top);
-      grad.addColorStop(0, `hsl(${hue - 8} ${sat}% ${light * 0.82}%)`);
-      grad.addColorStop(0.4, `hsl(${hue} ${sat + 4}% ${light * 1.25}%)`);
-      grad.addColorStop(1, `hsl(${hue + 10} ${sat + 8}% ${light * 1.75}%)`);
+      grad.addColorStop(0, `hsl(${hue - 6} ${sat}% ${light * 0.7}%)`);
+      grad.addColorStop(0.45, `hsl(${hue} ${sat + 4}% ${light * 1.15}%)`);
+      grad.addColorStop(1, `hsl(${hue + 6} ${sat + 6}% ${light * 0.95}%)`);
+      /**
+       * A BLUNT TIP, which is the last thing separating this from grass.
+       *
+       * Two quadratics that meet at one point make a needle however wide the
+       * belly is, and a needle is a blade whatever colour it is drawn. Ending
+       * the two curves a short way APART and joining them across is four extra
+       * characters of path and it is what turns the silhouette into a leaf: a
+       * shade leaf is elliptic and closes over a centimetre or two, it does not
+       * come to a spine.
+       */
+      const nib = w * 0.22;
       g.fillStyle = grad;
       g.beginPath();
       // Up the left edge: root point, out to the belly, in to the tip.
       g.moveTo(root, size);
-      g.quadraticCurveTo(root - w, belly, root + bend, top);
+      g.quadraticCurveTo(root - w, belly, root + bend - nib, top);
+      g.lineTo(root + bend + nib, top);
       // Back down the right edge.
       g.quadraticCurveTo(root + w, belly, root, size);
       g.closePath();
       g.fill();
+
+      // The midrib, which is what tells a two-pixel mark it is a leaf and not a
+      // blade. Lighter than the lamina by half a stop and no more — a bright
+      // line down every leaf in the wood would read as a specular seam.
+      g.strokeStyle = `hsl(${hue - 4} ${sat - 10}% ${Math.min(60, light * 1.5)}%)`;
+      g.lineWidth = Math.max(1, size * 0.008);
+      g.beginPath();
+      g.moveTo(root, size);
+      g.quadraticCurveTo(root + bend * 0.42, belly, root + bend, top);
+      g.stroke();
     }
     featherEdges(g, size, size, size * 0.05, { keepBottom: true });
     return finish(c);
@@ -797,6 +861,70 @@ export function glowSprite({ key = 'glow', inner = '#ffffff', outer = 'rgba(255,
 }
 
 /**
+ * A falling raindrop, as a vertical streak.
+ *
+ * WHY A STREAK AND NOT A DOT. A raindrop at terminal velocity crosses several
+ * metres during one frame's exposure, so what a camera — and, for the same
+ * reason, an eye — actually records is a short bright line, not a sphere. Rain
+ * drawn as round points reads as snow or as static; the elongation IS the
+ * speed, and it is the only cue that the drop is moving at all, because
+ * everything else about a raindrop is featureless.
+ *
+ * IT IS DRAWN INTO A SQUARE BECAUSE A THREE.Points SPRITE IS A SQUARE. There
+ * is no way to give one point a non-square footprint without moving to quads,
+ * which would be four vertices and an index buffer per drop instead of one
+ * vertex. So the streak is painted down the middle of a square canvas with
+ * empty space either side, and the cost of that emptiness is texels — which are
+ * free — rather than fill, because the transparent columns discard.
+ *
+ * Rain falls near-vertically on screen at any camera pitch a walking player
+ * uses, so a screen-aligned square with a vertical streak in it needs no
+ * rotation to look right. That is the whole reason this works.
+ */
+export function rainStreak({ key = 'rain' } = {}) {
+  return memo(`rain:${key}`, () => {
+    const w = 32;
+    const h = 128;
+    const c = canvas(1);
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d');
+    g.clearRect(0, 0, w, h);
+    // Brightest in the middle of the fall and tapering at both ends, so a drop
+    // does not begin and end on a hard edge. A drop with square ends reads as a
+    // dash rather than as water.
+    const grad = g.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(0.16, 'rgba(255,255,255,0.55)');
+    grad.addColorStop(0.85, 'rgba(255,255,255,0.62)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    /**
+     * ONE AND A HALF PIXELS OF CORE OUT OF THIRTY-TWO, AND THE RATIO IS THE
+     * WHOLE POINT.
+     *
+     * A THREE.Points sprite is sampled over a SQUARE footprint whatever shape
+     * the texture is, so this canvas's own 32x128 aspect buys nothing — the
+     * streak's on-screen width is `core/32 * gl_PointSize` and its height is
+     * the full `gl_PointSize`. Width and length are therefore not independent:
+     * asking for a longer streak by raising the point size makes it
+     * proportionally fatter at the same time.
+     *
+     * At the first values — a 3 px core and 0.9 alpha — a near drop came out
+     * six pixels wide and bright white, and the frame was full of what looked
+     * like falling pills rather than rain. 1.5/32 is 4.7%, so a 48 px streak is
+     * 2.2 px across, which is the widest a raindrop may be before it stops
+     * being a line. The taper was pulled in to the ends at the same time: the
+     * old stops put the opaque part in the middle 40% of the sprite, which
+     * shortened the visible streak to well under what the point size suggested
+     * and was the other half of the pill.
+     */
+    g.fillRect(w / 2 - 0.75, 0, 1.5, h);
+    return finish(c, { srgb: true });
+  });
+}
+
+/**
  * A wide, wispy band of mist.
  *
  * Drawn as overlapping soft ellipses with a hard alpha falloff at the top and
@@ -843,6 +971,243 @@ export function mistBand({ key = 'mist', seed = 'mist' } = {}) {
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
+    return tex;
+  });
+}
+
+/**
+ * THE FOREST FLOOR, AND WHY THE GROUND HAD NO TEXTURE AT ALL UNTIL NOW.
+ *
+ * `heightGrid` carries the ground's colour in a per-VERTEX attribute — moss in
+ * the hollows, laterite on the banks, silt at the water — and the argument for
+ * that is good and unchanged: the colour follows the actual terrain, there are
+ * no UV seams and it costs no texture memory. What it cannot do is DETAIL. The
+ * mesh is a 1.6 m grid, so the finest thing a vertex colour can express is 3.2 m
+ * across, and the two octaves of "mottle" that block adds at 0.62 and 1.7
+ * cycles per metre are both far past that lattice's Nyquist limit. They do not
+ * draw grain; they draw random numbers at the vertices, which Gouraud then
+ * smears into exactly the low-frequency khaki blur that photographs as "the
+ * floor is a mud plane".
+ *
+ * So this is the missing half: a tiling detail map, multiplied over the vertex
+ * palette, carrying everything smaller than the mesh can hold. The two do
+ * different jobs and neither replaces the other — the vertex colour still says
+ * WHAT this ground is, and this says what it is made of.
+ *
+ * DRAWN ALMOST WITHOUT HUE, for the reason `litterTexture` gives: the palette
+ * underneath is already doing the biome, and a green cast baked in here would
+ * fight the red bank and win, because it is on every square metre of the world.
+ * There is a little warmth in the leaves and none anywhere else.
+ *
+ * THE MEAN MATTERS MORE THAN THE MARKS. This multiplies a surface that is
+ * already lit, so its average brightness is a global exposure change on the
+ * biggest object in the frame. Base lightness is 74% and the marks run 46-100%,
+ * which measures a mean near 0.78 — the floor comes down about a fifth of a
+ * stop, which is the right direction anyway: the old one was a pale khaki that
+ * read as dust.
+ *
+ * IT HAS TO TILE, so every mark is drawn up to four times — see `wrapped`. The
+ * repeat is set at the call site (`ground.js`) rather than here, because how
+ * many metres a tile covers is a property of the terrain and not of the canvas.
+ */
+export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
+  return memo(`floor:${key}`, () => {
+    const size = 512;
+    const c = canvas(size);
+    const g = c.getContext('2d');
+    const rng = makeRng(seed);
+
+    /**
+     * Draw a mark, and draw it again across whichever edges it overhangs.
+     *
+     * The naive nine-copy version is nine times the canvas work for a mark in
+     * the middle, which is most of them. Testing the overhang costs two
+     * comparisons and skips the copies that cannot be visible.
+     */
+    const wrapped = (x, y, reach, draw) => {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === -1 && x + reach < size) continue;
+        if (dx === 1 && x - reach > 0) continue;
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dy === -1 && y + reach < size) continue;
+          if (dy === 1 && y - reach > 0) continue;
+          draw(x + dx * size, y + dy * size);
+        }
+      }
+    };
+
+    g.fillStyle = 'hsl(36 8% 74%)';
+    g.fillRect(0, 0, size, size);
+
+    /**
+     * The substrate: broad soft blotches, which is what makes one tile of this
+     * not look like one tile of this. Litter drifts unevenly — there are bare
+     * patches and there are ankle-deep piles — and a uniform confetti of leaves
+     * has no such structure, so at four metres a tile the repeat would be
+     * visible as a texture rather than as ground.
+     */
+    for (let i = 0; i < 46; i++) {
+      const x = rng() * size;
+      const y = rng() * size;
+      const r = rngRange(rng, 40, 150);
+      const light = rngRange(rng, 54, 94);
+      wrapped(x, y, r, (px, py) => {
+        const grad = g.createRadialGradient(px, py, 0, px, py, r);
+        grad.addColorStop(0, `hsla(${rngRange(rng, 26, 44)} 10% ${light}% / 0.5)`);
+        grad.addColorStop(1, 'hsla(36 10% 74% / 0)');
+        g.fillStyle = grad;
+        g.beginPath();
+        g.arc(px, py, r, 0, TAU);
+        g.fill();
+      });
+    }
+
+    /**
+     * Surface roots. The one mark on this canvas that is not litter, and the
+     * one that says "rainforest" rather than "woodland": tropical soils are
+     * thin, so the feeder roots run ACROSS the top of the ground rather than
+     * down into it, and the floor is a net of them. Long, low-contrast, and
+     * branching — a root that does not fork is a stick.
+     */
+    g.lineCap = 'round';
+    for (let i = 0; i < 34; i++) {
+      const x = rng() * size;
+      const y = rng() * size;
+      const a = rng() * TAU;
+      const len = rngRange(rng, 60, 210);
+      const w = rngRange(rng, 2.5, 9);
+      const dark = rng() < 0.5;
+      wrapped(x, y, len, (px, py) => {
+        g.strokeStyle = dark
+          ? `hsla(30 12% ${rngRange(rng, 48, 60)}% / 0.6)`
+          : `hsla(34 10% ${rngRange(rng, 84, 96)}% / 0.45)`;
+        g.lineWidth = w;
+        g.beginPath();
+        g.moveTo(px, py);
+        let cx = px;
+        let cy = py;
+        let ca = a;
+        const steps = 5;
+        for (let s = 0; s < steps; s++) {
+          ca += rngRange(rng, -0.5, 0.5);
+          cx += Math.cos(ca) * (len / steps);
+          cy += Math.sin(ca) * (len / steps);
+          g.lineTo(cx, cy);
+        }
+        g.stroke();
+        // One fork, from the middle. Two lines, and it is the whole difference
+        // between a root system and a scatter of worms.
+        g.lineWidth = w * 0.55;
+        g.beginPath();
+        g.moveTo((px + cx) / 2, (py + cy) / 2);
+        g.lineTo(
+          (px + cx) / 2 + Math.cos(a + 1.1) * len * 0.4,
+          (py + cy) / 2 + Math.sin(a + 1.1) * len * 0.4
+        );
+        g.stroke();
+      });
+    }
+
+    /**
+     * Whole fallen leaves, big enough to read individually from standing
+     * height. This is the mark that carries the biome: a rainforest floor is
+     * ankle deep in large entire leaves, not in the small toothed ones a
+     * temperate wood drops, so these are long ovals with a midrib and no lobes.
+     */
+    for (let i = 0; i < 240; i++) {
+      const x = rng() * size;
+      const y = rng() * size;
+      const len = size * rngRange(rng, 0.035, 0.105);
+      const wid = len * rngRange(rng, 0.3, 0.52);
+      const rot = rng() * TAU;
+      const light = rngRange(rng, 46, 100);
+      const hue = rngRange(rng, 20, 46);
+      const sat = rngRange(rng, 6, 20);
+      wrapped(x, y, len, (px, py) => {
+        g.save();
+        g.translate(px, py);
+        g.rotate(rot);
+        g.fillStyle = `hsl(${hue} ${sat}% ${light}%)`;
+        g.beginPath();
+        g.moveTo(0, -len / 2);
+        g.quadraticCurveTo(wid, 0, 0, len / 2);
+        g.quadraticCurveTo(-wid, 0, 0, -len / 2);
+        g.fill();
+        // The midrib, half a stop off the lamina either way. It is one stroke
+        // and it is what stops a field of these reading as gravel.
+        g.strokeStyle = `hsl(${hue} ${sat}% ${light > 70 ? light - 16 : light + 18}%)`;
+        g.lineWidth = 1.2;
+        g.beginPath();
+        g.moveTo(0, -len / 2);
+        g.lineTo(0, len / 2);
+        g.stroke();
+        g.restore();
+      });
+    }
+
+    /**
+     * Fine grain, last and over everything. Two thousand specks is the layer
+     * that survives minification: by the time a tile is eight pixels across the
+     * leaves have averaged out and this is what is left, and without it the
+     * middle distance goes back to being smooth.
+     */
+    for (let i = 0; i < 2200; i++) {
+      const x = rng() * size;
+      const y = rng() * size;
+      const r = rngRange(rng, 0.6, 2.4);
+      g.fillStyle = `hsla(34 8% ${rngRange(rng, 40, 100)}% / ${rngRange(rng, 0.18, 0.5)})`;
+      g.beginPath();
+      g.arc(x, y, r, 0, TAU);
+      g.fill();
+    }
+
+    const tex = finish(c, { wrap: true, aniso: 8 });
+    /**
+     * ITS OWN MEAN, MEASURED, SHIPPED WITH IT.
+     *
+     * This map multiplies the ground, so its average brightness is a global
+     * exposure change on the largest object in the frame — a 0.78 mean is the
+     * whole world a fifth of a stop down, on every station, and that is a
+     * lighting decision arriving through the back door of a texture edit. The
+     * consumer divides by this before multiplying, so the map contributes
+     * STRUCTURE at a mean of exactly 1.0 and the exposure stays where the
+     * lighting put it. Change any mark above and the pivot follows it.
+     *
+     * LINEAR, per channel, because that is what `texture2D` returns: the texture
+     * is uploaded as sRGB and the sampler decodes it, so the mean of the decoded
+     * values is not the decode of the mean — 0.78 sRGB is 0.573 linear, and the
+     * mean of this canvas in linear is lower still because decoding is convex
+     * and the marks are spread either side. Per channel because the leaves carry
+     * a little warmth, and normalising by a scalar would leave the map with a
+     * net tint that lands on every square metre of the world.
+     *
+     * MEASURED: r 0.561, g 0.527, b 0.483 — the map is warm by 16% red over
+     * blue, which is the leaves, and dividing by a scalar would have left that
+     * as a permanent warm cast on every square metre of the world. Exactly the
+     * bias this whole file's other notes warn about, arriving through a
+     * normalisation rather than through a fill colour.
+     *
+     * 262 144 texels once at load: 6.3 ms measured, against a first frame that
+     * already spends 250–320 ms compiling shaders behind the entry gate. The
+     * alternative is a magic number that silently stops being true the first
+     * time somebody adds a mark.
+     */
+    const px = g.getImageData(0, 0, size, size).data;
+    const lin = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      const s = i / 255;
+      lin[i] = s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    }
+    let mr = 0;
+    let mg = 0;
+    let mb = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      mr += lin[px[i]];
+      mg += lin[px[i + 1]];
+      mb += lin[px[i + 2]];
+    }
+    const n = px.length / 4;
+    tex.userData.mean = { r: mr / n, g: mg / n, b: mb / n };
     return tex;
   });
 }

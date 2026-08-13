@@ -359,9 +359,12 @@ const { count: VOICE_COUNT, names: VOICE_NAMES } = await page.evaluate(() => ({
  * The check below turns a name that stops existing into a failure instead.
  */
 const SPECIAL = {
-  // The one voice in the table with a FLOOR on its window. At `dark` 0 it is
-  // singing at the bottom of its range, which is not what it is for.
-  nightingale: { before: 'w.dark = 0.8; ' },
+  // The two voices in the table with a FLOOR on their window. At `dark` 0 they
+  // are singing at the bottom of their range, which is not what they are for.
+  potoo: { before: 'w.dark = 0.8; ', ms: 9000 },
+  // And a long window, for the reason the bellbird has one below: five whistles
+  // a second apart do not fit in five seconds.
+  tinamou: { before: 'w.dark = 0.7; ', ms: 9000 },
   /**
    * The one row that is about DURATION rather than timbre, and it needs both
    * of these to be measured as itself.
@@ -369,15 +372,24 @@ const SPECIAL = {
    * A LONGER WINDOW, because it streams for seven to twenty seconds unbroken
    * and the default 5 s would score the opening of it and call that the bird.
    * Nine and not twenty, though: the window has to stay inside the SHORTEST
-   * stream the row can produce, because a short lark measured over twenty
+   * stream the row can produce, because a short wren measured over twenty
    * seconds is a few seconds of song averaged with a lot of empty forest, and
    * the row would report a quieter, duller bird than the one that sang.
    *
-   * FIRED ONCE, because `STREAM_MAX` is 1 — a second lark on top of a running
+   * FIRED ONCE, because `STREAM_MAX` is 1 — a second wren on top of a running
    * one is refused by the module, by design. Firing every 700 ms would measure
    * one song and twelve rejections, and read as a voice being throttled.
    */
-  skylark: { ms: 9000, every: Infinity },
+  musicianwren: { ms: 9000, every: Infinity },
+  /**
+   * The enormously spaced rows, which the default window cannot see whole.
+   *
+   * A bellbird is one clang, most of a second of nothing, and then a long
+   * whistle; a tinamou is five whistles a second apart; a potoo is six notes
+   * spread over five. Measured over 5 s the bellbird reports as a transient in
+   * silence. Nine seconds is the shortest window that contains these phrases.
+   */
+  bellbird: { ms: 9000 },
 };
 for (const name of Object.keys(SPECIAL)) {
   if (!VOICE_NAMES.includes(name)) {
@@ -394,11 +406,11 @@ for (let i = 0; i < VOICE_COUNT; i++) {
 /**
  * The voice index the four call rows use.
  *
- * By name for the reason `SPECIAL` is by name. A blackbird because its `call`
- * row is three notes rather than one, so `contact` — the only kind that takes
- * its count from the table instead of overriding it — has something to show.
+ * By name for the reason `SPECIAL` is by name. A trogon because its `call` row
+ * is two notes rather than one, so `contact` — the only kind that takes its
+ * count from the table instead of overriding it — has something to show.
  */
-const CALLER = Math.max(0, VOICE_NAMES.indexOf('blackbird'));
+const CALLER = Math.max(0, VOICE_NAMES.indexOf('trogon'));
 
 // The optional third element is the capture window, for a voice that would
 // otherwise outlast it.
@@ -409,7 +421,7 @@ for (const [name, body, ms] of [
   ['bolt (squirrel)', 'w.bolt(at(5), "squirrel", 1)'],
   ['hooves', 'for (let i=0;i<5;i++) setTimeout(() => w.hoof(at(6), "deer", 1), i*120)'],
   ['woodpecker', 'w.woodpecker(at(24))'],
-  ['crow', 'w.caw(at(30))'],
+  ['macaw pair', 'w.macaw(at(30))'],
   /**
    * THE THREE THAT ARE NOT IN THE TABLE AND NOT IN THE CHORUS.
    *
@@ -418,20 +430,20 @@ for (const [name, body, ms] of [
    * thing of its kind, none of them goes through `song`, and so not one of them
    * is touched by the sixteen rows above no matter how the roster grows.
    *
-   * The JAY is the one to watch of the three. It is deliberately the harshest
-   * voice in the file — a tear rather than a caw, three overlapping puffs laid
+   * The PARROT MOB is the one to watch of the three. It is deliberately the harshest
+   * voice in the file — a tear rather than a screech, three overlapping puffs laid
    * across a throat to rough up an envelope whose spectrum never moves — and
    * "roughness that is not a buzz" is precisely the distinction peakiness is
    * here to police. If any voice in this wood is going to ring, it is this one.
    *
-   * The BUZZARD is placed HIGH, which is not decoration: `at(90, 70)` is 90 m
+   * The HAWK-EAGLE is placed HIGH, which is not decoration: `at(90, 70)` is 90 m
    * out and 70 m up, inside the 55–110 m band `update` actually uses, and its
    * spatial node is built for that range. It is also nearly a pure tone, so a
    * peaky reading is expected of it in the way the owl's is.
    */
-  ['jay', 'w.jay(at(50), 0.8)'],
-  ['pheasant', 'w.pheasant(at(60))'],
-  ['buzzard', 'w.mew(at(90, 70))'],
+  ['parrot mob', 'w.parrots(at(50), 0.8)'],
+  ['guan', 'w.guan(at(60))'],
+  ['hawk-eagle', 'w.eagle(at(90, 70))'],
   /**
    * The four call kinds, which are one function and six numbers apart.
    *

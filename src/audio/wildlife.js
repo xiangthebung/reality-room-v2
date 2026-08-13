@@ -22,16 +22,44 @@ import { dawnAt } from '../world/daylight.js';
  * to a pure tone that MOVES — and what makes one species distinguishable from
  * another is the shape of that movement and its rhythm, not its timbre. So:
  *
- *   - the voice is one sine carrier, FM'd by another sine at a low index. At
- *     the end of every envelope the modulation index is zero, so the last thing
- *     you hear is literally a sine wave. It cannot buzz; there is nothing in it
- *     to buzz with.
- *   - the character is in the PITCH CONTOUR. A chaffinch is an accelerating
- *     descending cascade with a flourish on the end; a great tit is a two-note
- *     couplet repeated four times at a metronomic 3 Hz; a wren is fifty notes in
- *     two seconds. Play those contours on the same sine and they are instantly
- *     different birds. Play a beautiful timbre on a flat contour and it is a
- *     synthesiser.
+ *   - the voice is one sine carrier, FM'd by another sine at a low CONSTANT
+ *     index. It cannot buzz; there is nothing in it to buzz with.
+ *   - the character is in the PITCH CONTOUR, at two scales. Between notes: an
+ *     antbird is an accelerating rising cascade that tightens into a rattle; a
+ *     trogon is nine identical hollow notes at a metronomic 4 Hz; a woodcreeper
+ *     is twenty notes falling downhill and slowing all the way. And WITHIN one
+ *     note: see `arc`. Play those contours on the same sine and they are
+ *     instantly different birds. Play a beautiful timbre on a flat contour and
+ *     it is a synthesiser.
+ *
+ * THE TWO WAYS THAT WENT WRONG ANYWAY, both fixed, both worth keeping written
+ * down because the file argued itself into them while believing the paragraph
+ * above.
+ *
+ *   IT SOUNDED LIKE A XYLOPHONE. The original note was a spectral flash that
+ *   collapsed to a sine over the first two thirds of its length, on a six
+ *   millisecond attack, with no plateau. That is not a description of a
+ *   whistle, it is the standard recipe for a struck wooden bar, and it was
+ *   arrived at by reasoning about what a bird is NOT — not a rasp, not a filter
+ *   sweep — until what was left was a mallet. "The modulation index reaches
+ *   zero" is a true sentence about a marimba. See `_note`, which now holds the
+ *   index roughly still and puts the movement in the pitch instead.
+ *
+ *   IT WAS AN OCTAVE AND A HALF TOO LOW. Every root in the table was set by ear
+ *   against the two rows that happen to be genuinely low-pitched birds — the
+ *   cuckoo at 600 Hz and the wood pigeon at 500 — so the whole roster ended up
+ *   in the middle of a piano. Real songbirds live between about 1.8 and 8 kHz:
+ *   blackbird song motifs peak at 1.8-1.9 kHz against the old 523, and robin
+ *   song has its mean maximum at 3738 Hz against the old 1047. Being in the
+ *   wrong octave is most of what made them read as an instrument, because that
+ *   register is where instruments are and birds are not.
+ *
+ *   THE RAINFOREST ROSTER GOES BACK DOWN THERE ON PURPOSE, WHICH IS NOT THE
+ *   SAME MISTAKE. Six of the twenty rows below sit under 1 kHz because the
+ *   birds do — a motmot hoots at 392 Hz, a toucan croaks at 587 — and they
+ *   survive it the way the wood pigeon always did: a near-zero modulation index
+ *   and a long decay, so the note is a hoot instead of a strike. The thing to
+ *   watch for is not a low row, it is a low row with a bright index on it.
  *   - percussive things — a woodpecker's drum, a twig snapping, wingbeats, a
  *     hoof — are pink noise through WIDE band-passes. Pink noise through a wide
  *     band-pass is a brush; white noise through a narrow one is a whistle, and a
@@ -53,9 +81,9 @@ import { dawnAt } from '../world/daylight.js';
  *
  *   WHO IS AWAKE. Every voice carries the window of `dark` it sings in and how
  *   far it throws. The chorus picks by weight rather than uniformly, so as a
- *   trip closes the canopy over you the goldcrests and the chiffchaffs drop out
- *   and the blackbirds, robins and — eventually — a nightingale and an owl take
- *   over. Nothing is switched on or off; the roster leans. It is the single
+ *   trip closes the canopy over you the honeycreepers and the tanagers drop out
+ *   and the motmots, the solitaires and — eventually — a tinamou, a potoo and
+ *   an owl take over. Nothing is switched on or off; the roster leans. It is the single
  *   biggest thing in this file per line of code and it costs one weighted pick
  *   every several seconds.
  *
@@ -76,11 +104,18 @@ import { dawnAt } from '../world/daylight.js';
  *   direct path falls off with distance and the scattered path does not. See
  *   `_buildFarTail`.
  *
- * The non-bird voices follow the same rule as the birds — nothing rings. A crow
- * and a barking deer are noise bursts through two static wide band-passes whose
- * envelopes cross-fade, which is a formant moving without a single filter
- * parameter ever being automated; a squirrel's scold is a train of 2 kHz ticks;
- * an acorn coming down is four ticks and a knock with the panner falling.
+ * The voices that are NOT whistles follow the same rule — nothing rings. A
+ * macaw, a parrot flock and a barking deer are noise bursts through two static
+ * wide band-passes whose envelopes cross-fade, which is a formant moving
+ * without a single filter parameter ever being automated; a squirrel's scold is
+ * a train of 2 kHz ticks; a fruit coming down out of the canopy is four ticks
+ * and a knock with the panner falling.
+ *
+ * THAT SPLIT IS ALSO WHERE THE RAINFOREST'S HARSH BIRDS LIVE, and it is why the
+ * table below contains no macaw. A macaw screech, a parrot mob and a guan's
+ * cackle are broadband noise, and running them through the FM path would mean
+ * an index high enough to make sidebands — which is the one sound this file
+ * exists to refuse. They are `_throat` and `_puff` voices, further down.
  *
  * WHICH BUS, AND WHERE THE LINE IS.
  *
@@ -89,11 +124,11 @@ import { dawnAt } from '../world/daylight.js';
  * PLAYER TURNING THIS DOWN BE TRYING TO QUIETEN THE WOOD, OR TO STOP BEING
  * INTERRUPTED?
  *
- *   worldBus — song, the distant chorus, the crow, the owl, the crickets. These
- *   are voices carrying from somewhere else, they are not addressed to you, and
- *   they are what "the sound of the wood" means. A crow is on this side despite
- *   being the least melodic thing in the file, because it is a bird calling at
- *   a distance on the chorus's own schedule, not an impact.
+ *   worldBus — song, the distant chorus, the macaws, the owl, the insects.
+ *   These are voices carrying from somewhere else, they are not addressed to
+ *   you, and they are what "the sound of the forest" means. The macaw pair is
+ *   on this side despite being the least melodic thing in the file, because it
+ *   is a bird calling at a distance on the chorus's own schedule, not an impact.
  *
  *   sfxBus — the flush, the bolt, hooves, the deer bark, the squirrel's scold,
  *   the woodpecker's drum, the acorn, the fly. Every one of these is either a
@@ -145,640 +180,883 @@ import { dawnAt } from '../world/daylight.js';
  * knew about `dawn`; what they did not have is that first light is not simply
  * more birds, it is DIFFERENT birds in a fixed sequence. `early` is how much a
  * species belongs to the half hour before sunrise, and it is observation rather
- * than mood: a robin and a blackbird are singing in the dark, the song thrush
- * and the wren come in around sunrise, and the warblers do not trouble
- * themselves until it is properly light. It multiplies into `_pick` scaled by
- * `dawn`, so it is exactly 1 at the pinned automation hour and moves nothing
- * any stored expectation ever measured.
+ * than mood: a motmot and a solitaire are calling in the dark, the pihas and the
+ * oropendolas come in around sunrise, the toucans and aracaris start up in the
+ * canopy after that, and the small understorey birds do not trouble themselves
+ * until it is properly light. It multiplies into `_pick` scaled by `dawn`, so it
+ * is exactly 1 at the pinned automation hour and moves nothing any stored
+ * expectation ever measured.
+ *
+ * AND THEN THE WHOLE ROSTER MOVED CONTINENTS, which is the pass this file is in
+ * now. Twenty temperate voices became twenty Neotropical ones — see the block
+ * above `VOICES` for what that does to the register, the repetition and the
+ * carry — and the four set-piece voices that are not in the table moved with
+ * them: the crow became a pair of macaws, the jay a mob of parrots, the
+ * pheasant a guan, the buzzard a hawk-eagle. Nothing about the machinery
+ * changed, which is the useful part of the exercise: every field in the table
+ * turned out to describe a bird rather than a British bird.
  */
 
 /**
- * The species.
+ * THE ROSTER IS A RAINFOREST, AND THAT CHANGES WHERE THE NUMBERS SIT.
  *
- * `notes` are semitone offsets from the voice's own root, `gaps` the seconds
- * between them; both are cycled if one runs out, which is what lets a wren be
- * fifty notes described by six numbers. `glide` is how far each note sweeps
- * during its own decay, in semitones — the single most important number in the
- * table, because a note that does not move is a beep.
+ * This table was twenty birds out of a British wood — warblers, finches and
+ * thrushes, which is a roster of small high whistlers living between about 1.8
+ * and 8 kHz. A lowland rainforest is not that. It is louder, lower, slower and
+ * far more varied: the loudest birds on earth are in it, so are some of the
+ * lowest-pitched, and the thing that identifies most of them is a single
+ * repeated shape rather than a tumbling phrase.
  *
- * `index` is the FM modulation depth at the attack. Everything is under 2.2:
- * past about three an FM pair starts producing sidebands dense enough to read as
- * a rasp, and a rasp is the thing that must not be here.
+ * Three consequences, and all three are visible in the columns.
+ *
+ *   THE REGISTER SPREADS DOWNWARD AND THE OLD WARNING STILL APPLIES. Half this
+ *   roster genuinely lives below 1 kHz — a motmot hoots at 400 Hz, a toucan
+ *   croaks at 590, a trogon calls at 700 — which is exactly the register the
+ *   retune moved everything OUT of, because it is where instruments are. The
+ *   difference is that these rows are down there for a measured reason rather
+ *   than by ear, and they carry the two things that stop a low note being a
+ *   struck bar: a near-zero modulation index and a long decay with a hold in
+ *   it. That is the wood pigeon's recipe, and the wood pigeon was always one of
+ *   the two rows the old table had right. What must NOT happen is a small bird
+ *   drifting down here; the tanagers, the honeycreeper and the hermit are at
+ *   101 to 107 and belong there.
+ *
+ *   REPETITION IS THE SPECIES, far more than in a temperate wood. A screaming
+ *   piha, a bellbird, a trogon and a potoo are each ONE idea repeated with
+ *   enormous spaces in it, and the field that carries that is `unit` — six rows
+ *   here refuse to be cut at all, against two in the old table.
+ *
+ *   NOTHING RASPS, STILL. A macaw, a toucan's croak and a guan's cackle are all
+ *   genuinely noisy sounds and not one of them is in this table: they are built
+ *   out of `_throat` and `_puff` further down the file, which is where noise
+ *   belongs. What is here is whistles, hoots and bells, and the roughness the
+ *   croakers need arrives as a fast shallow warble — the wren's old rattle
+ *   trick — rather than as modulation index.
+ *
+ * `root` is where the voice sits, in MIDI. `notes` are semitone offsets from
+ * it, `gaps` the seconds between them; both are cycled if one runs out, which
+ * is what lets a woodcreeper be forty notes described by eight numbers.
+ *
+ * THE THREE THAT SHAPE A NOTE FROM THE INSIDE. Between them they are the
+ * difference between a bird and a tune played on something, and they matter
+ * more than any other field here.
+ *
+ * `arc` is the pitch contour WITHIN one note, as semitone offsets spread evenly
+ * across its length. This is the important one: a piha's scream leaps most of
+ * an octave and falls off a cliff inside a single note, a tinamou's whistle
+ * swells and sags, a motmot's hoot barely moves. A note that holds still for
+ * its whole duration is a tuned bar however good its envelope is.
+ *
+ * `glide` is where the note ENDS UP relative to where it started, in semitones,
+ * added on top of the arc.
+ *
+ * `lead` is the onset: how far below pitch the note starts before snapping up,
+ * in semitones. A syrinx coming under tension does this and it is what
+ * articulates a note now that there is no percussive flash at the front. High
+ * for the shouted voices — a kiskadee, an aracari's shriek — and low for the
+ * ones that arrive on their note rather than hitting it, which is the motmot,
+ * the potoo and the tinamou. Defaults to 1.4.
+ *
+ * `warble` and `warbleDepth` are vibrato, in hertz and semitones. Shallow
+ * everywhere: at these depths it is a warble on a whistle, and deep or fast it
+ * would be sidebands, which is the rasp this file exists to avoid. The two
+ * exceptions are deliberate and they are the two croakers — the toucan's 17 Hz
+ * and the manakin's 21 Hz sit at the edge where a wobble becomes a roughness,
+ * because that roughness IS those species.
+ *
+ * `index` is the FM modulation depth, and it is roughly CONSTANT across a note
+ * rather than collapsing — a timbre instead of a strike. Everything is under
+ * 2.2: past about three an FM pair starts producing sidebands dense enough to
+ * read as a rasp.
  *
  * THE FOUR NUMBERS THAT SHAPE A PHRASE RATHER THAN A NOTE, all optional and all
- * defaulting to the value that means "do nothing". They exist because four of
- * the sixteen species cannot be described by a contour alone — what identifies
- * them is something that happens ACROSS the phrase — and because once they
- * exist every other row can use them for free.
+ * defaulting to the value that means "do nothing".
  *
  * `fade` is the gain the last note reaches relative to the first, interpolated
- * geometrically. A willow warbler at 0.18 is a descending scale that dies away
- * to nothing, which is the entire bird; a blackcap at 2.6 is a crescendo, and
- * geometric interpolation is the right kind because it back-loads — half way
- * through a 2.6 the bird is only 1.6 up, so the opening still arrives.
+ * geometrically. A potoo at 0.3 is a series that dies away into the dark, which
+ * is the entire bird; a piha at 2.6 is an explosion, and geometric
+ * interpolation is the right kind because it back-loads.
  *
  * `pure` is the same idea applied to `index`: the modulation depth at the last
- * note relative to the first. A blackcap starts scratchy and ends fluted, which
- * is a change of TIMBRE across one phrase and the only one in the table. It is
- * safe in the direction that matters — every value here is below one, so the
- * sidebands only ever thin out.
+ * note relative to the first.
  *
  * `hold` multiplies the decay of the FINAL note, and the glide of that note by
- * its square root so a long note also falls further. It is the yellowhammer,
- * and nothing else in the table ends on a held note at all.
+ * its square root so a long note also falls further. It is the oropendola's
+ * final whoop and the antshrike's growl.
  *
  * `tail` is how many notes at the end are the ENDING. See `_phrase`: a
- * shortened rendition drops notes out of the middle and keeps these, so a
- * chaffinch that runs out of enthusiasm still trips over its flourish. It also
+ * shortened rendition drops notes out of the middle and keeps these. It also
  * doubles as the flag for whether a phrase may be run LONG, since a phrase with
  * an ending cannot be, and for whether a note may be dropped from it.
  *
  * `unit` is the size of the repeating group, for the rows that have one, and it
- * is the other half of making the length vary safely. A cuckoo is threes and
- * twos: `unit: 2` is why you never hear "cuck-oo, cuck-oo, cuck". A wood pigeon
- * is a single five-note idiom, so it is `unit: 5`, which is this field's way of
- * saying the phrase is not to be cut at all.
+ * is the other half of making the length vary safely. A trogon is a series and
+ * may be any length; a kiskadee is three syllables and is `unit: 3`, which is
+ * this field's way of saying you never hear "kis-ka".
  *
  * `stream` is a length in SECONDS rather than a count of notes, and it is the
- * skylark and only the skylark. A row that has it is not a phrase, it is a
- * stretch of time full of notes, and it is scheduled a little at a time instead
- * of all at once. See STREAM_AHEAD and `_phrase`.
+ * musician wren and only the musician wren. A row that has it is not a phrase,
+ * it is a stretch of time full of notes, and it is scheduled a little at a time
+ * instead of all at once. See STREAM_AHEAD and `_phrase`.
  *
  * THE FIVE FIELDS THAT ARE NOT ABOUT THE SOUND.
  *
  * `active` is the window of `dark` — 0 full daylight, 1 night — inside which
- * this one is singing, and it fades over 0.18 either side rather than switching,
- * so the roster leans instead of flipping. Almost everything starts at 0 because
- * almost every bird in a British wood sings in the morning; what distinguishes
- * them is how far into the evening they are still at it, which is exactly what
- * the upper bound says. The nightingale is the only one with a floor, and it is
- * the reason the floor exists at all.
+ * this one is singing, and it fades over 0.18 either side rather than
+ * switching. A rainforest uses more of this range than a wood does: it has a
+ * ferocious dawn, a genuine midday lull nothing here models yet, a second peak
+ * at dusk, and then a night shift that is a different set of animals rather
+ * than an absence. The potoo and the tinamou are the two with a FLOOR, and
+ * between them they are why the floor exists.
  *
  * `carry` is how far the voice is worth hearing, in metres. It is not a volume —
- * it biases the chorus's choice by distance, so a call scheduled at 110 m is a
- * song thrush or a cuckoo and never a goldcrest. Without it a third of the
- * distant chorus was events spent on birds that are inaudible past forty metres,
- * which is not a quiet bird, it is a missing one.
+ * it biases the chorus's choice by distance, so a call scheduled at 200 m is a
+ * piha or a bellbird and never a honeycreeper. The numbers here run much higher
+ * than the old table's because the birds do: a three-wattled bellbird is the
+ * loudest bird ever measured and a screaming piha is not far behind it.
  *
- * `rare` is the thumb on the scale. A cuckoo at 0.3 turns up about a third as
- * often as a chaffinch, because a cuckoo every thirty seconds stops being a
- * cuckoo within two minutes.
+ * `rare` is the thumb on the scale. A bellbird at 0.45 turns up about half as
+ * often as a kiskadee, because a bellbird every thirty seconds stops being an
+ * event within two minutes.
  *
  * `early` is the dawn running order, and it is the one field here that is pure
- * observation. A wood does not simply get louder at first light, it fills up in
- * a SEQUENCE: robin and blackbird half an hour before sunrise in what is still
- * the dark, song thrush and wren as it comes up, the tits and finches after
- * that, and the warblers not until it is properly light. So a robin is 2.5, a
- * blackcap 0.45, and the multiplier is scaled by `dawn` — which means it is
- * exactly 1 the rest of the day and the roster only reorders itself at the one
- * hour the reordering is a real thing.
+ * observation. A rainforest does not simply get louder at first light, it fills
+ * up in a SEQUENCE: tinamous and motmots hooting in what is still the dark, the
+ * pihas and the oropendolas as it comes up, the toucans and aracaris after
+ * that, and the small canopy birds not until it is properly light.
  *
  * `call` is what the bird says when it is NOT singing, as semitone offsets from
  * the same root. It is one to three numbers and it is the second most
- * recognisable thing about most of these species — a robin's ticking, a
- * blackbird's low chook, a chaffinch's single hard "pink". `call` also seeds
- * the alarm, the flight call and the juvenile, which are the same note moved
- * and re-rhythmed; see `call()`.
+ * recognisable thing about most of these species. `call` also seeds the alarm,
+ * the flight call and the juvenile, which are the same note moved and
+ * re-rhythmed; see `call()`.
  *
  * `size` is body length in centimetres and makes no sound at all. It is here
  * because something has to draw these birds and the only place the roster is
- * written down is this table — see `voiceInfo`.
+ * written down is this table — see `voiceInfo`. It matters more than it used
+ * to: this roster averages 27 cm against the old one's 17, and the thing a
+ * player actually reported about the old wood is that they could hear birds
+ * and never spot one.
  */
 const VOICES = [
   {
     /**
-     * A chaffinch. An accelerating descending run that trips over itself and
-     * ends in a completely different flourish — instantly recognisable, and the
-     * acceleration is what does it: the gaps shrink by a fifth each note.
+     * A screaming piha, which is the sound people mean when they say
+     * "rainforest" and do not know it. Two small introductory notes and then an
+     * explosion: a leap of most of an octave, held for a fraction of a second,
+     * and dropped off a cliff. It is the loudest thing in this table and one of
+     * the loudest birds alive.
+     *
+     * `arc` is doing nearly all of it. Up two semitones, up three more, then
+     * down six and a half INSIDE ONE NOTE — that swoop is the whole species,
+     * and without it this row is four notes anybody could have produced. The
+     * `fade` of 2.6 is the other half: the first two notes are a fifth of the
+     * volume of the third, which is why the third one makes you jump.
      */
-    name: 'chaffinch',
-    root: 79,
-    ratio: 1.0,
-    index: 1.1,
-    decay: 0.075,
-    notes: [12, 12, 10, 10, 8, 8, 7, 5, 3, 14, 9],
-    gaps: [0.115, 0.105, 0.098, 0.09, 0.084, 0.078, 0.073, 0.07, 0.15, 0.09],
-    glide: -1.6,
-    level: 1,
-    active: [0, 0.5],
-    carry: 95,
-    rare: 1,
-    // The last two notes ARE the chaffinch. Everything before them is a
-    // descending run that four other species could have produced.
-    tail: 2,
-    early: 0.9,
-    // "Pink." One hard note, and it is the sound a chaffinch makes for the
-    // other twenty-three hours.
-    call: [9],
-    size: 15,
-  },
-  {
-    /**
-     * A great tit. Two notes, a fourth apart, repeated — "tea-cher, tea-cher".
-     * Almost metronomic, which is unusual enough among birds to be a signature
-     * all by itself.
-     */
-    name: 'greattit',
-    root: 84,
-    ratio: 2.01,
-    index: 1.6,
-    decay: 0.12,
-    notes: [7, 0, 7, 0, 7, 0, 7, 0],
-    gaps: [0.16, 0.2],
-    glide: -0.5,
-    level: 0.95,
-    active: [0, 0.55],
-    carry: 100,
-    rare: 1,
-    // 'Tea-cher' is the unit, not 'tea'.
-    unit: 2,
-    early: 1.1,
-    // A thin high "tsee-tsee", nothing like the song. A great tit has the
-    // largest vocabulary of any bird here and this is the least of it.
-    call: [12, 12],
-    size: 14,
-  },
-  {
-    /**
-     * A wren. Enormously loud for its size and essentially a machine gun: forty
-     * notes in two seconds ending in a hard trill. The gaps are so short that
-     * the ear stops hearing notes and starts hearing a texture, which is exactly
-     * what a real one does to you at three metres.
-     */
-    name: 'wren',
-    root: 88,
-    ratio: 1.0,
-    index: 0.8,
-    decay: 0.035,
-    notes: [0, 4, 0, 5, 0, 4, 2, 7, 2, 7, 2, 9, 5, 9, 5, 12, 7, 12, 7, 12],
-    gaps: [0.052, 0.046, 0.058, 0.044],
-    glide: 0.9,
-    level: 0.8,
-    // Still going long after everything else has packed up, which is why the
-    // window runs so much further into the dark than its neighbours'.
-    active: [0, 0.7],
-    carry: 80,
-    rare: 0.85,
-    early: 1.3,
-    // The scolding rattle. Three of them on one pitch, and a wren does this at
-    // anything that moves.
-    call: [0, 0, 0],
-    size: 10,
-  },
-  {
-    /**
-     * A blackbird. Slow, low, fluted, wandering — the phrase never repeats and
-     * always ends thinner and higher than it began. Long decays and wide
-     * intervals; this is the one that sounds like music rather than like signal.
-     */
-    name: 'blackbird',
-    root: 72,
+    name: 'piha',
+    // Measured piha calls put their energy around 2.5-3 kHz with the peak of
+    // the scream just under 3. 99 is 2489 Hz and the arc takes the top of it
+    // to about 4.5 kHz, which is the bird.
+    root: 99,
     ratio: 1.0,
     index: 0.55,
-    decay: 0.3,
-    notes: [0, 7, 5, 9, 4, 12, 11, 16],
-    gaps: [0.26, 0.21, 0.3, 0.24, 0.28, 0.16, 0.14],
-    glide: 1.1,
-    level: 1.05,
-    // The last bird of the day and the loudest thing in a suburban dusk. It
-    // gets the widest window and the longest carry of any of the six originals.
-    active: [0, 0.95],
-    carry: 130,
-    rare: 1.1,
-    // A blackbird phrase always ends thinner and higher, so the last two notes
-    // are the ending in the same sense the chaffinch's flourish is.
+    decay: 0.19,
+    notes: [-7, -3, 12, 5],
+    gaps: [0.27, 0.34, 0.17],
+    glide: -1.2,
+    arc: [2.2, 3.4, -6.5],
+    lead: 1.5,
+    fade: 2.6,
+    hold: 1.4,
+    // The scream and the note it falls onto. Everything before them is a
+    // preamble, and a piha that got cut short would be the preamble.
     tail: 2,
-    // First light and last light both belong to this bird. Second only to the
-    // robin, and only because a robin will sing at three in the morning.
-    early: 2.4,
-    // The low "chook chook" it makes going to roost, which is the other half of
-    // what a suburban dusk sounds like.
-    call: [-2, -2, 0],
+    unit: 2,
+    // 0.45 and not 1.0, which is the level this row was written at. It is the
+    // loudest bird in the forest and it also carries `fade: 2.6`, so a level of
+    // one produced a note two and a half times louder than anything the old
+    // table could make and put the combined row over the jukebox. See
+    // `fauna-audio.mjs`. What you hear is level x fade, and that is now 1.17.
+    level: 0.45,
+    active: [0, 0.55],
+    // Two hundred and sixty metres is not a guess. A piha is audible most of a
+    // kilometre through closed forest and this is the number that keeps it in
+    // the distant chorus at every radius the chorus uses.
+    carry: 260,
+    // The commonest sound in the wood, and the one row above 1.
+    rare: 1.3,
+    early: 1.4,
+    call: [0],
     size: 25,
   },
   {
     /**
-     * A wood pigeon. Five notes, low, breathy, on a rhythm nobody can hear
-     * without hearing the phrase "my TOE bleeds, Bet-ty". The near-zero
-     * modulation index is the point: it is almost a pure sine, which is what
-     * gives it the hooting, hollow quality.
+     * A three-wattled bellbird: a single metallic BONK, and then — from the
+     * same bird, a beat later — a thin whistle that slides away underneath it.
+     * Nothing else in this table is two such different sounds in one phrase.
+     *
+     * THIS IS THE ONE ROW THAT IS ALLOWED TO RING, and the exception needs
+     * stating because the rest of the file exists to stop exactly that. A
+     * bellbird is not a metaphor: it is a hammered, clanging, almost
+     * electronic noise, and the reason it does not come out as a marimba is the
+     * envelope rather than the spectrum. The decay is 0.09 with a hard 2.4
+     * lead, so it is a CLANG — an onset and nothing after it — where a mallet
+     * is an onset and a long ringing tail. The tail here belongs to the second
+     * note, which is a whistle, which is a different sound and is the point.
      */
-    name: 'pigeon',
-    root: 60,
+    name: 'bellbird',
+    // Around 5 kHz. It is the highest-pitched loud voice in the wood and that
+    // combination is what makes it carry through leaves.
+    root: 111,
+    ratio: 1.0,
+    index: 0.9,
+    decay: 0.09,
+    notes: [0, -15],
+    gaps: [0.86],
+    glide: -0.8,
+    arc: [0.4, -1.3],
+    lead: 2.4,
+    // The whistle. Three times the length of the clang and it falls a fifth
+    // further for it, which is what `hold` does to the glide.
+    hold: 3.0,
+    unit: 2,
+    level: 0.8,
+    active: [0, 0.5],
+    // The loudest bird ever measured. This is the longest carry in the table
+    // and it is still an underestimate.
+    carry: 300,
+    rare: 0.45,
+    early: 0.8,
+    call: [0],
+    size: 30,
+  },
+  {
+    /**
+     * A Montezuma oropendola, and the best argument in this table for `hold`
+     * and `glide` existing at all.
+     *
+     * The song is a liquid gurgle that accelerates, climbs most of two octaves,
+     * and ends in a long upward whoop that sounds like water going down a drain
+     * backwards. It is the single most improbable noise in a Neotropical
+     * forest and it is four numbers: a rising `notes` line, gaps that get
+     * LONGER rather than shorter, a `fade` that crescendos into the whoop, and
+     * a `hold` of 3.2 on the last note — which by way of the square-root rule
+     * also drags that note's glide up nearly six semitones on its own.
+     */
+    name: 'oropendola',
+    // The gurgle starts around 700 Hz and the whoop finishes above 3 kHz.
+    root: 78,
+    ratio: 1.0,
+    index: 0.7,
+    decay: 0.15,
+    notes: [0, 0, 2, 5, 9, 14, 21],
+    gaps: [0.13, 0.15, 0.19, 0.24, 0.31, 0.4],
+    glide: 3.2,
+    arc: [1.4, 3.2],
+    // Liquid. This is the warble doing what the nightingale's used to.
+    warble: 7,
+    warbleDepth: 0.22,
+    lead: 0.8,
+    fade: 2.2,
+    hold: 3.2,
+    tail: 1,
+    level: 0.5,
+    active: [0, 0.45],
+    carry: 200,
+    rare: 0.75,
+    early: 1.5,
+    call: [-7],
+    size: 47,
+  },
+  {
+    /**
+     * A resplendent quetzal. Soft, mellow, slurred pairs — "keow, ko-week" —
+     * and after the piha and the bellbird it is a shock how quiet the most
+     * famous bird in the forest actually is.
+     *
+     * A low index and a long decay make it mellow; the arc makes it slurred.
+     * Every note bends up two and a half semitones and then sags three, which
+     * is a whimper, and it is the only voice here that sounds uncertain.
+     */
+    name: 'quetzal',
+    // Around 1 kHz, which for a bird this size is about right and is well
+    // below the small-bird band this file usually defends.
+    root: 84,
+    ratio: 1.0,
+    index: 0.3,
+    decay: 0.3,
+    notes: [0, 5, 0, 7],
+    gaps: [0.33, 0.62, 0.33],
+    glide: -1.4,
+    arc: [2.5, -1.5, -3.0],
+    warble: 5.5,
+    warbleDepth: 0.18,
+    lead: 0.7,
+    level: 0.6,
+    active: [0, 0.5],
+    carry: 120,
+    rare: 0.7,
+    unit: 2,
+    early: 1.2,
+    call: [-5],
+    size: 40,
+  },
+  {
+    /**
+     * A turquoise-browed motmot: a low, hollow, owl-like double hoot from deep
+     * shade, and the lowest voice in the table by a fourth.
+     *
+     * IT IS DOWN HERE ON PURPOSE AND IT IS THE ROW MOST LIKELY TO BE "FIXED" BY
+     * SOMEBODY WHO HAS READ THE HEADER AND NOT THIS. A motmot really does call
+     * at about 400 Hz — it is the wood pigeon of this roster — and it survives
+     * being there for the wood pigeon's two reasons: an index of 0.14, which is
+     * very nearly a pure sine, and a decay of 0.4, which is long enough that
+     * the note is a hoot rather than a strike. Raise the index and this becomes
+     * a marimba immediately.
+     */
+    name: 'motmot',
+    // 392 Hz.
+    root: 67,
+    ratio: 1.0,
+    index: 0.2,
+    decay: 0.4,
+    notes: [0, 0],
+    gaps: [0.21],
+    glide: -0.5,
+    arc: [0.6, 0.2, -0.6],
+    warble: 5,
+    warbleDepth: 0.1,
+    lead: 0.5,
+    level: 0.75,
+    // Hooting in the half dark at both ends of the day, and it is one of the
+    // last things still going after the canopy birds have stopped.
+    active: [0, 0.68],
+    // Two low pure tones carry absurdly far through trees, which is the entire
+    // reason the bird sings them.
+    carry: 170,
+    rare: 0.6,
+    unit: 2,
+    early: 2.2,
+    call: [0],
+    size: 34,
+  },
+  {
+    /**
+     * A great tinamou, and the reason dusk in this wood is worth standing still
+     * for. Three to five enormously long, pure, quavering whistles, each one a
+     * little higher than the last, with a second of silence between them. It is
+     * a ground bird you will essentially never see and the voice is the only
+     * evidence it exists.
+     *
+     * The tremolo is the species. 9 Hz at a third of a semitone is the deepest
+     * vibrato in the table, and on a note this long it is the whole character —
+     * the notes themselves barely move.
+     */
+    name: 'tinamou',
+    // A shade under 1 kHz.
+    root: 82,
+    ratio: 1.0,
+    index: 0.2,
+    decay: 0.6,
+    notes: [0, 0, 2, 2, 4],
+    gaps: [0.92, 1.0, 1.06, 1.12],
+    glide: 0.8,
+    arc: [0.3, 0.8, 0.4],
+    warble: 9,
+    warbleDepth: 0.3,
+    lead: 0.4,
+    level: 0.65,
+    // A FLOOR, like the potoo. A tinamou starts as the light goes and is the
+    // voice that hands the wood over to the night.
+    active: [0.28, 1],
+    carry: 220,
+    rare: 0.7,
+    tail: 2,
+    early: 0.35,
+    call: [0],
+    size: 44,
+  },
+  {
+    /**
+     * A black-throated trogon: eight to a dozen absolutely even hollow notes,
+     * slowing very slightly and sagging a semitone at the end. It is the
+     * metronome of this roster, and against nineteen rows that all move it
+     * reads as the deliberate, patient thing it is.
+     *
+     * It sits still on its branch for minutes at a time doing this, which is
+     * also why it is one of the two or three species here you can genuinely
+     * walk up to and find.
+     */
+    name: 'trogon',
+    // About 700 Hz.
+    root: 77,
+    ratio: 1.0,
+    index: 0.25,
+    decay: 0.2,
+    notes: [0, 0, 0, 0, 0, 0, 0, -1, -1],
+    gaps: [0.22, 0.225, 0.23, 0.24, 0.25, 0.26, 0.275, 0.29],
+    glide: -0.6,
+    arc: [0.2, -0.8],
+    lead: 0.9,
+    fade: 0.8,
+    level: 0.7,
+    active: [0, 0.5],
+    carry: 130,
+    rare: 0.9,
+    early: 1.0,
+    call: [0, 0],
+    size: 28,
+  },
+  {
+    /**
+     * A common potoo, which is what the dark sounds like here.
+     *
+     * Five or six notes, each a minor third below the one before, each quieter,
+     * spaced most of a second apart — a descending series that falls away into
+     * nothing and is unmistakably sad. It is the nightingale's slot in the old
+     * roster and it does the job better, because it does not sound like a
+     * beautiful bird singing. It sounds like something a long way off giving
+     * up.
+     *
+     * `fade` at 0.3 and a `notes` line that falls fifteen semitones are the
+     * same idea said twice, on purpose: the phrase gets lower AND quieter, and
+     * either alone reads as a mistake rather than as a shape.
+     */
+    name: 'potoo',
+    // Starting around 1 kHz and ending near 400.
+    root: 83,
     ratio: 1.0,
     index: 0.18,
-    decay: 0.34,
-    notes: [0, 5, 5, 0, 0],
-    gaps: [0.26, 0.42, 0.5, 0.36],
-    glide: -0.4,
-    level: 1.1,
-    active: [0, 0.45],
-    // Low and hooting, so it survives the distance low-pass better than
-    // anything else here — a pigeon two hundred metres off is still a pigeon.
+    decay: 0.45,
+    notes: [0, -3, -6, -9, -12, -15],
+    gaps: [0.76, 0.82, 0.86, 0.92, 0.98],
+    glide: -1.2,
+    arc: [0.3, -1.6],
+    warble: 4,
+    warbleDepth: 0.15,
+    lead: 0.5,
+    fade: 0.3,
+    level: 0.75,
+    // The deepest floor in the table. A potoo does not start until the light
+    // has properly gone, which during play means somewhere past the middle of
+    // a trip.
+    active: [0.38, 1],
+    carry: 200,
+    rare: 0.85,
+    unit: 3,
+    early: 0.3,
+    call: [-8],
+    size: 38,
+  },
+  {
+    /**
+     * A great kiskadee, which says its own name and is the one bird on this
+     * roster a player will learn by the end of an afternoon. Three shouted
+     * syllables, rising, the last one longest and highest: "kis-ka-DEE".
+     *
+     * `unit: 3` is why you never hear "kis-ka". A two-thirds kiskadee is the
+     * exact equivalent of the cuckoo's broken third and would be noticed by
+     * everybody.
+     *
+     * A hard `lead` of 2.1 is the shout. Every other loud row here arrives on
+     * its note; a kiskadee hits it.
+     */
+    name: 'kiskadee',
+    // 2.1 kHz, rising through the phrase to about 3.5.
+    root: 96,
+    ratio: 1.0,
+    index: 0.9,
+    decay: 0.12,
+    notes: [0, 4, 9],
+    gaps: [0.13, 0.17],
+    glide: 1.2,
+    arc: [1.2, -0.8],
+    lead: 2.1,
+    fade: 1.8,
+    hold: 1.7,
+    tail: 1,
+    unit: 3,
+    level: 0.6,
+    active: [0, 0.55],
     carry: 140,
-    rare: 0.9,
-    // Five notes or none. There is no such thing as most of it.
-    unit: 5,
-    // The last bird in the wood to get up, and it does not care about dawn.
+    // The most conspicuous bird in the Neotropics — it sits in the open, near
+    // water, near people, and shouts.
+    rare: 1.15,
+    early: 1.1,
+    call: [4, 4],
+    size: 22,
+  },
+  {
+    /**
+     * A musician wren, and the only voice in the table that is about DURATION.
+     *
+     * Everything else here is a phrase — a shape with a beginning and an end,
+     * two seconds long, and then silence you can hear. A musician wren has no
+     * phrase boundaries. It produces an unbroken wandering line of pure
+     * whistled intervals for twenty seconds or a minute, and the effect of that
+     * on a wood full of two-second phrases is not "another bird". It is one
+     * bird that will not stop, which is a completely different experience and
+     * the reason the streaming machinery in `_phrase` exists for this one row.
+     *
+     * SEVENTEEN NOTES AGAINST SEVEN GAPS, which is deliberate and is the whole
+     * trick: the two cycles are coprime, so the melodic pattern does not come
+     * round for a hundred and nineteen notes — and by then the per-note detune
+     * and the glide jitter have moved it anyway. A wren that loops is worse
+     * than no wren.
+     *
+     * The intervals are wide and consonant on purpose. This is the bird people
+     * claim sings in perfect fifths and octaves; it does not quite, but it
+     * comes closer than anything else alive and the row is written to it.
+     */
+    name: 'musicianwren',
+    // 1.6 kHz. Pure, flute-like, and much lower than a temperate wren.
+    root: 91,
+    ratio: 1.0,
+    index: 0.35,
+    decay: 0.16,
+    notes: [0, 7, 12, 5, 0, 9, 4, 12, 7, 2, 11, 5, 14, 7, 0, 9, 3],
+    gaps: [0.29, 0.34, 0.26, 0.41, 0.31, 0.24, 0.37],
+    glide: -0.5,
+    arc: [0.5, -0.4],
+    warble: 6,
+    warbleDepth: 0.12,
+    lead: 0.9,
+    // Seconds, not notes.
+    stream: [7, 20],
+    level: 0.5,
+    active: [0, 0.4],
+    // A small bird in the understorey. It does not throw.
+    carry: 70,
+    // Low, and it has to be. This is not an event that can happen twice in a
+    // minute — it is an event that occupies a minute.
+    rare: 0.4,
+    early: 0.8,
+    call: [0, 0],
+    size: 12,
+  },
+  {
+    /**
+     * A warbling antbird: a short accelerating series that climbs, tightens
+     * into a rattle and stops dead. It is the chaffinch's structure — a run
+     * that trips over itself — running UPHILL instead of down, which is a
+     * completely different sound and worth having for exactly that reason.
+     *
+     * The gaps shrink by about a seventh each note. That acceleration is the
+     * species; the pitches are almost incidental.
+     */
+    name: 'antbird',
+    root: 95,
+    ratio: 1.0,
+    index: 0.85,
+    decay: 0.075,
+    notes: [0, 2, 3, 5, 6, 8, 9, 11, 12, 12],
+    gaps: [0.155, 0.14, 0.126, 0.114, 0.103, 0.094, 0.086, 0.08, 0.076],
+    glide: 0.9,
+    arc: [-0.6, 1.2],
+    lead: 1.7,
+    fade: 1.5,
+    tail: 2,
+    level: 0.55,
+    active: [0, 0.45],
+    // The understorey, in deep shade, and it never leaves it.
+    carry: 60,
+    rare: 1.0,
     early: 0.6,
+    call: [2],
+    size: 14,
+  },
+  {
+    /**
+     * A golden-headed manakin, which is the second of the two rows allowed to
+     * be rough, and the roughness is entirely in the warble.
+     *
+     * The display call is a buzzy descending "prrreet" — a sound with an
+     * obvious grain to it — and the honest way to get grain out of this
+     * synthesiser is a vibrato fast enough to stop being heard as pitch. 21 Hz
+     * at a fifth of a semitone is right at that edge. Push the depth and it
+     * becomes sidebands, which is the thing this file refuses; push the rate
+     * and it becomes a tremolo.
+     *
+     * It is also the smallest bird on the roster and by some distance the most
+     * ridiculous — a nine-centimetre black bird with a fluorescent yellow head
+     * that spends its day snapping its wings at other birds on a lek.
+     */
+    name: 'manakin',
+    root: 99,
+    ratio: 1.0,
+    index: 0.75,
+    decay: 0.13,
+    notes: [0, -2, -5],
+    gaps: [0.09, 0.11],
+    glide: -3.4,
+    arc: [0.4, -1.8],
+    warble: 21,
+    warbleDepth: 0.2,
+    lead: 1.4,
+    level: 0.45,
+    active: [0, 0.4],
+    carry: 45,
+    rare: 0.8,
+    unit: 3,
+    early: 0.5,
+    call: [0],
+    size: 10,
+  },
+  {
+    /**
+     * A paradise tanager: thin, high, unmusical little "tsip"s with a longer
+     * one on the end. The voice is nothing and the bird is the most absurdly
+     * coloured thing in the wood — apple-green head, turquoise breast, scarlet
+     * rump — which is a real and useful asymmetry, because it means the way you
+     * find one is by looking rather than by listening.
+     */
+    name: 'tanager',
+    root: 102,
+    ratio: 1.0,
+    index: 0.6,
+    decay: 0.055,
+    notes: [0, 0, 2, 0, 5],
+    gaps: [0.11, 0.13, 0.1, 0.16],
+    glide: 1.1,
+    arc: [0.6, -0.5],
+    lead: 1.8,
+    hold: 1.9,
+    tail: 1,
+    level: 0.42,
+    active: [0, 0.4],
+    carry: 50,
+    rare: 0.9,
+    early: 0.5,
+    call: [0],
+    size: 14,
+  },
+  {
+    /**
+     * A red-legged honeycreeper. The highest small voice here and very nearly
+     * the thinnest sound this synthesiser can make: a lisping descending
+     * "tseee" with almost nothing in it.
+     *
+     * It is on the roster for the goldcrest's reason. A wood needs a voice at
+     * the top of its range that you can only hear when you are close, so that
+     * being close to something means something.
+     */
+    name: 'honeycreeper',
+    root: 105,
+    ratio: 1.0,
+    index: 0.4,
+    decay: 0.06,
+    notes: [0, -1, -3],
+    gaps: [0.13, 0.15],
+    glide: -2.2,
+    arc: [0.3, -1.4],
+    lead: 1.1,
+    fade: 0.6,
+    level: 0.34,
+    active: [0, 0.35],
+    // Forty metres. Past that it is not a quiet bird, it is no bird.
+    carry: 40,
+    rare: 0.7,
+    early: 0.45,
+    call: [-1],
+    size: 12,
+  },
+  {
+    /**
+     * A long-billed hermit — a hummingbird, singing at a lek, which is a
+     * sentence most people do not expect to be true. The song is a high,
+     * squeaky, monotonous chip repeated every second or so, for hours, from the
+     * same twig.
+     *
+     * The highest root in the table, and the shortest carry: a hermit twenty
+     * metres away is inaudible, so hearing one means it is more or less in
+     * front of you.
+     */
+    name: 'hermit',
+    root: 107,
+    ratio: 1.0,
+    index: 0.7,
+    decay: 0.05,
+    notes: [0, 0, 1],
+    gaps: [0.62, 0.66],
+    glide: 0.8,
+    arc: [-0.4, 0.9],
+    lead: 2.0,
+    level: 0.3,
+    active: [0, 0.4],
+    carry: 30,
+    rare: 0.6,
+    early: 0.4,
+    call: [0],
+    size: 13,
+  },
+  {
+    /**
+     * A barred woodcreeper: a descending whinnying laugh, fifteen or twenty
+     * notes, slowing and falling and quietening the whole way down. It is the
+     * willow warbler's dying fall with a rainforest's lungs behind it, and it
+     * is the one phrase here that genuinely sounds like laughter.
+     *
+     * `fade` at 0.35 with gaps that grow and a `notes` line that falls is three
+     * statements of the same idea, which is what a dying fall needs — take any
+     * one of them out and it is a descending scale.
+     */
+    name: 'woodcreeper',
+    root: 90,
+    ratio: 1.0,
+    index: 0.7,
+    decay: 0.1,
+    notes: [12, 11, 9, 8, 6, 5, 3, 2, 0, -1, -3, -4],
+    gaps: [0.075, 0.08, 0.086, 0.093, 0.1, 0.108, 0.117, 0.127, 0.138, 0.15, 0.163],
+    glide: -1.1,
+    arc: [0.25, -1.2],
+    lead: 1.3,
+    fade: 0.35,
+    pure: 0.45,
+    level: 0.55,
+    active: [0, 0.5],
+    carry: 110,
+    rare: 0.8,
+    early: 0.9,
+    call: [-4],
+    size: 25,
+  },
+  {
+    /**
+     * A barred antshrike, which is the accelerando in this table and the only
+     * phrase that ends in something ugly.
+     *
+     * Fifteen or so nasal notes that speed up until they run together, and then
+     * one long, down-bent, snarling note on the end that is a different animal
+     * from the fourteen before it. `hold` at 2.6 makes that last note two and a
+     * half times the length of the others and — through the square-root rule —
+     * bends it a fourth and a half further down. Without it the row is a
+     * rattle that stops.
+     */
+    name: 'antshrike',
+    root: 88,
+    ratio: 1.0,
+    index: 1.0,
+    decay: 0.085,
+    notes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+    gaps: [0.2, 0.185, 0.17, 0.155, 0.142, 0.13, 0.12, 0.11, 0.1, 0.092, 0.085, 0.08],
+    glide: -1.4,
+    arc: [0.5, -1.0],
+    warble: 11,
+    warbleDepth: 0.16,
+    lead: 1.6,
+    hold: 2.6,
+    tail: 1,
+    level: 0.55,
+    active: [0, 0.45],
+    carry: 90,
+    rare: 0.85,
+    early: 0.7,
+    call: [0, 0],
+    size: 17,
+  },
+  {
+    /**
+     * A collared aracari — a small toucan, and nothing about the voice says so.
+     * It is a high, thin, penetrating shriek repeated four or five times, the
+     * sound of a rusty hinge, and it comes out of a bird with a scarlet rump
+     * and a bill half its own length.
+     *
+     * The asymmetry is the point again: this row's job on the roster is to be
+     * heard at a distance and then found, because when you do find it there is
+     * no mistaking what it is.
+     */
+    name: 'aracari',
+    root: 100,
+    ratio: 1.0,
+    index: 1.1,
+    decay: 0.11,
+    notes: [0, 0, 0, -1],
+    gaps: [0.31, 0.33, 0.36],
+    glide: -1.8,
+    arc: [1.0, -1.6],
+    lead: 2.2,
+    fade: 0.75,
+    level: 0.6,
+    active: [0, 0.5],
+    carry: 150,
+    rare: 0.8,
+    early: 1.3,
     call: [0],
     size: 41,
   },
   {
     /**
-     * A chiffchaff. Two pitches a tone apart in no particular order, over and
-     * over, for as long as you can stand it. The least musical bird in the wood
-     * and one of the most characteristic.
-     */
-    name: 'chiffchaff',
-    root: 86,
-    ratio: 1.0,
-    index: 1.3,
-    decay: 0.08,
-    notes: [0, 2, 0, 0, 2, 0, 2, 2, 0],
-    gaps: [0.19, 0.17, 0.21],
-    glide: -0.8,
-    level: 0.85,
-    active: [0, 0.5],
-    carry: 70,
-    // Deliberately under one. It is the most repetitive phrase in the table and
-    // the first one a listener starts to recognise as a loop.
-    rare: 0.8,
-    // A warbler, so it is nearly the last thing to join in. The dawn chorus is
-    // half over before a chiffchaff says anything.
-    early: 0.5,
-    // "Hweet." A rising monosyllable, and the only way to tell a chiffchaff
-    // from a willow warbler when neither of them is singing — which is to say,
-    // no way at all, because they share it.
-    call: [3],
-    size: 11,
-  },
-  /* ---- the second six. Everything below here was added later. ---- */
-  {
-    /**
-     * A robin. Thin, silvery and completely unpredictable: a run of high notes
-     * that wanders, stops dead, and then trickles downward in an accelerating
-     * scatter. The low modulation index is doing the work — a robin is the
-     * purest whistle in the wood and it is what makes it sound like glass
-     * rather than like a bird.
+     * A black-faced solitaire, which is the most beautiful voice in this file
+     * and is not a competition it wins narrowly. Pure, hollow, flute-like notes
+     * with enormous intervals between them and enormous silences around them —
+     * the thing people describe as a rusty gate that turned out to be musical.
      *
-     * The widest window in the table. A robin will sing under a streetlight at
-     * two in the morning, which is why it is the voice that survives furthest
-     * into a trip's darkness alongside the blackbird.
+     * The lowest `index` of any voice above 90, so it is very nearly a sine at
+     * a pitch where a sine is a whistle. The wide leaps and the long gaps are
+     * what stop that being boring: it is a bird that will not tell you where
+     * the phrase is going.
      */
-    name: 'robin',
-    root: 84,
-    ratio: 1.0,
-    index: 0.7,
-    decay: 0.1,
-    notes: [12, 7, 10, 5, 12, 14, 12, 9, 7, 5, 4, 2],
-    gaps: [0.13, 0.1, 0.24, 0.12, 0.085, 0.075, 0.068, 0.062, 0.056, 0.052, 0.05],
-    glide: -1.2,
-    level: 0.85,
-    active: [0, 1],
-    carry: 70,
-    rare: 1,
-    // The highest `early` in the table, and it belongs to the smallest voice in
-    // it. A robin is singing while it is still properly dark and the wood is
-    // otherwise empty, which is the whole reason the dawn order is worth
-    // modelling: for a few minutes there is exactly one species in it.
-    early: 2.5,
-    // The ticking. A robin follows you round a garden doing this and it is
-    // considerably more familiar than the song.
-    call: [7, 7, 7],
-    size: 14,
-  },
-  {
-    /**
-     * A song thrush, which is the one species in this table you can identify
-     * from a single structural rule: IT SAYS EVERYTHING TWICE, and usually
-     * three times. Every motif repeats, then a beat of silence, then a
-     * different motif repeats.
-     *
-     * That rule is encoded entirely in the gaps — the long value after each
-     * triple is the whole species. It is also the only bird here whose phrase
-     * has punctuation in it, which is why it reads as loud and deliberate next
-     * to the chaffinch's tumble.
-     */
-    name: 'songthrush',
-    root: 76,
-    ratio: 1.0,
-    index: 1.4,
-    decay: 0.13,
-    notes: [0, 0, 0, 7, 7, 7, 4, 4, 12, 12, 12],
-    gaps: [0.17, 0.17, 0.44, 0.16, 0.16, 0.42, 0.2, 0.46, 0.14, 0.14],
-    glide: -0.9,
-    level: 1.1,
-    active: [0, 0.85],
-    // The loudest songbird in a European wood by a distance. This is the voice
-    // the far end of the chorus is mostly made of.
-    carry: 150,
-    rare: 0.9,
-    early: 2,
-    // A hard "tchuck", usually as it flies off. Nothing like the song, which is
-    // the point of a call.
-    call: [12],
-    size: 23,
-  },
-  {
-    /**
-     * A nuthatch. Six or seven identical loud piping whistles on one pitch, at
-     * a steady five a second, each one falling slightly.
-     *
-     * It is here because it is the only voice in the table with NO melodic
-     * information at all, and a wood needs one of those. Everything else is a
-     * shape; this is a signal, and among eleven shapes a signal is instantly
-     * the thing you notice.
-     */
-    name: 'nuthatch',
-    root: 81,
-    ratio: 1.0,
-    index: 1.9,
-    decay: 0.16,
-    notes: [0, 0, 0, 0, 0, 0, 0],
-    gaps: [0.2, 0.19, 0.21],
-    glide: -1.4,
-    level: 1,
-    active: [0, 0.4],
-    carry: 110,
-    rare: 0.7,
-    early: 1,
-    // Two loud "twits", which is very nearly the song with the repeats taken
-    // out — the one species here whose call and song are the same material.
-    call: [0, 0],
-    size: 14,
-  },
-  {
-    /**
-     * A goldcrest. Britain's smallest bird and very nearly its highest voice: a
-     * cycling three-note figure up at four kilohertz, so thin that half the
-     * people in a wood cannot hear it at all.
-     *
-     * The low level and the short carry are the point rather than a limitation.
-     * This is the voice that only exists when you are close and everything else
-     * has stopped, and hearing it is a reward for standing still.
-     */
-    name: 'goldcrest',
-    root: 96,
-    ratio: 1.0,
-    index: 0.5,
-    decay: 0.06,
-    notes: [0, 4, 0, 0, 4, 0, 0, 4, 0, 7, 4, 0],
-    gaps: [0.09, 0.085, 0.17],
-    glide: 0.8,
-    level: 0.5,
-    active: [0, 0.35],
-    carry: 45,
-    rare: 0.55,
-    // The little rising flourish it signs off with. Protecting it also stops
-    // the cycling figure being run long, which would turn the smallest bird in
-    // Britain into a loop pedal.
-    tail: 3,
-    unit: 3,
-    early: 0.7,
-    call: [0, 0, 0],
-    size: 9,
-  },
-  {
-    /**
-     * A cuckoo. Two notes, a falling minor third, twice or three times with a
-     * long gap between. Eight numbers, and it is probably the most instantly
-     * recognisable sound in this entire project.
-     *
-     * Nearly zero modulation index, like the wood pigeon, for the same reason:
-     * it is a hollow, hooting, almost pure tone and any brightness at the
-     * attack turns it into a flute. `rare` is very low — a cuckoo is an event,
-     * and an event that happens every half minute is a metronome.
-     */
-    name: 'cuckoo',
-    root: 74,
+    name: 'solitaire',
+    root: 98,
     ratio: 1.0,
     index: 0.22,
     decay: 0.26,
-    notes: [0, -3, 0, -3, 0, -3],
-    gaps: [0.29, 0.66, 0.29, 0.66, 0.29],
-    glide: -0.3,
-    level: 1,
-    active: [0, 0.55],
-    // Two low pure tones carry absurdly far through trees, which is the entire
-    // reason the bird sings them.
-    carry: 200,
-    rare: 0.3,
-    // The falling third is the bird. Half of it is a wood pigeon with a cough.
-    unit: 2,
-    early: 1.2,
-    call: [0],
-    size: 33,
-  },
-  {
-    /**
-     * A nightingale, and the only voice in the table with a FLOOR on its
-     * window — it does not appear until the light has properly gone, which
-     * during play means somewhere past the middle of a trip.
-     *
-     * It earns that because of what it does structurally: four or five slow,
-     * pure, widely spaced whistles that give no hint of where the phrase is
-     * going, and then a hard accelerating tumble. Nothing else here has that
-     * much silence inside a single phrase, so when it arrives in a wood that
-     * has already gone quiet it does not sound like another bird being added.
-     * It sounds like something starting.
-     */
-    name: 'nightingale',
-    root: 79,
-    ratio: 1.0,
-    index: 0.6,
-    decay: 0.22,
-    notes: [0, 0, 0, 0, 12, 12, 12, 12, 7, 14, 12, 9, 5],
-    gaps: [0.46, 0.44, 0.48, 0.62, 0.13, 0.12, 0.115, 0.3, 0.1, 0.09, 0.085, 0.08],
-    glide: -0.7,
-    level: 1.15,
-    active: [0.22, 1],
-    carry: 120,
-    rare: 0.9,
-    // The tumble. It is the reason the four slow whistles work, so it is the
-    // half that can never be cut.
-    tail: 5,
-    unit: 4,
-    // It has been at it all night and it stops when the others start.
-    early: 0.4,
-    // A low croak. Barely a note, and it is a shock coming from that bird.
-    call: [-5],
-    size: 16,
-  },
-  /* ---- the third pass. Four contours the wood did not have. ---- */
-  {
-    /**
-     * A willow warbler, which is in the table for one reason: it is the
-     * CHAFFINCH RUNNING BACKWARDS. Both are twelve notes falling most of an
-     * octave, and after that they have nothing in common. A chaffinch speeds up
-     * into a flourish and finishes louder than it started; a willow warbler
-     * slows down, gets quieter and purer as it goes, and stops without ever
-     * arriving anywhere. It is the sound of something giving up, and it is
-     * unmistakable next to its own mirror image.
-     *
-     * `fade` at 0.18 is the bird. The last note is a fifth of the volume of the
-     * first, and by then `pure` has taken the modulation index down to a third
-     * of what it started at, so the phrase does not just fade — it thins, which
-     * is what a dying fall actually is. Take those two numbers out and this row
-     * is a descending scale, which is not a species.
-     */
-    name: 'willowwarbler',
-    root: 83,
-    ratio: 1.0,
-    index: 0.75,
-    decay: 0.11,
-    notes: [12, 11, 9, 9, 7, 7, 5, 4, 4, 2, 0, 0],
-    gaps: [0.12, 0.115, 0.13, 0.125, 0.14, 0.135, 0.15, 0.145, 0.16, 0.17, 0.19],
-    glide: -0.6,
-    fade: 0.18,
-    pure: 0.35,
-    level: 0.85,
-    active: [0, 0.4],
-    // A soft bird in the understorey. It does not throw, and a willow warbler
-    // at eighty metres is a rumour.
-    carry: 60,
-    rare: 0.95,
-    early: 0.5,
-    call: [7],
-    size: 11,
-  },
-  {
-    /**
-     * A skylark, and the only voice in the table that is about DURATION.
-     *
-     * Everything else here is a phrase — a shape with a beginning and an end,
-     * two seconds long, and then silence you can hear. A skylark has no phrase
-     * boundaries at all. It goes up, and it produces an unbroken stream of
-     * notes for twenty seconds or a minute without a single gap you could point
-     * at, and the effect of that on a wood full of two-second phrases is not
-     * "another bird". It is one bird that will not stop, which is a completely
-     * different experience and the reason the streaming machinery in `_phrase`
-     * exists for this one row.
-     *
-     * NINETEEN NOTES AGAINST SEVEN GAPS, which is deliberate and is the whole
-     * trick: the two cycles are coprime, so the melodic pattern does not come
-     * round for a hundred and thirty-three notes — something over seven seconds
-     * — and by then the per-note detune and the glide jitter have moved it
-     * anyway. A skylark that loops is worse than no skylark.
-     *
-     * IT IS NOT A WOODLAND BIRD and it is not pretending to be. It sings from a
-     * hundred feet up over open ground, so its `carry` is the second longest in
-     * the table and its `active` window is the narrowest — it belongs to the
-     * clearings and the field edge in full daylight, heard from inside the
-     * trees, which is exactly where a walk in a wood does hear one.
-     */
-    name: 'skylark',
-    root: 88,
-    ratio: 1.0,
-    index: 1.0,
-    decay: 0.05,
-    notes: [0, 4, 2, 7, 5, 9, 7, 12, 9, 5, 11, 7, 14, 10, 12, 5, 9, 2, 7],
-    gaps: [0.05, 0.046, 0.058, 0.043, 0.052, 0.061, 0.047],
-    glide: 0.7,
-    // Seconds, not notes. Seven is already four times the longest phrase in the
-    // table and twenty is a bird that is still going when you have walked out
-    // from under it, which is the point of the row.
-    stream: [7, 20],
-    // Quiet per note, and there are three hundred of them. The sum is what you
-    // hear and it is easily the loudest thing in the table if this is wrong.
-    level: 0.55,
-    active: [0, 0.3],
-    carry: 170,
-    // Low, and it has to be. A skylark is not an event that can happen twice in
-    // a minute — it is an event that occupies a minute.
-    rare: 0.35,
-    early: 1.6,
-    call: [0, 0, 0],
-    size: 18,
-  },
-  {
-    /**
-     * A blackcap, which is the only voice here with a GEAR CHANGE in it.
-     *
-     * The first half is a scratchy, hurried, low mutter that goes nowhere —
-     * small intervals, all within a tone or two of each other, quiet enough
-     * that at forty metres you are not sure you heard it. Then it stops for a
-     * quarter of a second and the same bird opens into six loud, wide, pure
-     * fluted notes and finishes on a held one. Nothing else in this table
-     * changes what kind of sound it is halfway through a phrase.
-     *
-     * THREE NUMBERS DO IT AND NONE OF THEM IS IN THE CONTOUR. `fade` at 2.6
-     * crescendos into the flourish; `pure` at 0.22 takes the modulation index
-     * from 1.7 down to 0.37, so the mutter is chiffy and the flourish is very
-     * nearly a flute; and `hold` stretches the last note. The contour supplies
-     * the pause — `gaps[9]` is the only long value in the row and it is the
-     * hinge the whole thing turns on.
-     *
-     * `tail: 6` is not decoration. A blackcap that got truncated in the middle
-     * of the mutter would be a bird making an unpleasant noise and stopping,
-     * which is a fair description of the first half on its own.
-     */
-    name: 'blackcap',
-    root: 78,
-    ratio: 1.0,
-    index: 1.7,
-    decay: 0.09,
-    notes: [0, 2, 1, 3, 0, 2, 4, 1, 3, 2, 12, 9, 14, 12, 16, 14],
-    gaps: [
-      0.075, 0.068, 0.082, 0.07, 0.078, 0.065, 0.085, 0.072, 0.08, 0.26, 0.17, 0.2, 0.155, 0.185,
-      0.16, 0.19,
-    ],
+    notes: [0, 7, -5, 5, 0, 9, -3],
+    gaps: [0.52, 0.66, 0.48, 0.74, 0.56, 0.62],
     glide: -0.9,
-    fade: 2.6,
-    pure: 0.22,
-    hold: 2.2,
-    // Held down against the crescendo. `fade` multiplies the last notes by
-    // 2.6, so a level of 1 here would make the flourish the loudest thing in
-    // the wood by a factor of two.
-    level: 0.62,
-    active: [0, 0.55],
-    carry: 90,
-    rare: 0.9,
-    tail: 6,
-    early: 0.45,
-    // "Tak. Tak." Two hard stones knocked together, and completely unlike
-    // either half of the song.
-    call: [-3, -3],
-    size: 14,
+    arc: [0.5, 0.2, -0.8],
+    warble: 6.5,
+    warbleDepth: 0.14,
+    lead: 0.6,
+    level: 0.6,
+    // The widest window of any small bird here. A solitaire sings in the mist
+    // before dawn and is still at it when everything else has stopped.
+    active: [0, 0.75],
+    carry: 160,
+    rare: 0.75,
+    early: 1.7,
+    call: [-5],
+    size: 17,
   },
   {
     /**
-     * A yellowhammer: "a little bit of bread and no CHEEEEESE". Seven identical
-     * fast notes and then, after the only real pause in the phrase, one long
-     * drawn-out wheeze a fourth below that lasts as long as all seven together.
+     * A keel-billed toucan, and the third and last row with grain in it.
      *
-     * IT IS THE ONLY THING HERE THAT ENDS ON A HELD NOTE. Sixteen species and
-     * every one of them is built out of notes between forty and three hundred
-     * milliseconds; this one finishes on a note of nearly seven tenths of a
-     * second that sags a tone and a half while it goes. That is `hold: 9`, and
-     * `hold` also takes the glide out by its square root, so the long note is
-     * not merely long — it subsides. A held note that stays put would be an
-     * organ, which is the failure mode this bird was worth risking.
+     * The call is not a squawk — that is a macaw, and it lives further down
+     * this file where the noise generators are. A toucan CROAKS: a dry,
+     * monotone, frog-like "creek ... creek ... creek", pitched low, repeated
+     * for a minute at a time from the top of a dead tree. The rhythm is
+     * absolutely even and the pitch never moves, which between them are the
+     * whole species.
      *
-     * Like the skylark it is a field-edge bird rather than a woodland one, with
-     * the short daylight window and the long carry that go with singing from an
-     * exposed perch in the open. `tail: 1` is the cheese, and there is no
-     * version of this species without it.
+     * 17 Hz of warble at a quarter of a semitone is the croak. It is the wren's
+     * old rattle trick used for texture rather than for speed, and it is the
+     * reason this row does not need the noise path: the grain is in the pitch,
+     * so the spectrum stays as thin as a whistle and the harshness meter never
+     * sees it.
      */
-    name: 'yellowhammer',
-    root: 82,
+    name: 'toucan',
+    // 587 Hz. Low, dry and hollow, and it holds still there.
+    root: 74,
     ratio: 1.0,
-    index: 1.5,
-    decay: 0.075,
-    notes: [0, 0, 0, 0, 0, 0, 0, -5],
-    gaps: [0.135, 0.128, 0.14, 0.13, 0.136, 0.125, 0.42],
-    glide: -0.5,
-    hold: 9,
-    pure: 0.6,
-    fade: 1.15,
-    level: 0.8,
-    active: [0, 0.35],
-    carry: 120,
-    rare: 0.5,
-    tail: 1,
-    early: 1.4,
-    call: [3],
-    size: 16,
+    index: 0.32,
+    decay: 0.14,
+    notes: [0, 0, 0, 0],
+    gaps: [0.33, 0.34, 0.33],
+    glide: -0.4,
+    arc: [0.2, -0.3],
+    warble: 17,
+    warbleDepth: 0.25,
+    lead: 1.2,
+    level: 0.7,
+    active: [0, 0.5],
+    carry: 180,
+    rare: 0.95,
+    // The bird you hear first from the canopy as it gets light, and the one
+    // most people are actually hoping to see.
+    early: 1.6,
+    call: [0],
+    size: 50,
   },
 ];
 
@@ -799,7 +1077,7 @@ export const VOICE_COUNT = VOICES.length;
  * defined by what the thing sounds like. Anything that wants to DRAW one of
  * these birds needs the same list and must not keep its own copy of it — a
  * second roster is a roster that goes out of date the next time a row is added,
- * silently, with a nuthatch wearing a wood pigeon.
+ * silently, with a hermit wearing a toucan.
  */
 export const VOICE_NAMES = VOICES.map((v) => v.name);
 
@@ -826,6 +1104,51 @@ export function voiceInfo(index) {
 }
 
 const midiToFreq = (midi) => 440 * 2 ** ((midi - 69) / 12);
+
+/** One semitone as a frequency ratio. Contours are written in semitones. */
+const SEMI = 2 ** (1 / 12);
+
+/**
+ * The default contour: none. A row with no `arc` gets its `glide` and nothing
+ * else, which is exactly what every row used to get.
+ */
+const _straightArc = [0];
+
+/**
+ * Walk an AudioParam through a pitch contour, in semitones, over `dur`.
+ *
+ * Used for the carrier and — critically — for the modulator as well, at the
+ * same shape, so that an FM pair sweeping an octave arrives with the same ratio
+ * it left with. See `_note`.
+ *
+ * `lead` is the onset: how many semitones flat the note starts before snapping
+ * up to pitch. This is a real thing a syrinx does as it comes under tension and
+ * it is what articulates a note now that there is no spectral flash at the
+ * front doing it. Ramps are exponential in frequency, which is linear in pitch,
+ * so a contour written in semitones is heard as the interval it says.
+ */
+function sweep(param, base, when, dur, arc, glide, bend, lead) {
+  const steps = arc.length;
+  // Short enough to be an articulation rather than a slur, and always inside
+  // the first contour leg so the ramp times stay in order.
+  const leadT = Math.min(0.012, dur * 0.12, dur / (steps + 1));
+  /**
+   * CLAMPED, because `bend` is not always near one. `call()` hands in ±2.4 for
+   * a flight call and 0.12 for an alarm, which are deliberate statements about
+   * the CONTOUR — a flight call falls away, an alarm refuses to move — and a
+   * scoop of three and a half semitones onto the front of a note is neither. It
+   * is a swoop, and on a one-note call it is the whole sound. The sign still
+   * follows `bend`, so an inverted contour still gets an inverted onset.
+   */
+  const leadS = clamp(-lead * bend, -2, 2);
+  param.setValueAtTime(Math.max(40, base * SEMI ** leadS), when);
+  param.exponentialRampToValueAtTime(Math.max(40, base), when + leadT);
+  for (let s = 0; s < steps; s++) {
+    const k = (s + 1) / steps;
+    const semis = (arc[s] + glide * k) * bend;
+    param.exponentialRampToValueAtTime(Math.max(40, base * SEMI ** semis), when + dur * k);
+  }
+}
 
 /**
  * The most nodes the wildlife may have alive at once.
@@ -945,23 +1268,23 @@ const SONG_BUDGET = 5;
  * Every other phrase in this file is scheduled in one go: twenty `_note` calls,
  * forty oscillators, all created inside a single JS turn and all counted
  * against `this.voices` the instant they exist, because `onended` cannot fire
- * for something that has not started yet. Twenty is fine. A skylark is two to
- * four HUNDRED notes, and scheduling one that way would take the counter past
+ * for something that has not started yet. Twenty is fine. A musician wren is two
+ * to four HUNDRED notes, and scheduling one that way would take the counter past
  * the ceiling on the first bird, drop most of its own song, and then refuse
  * every other event in the wood for the twenty seconds it took to drain.
  *
- * So the skylark is pumped instead. `_phrase` schedules only the notes that
+ * So the musician wren is pumped instead. `_phrase` schedules only the notes that
  * start within the next `STREAM_AHEAD` seconds and sets a timer for
  * `STREAM_STEP` to come back for more. Measured in the running app, that holds
  * between fifteen and twenty-seven notes in flight at any moment — about a
- * wren's footprint, sustained for twenty seconds instead of two, against a
+ * warbler's footprint, sustained for twenty seconds instead of two, against a
  * ceiling of fifty-eight. The lookahead is far longer than the step on purpose:
  * a late timer eats into the margin instead of leaving a hole in the song, and
  * the notes are still scheduled against `ctx.currentTime`, so they are
  * sample-accurate even when the timer that queued them was not.
  *
- * ONE AT A TIME, and that is what `_streams` is for. Two overlapping skylarks
- * is not a richer sky, it is twice the node footprint for a sound nobody can
+ * ONE AT A TIME, and that is what `_streams` is for. Two overlapping wrens
+ * is not a richer understorey, it is twice the node footprint for a sound nobody can
  * separate, and three is the flush spike this file already has a ceiling to
  * prevent — arriving slowly enough that the ceiling never sees it coming.
  */
@@ -1071,7 +1394,7 @@ export class Wildlife {
     this._nextWoodpecker = rngRange(this.rng, 20, 60);
     this._nextOwl = 20;
     this._nextInsect = 6;
-    this._nextCrow = rngRange(this.rng, 25, 80);
+    this._nextMacaw = rngRange(this.rng, 25, 80);
     this._nextFall = rngRange(this.rng, 18, 55);
     this._nextFly = rngRange(this.rng, 45, 120);
     /**
@@ -1090,9 +1413,9 @@ export class Wildlife {
      * a sound effect.
      */
     this._nextCall = rngRange(this.rng, 0.8, 3);
-    this._nextJay = rngRange(this.rng, 40, 150);
-    this._nextPheasant = rngRange(this.rng, 60, 200);
-    this._nextBuzzard = rngRange(this.rng, 50, 240);
+    this._nextParrots = rngRange(this.rng, 40, 150);
+    this._nextGuan = rngRange(this.rng, 60, 200);
+    this._nextEagle = rngRange(this.rng, 50, 240);
     /** How many long songs are being pumped right now. See STREAM_MAX. */
     this._streams = 0;
 
@@ -1294,7 +1617,7 @@ export class Wildlife {
    * Weighted by three things: whether it is awake, how rare it is meant to be,
    * and whether it throws far enough to be worth the nodes. That last term is
    * the one that changed the character of the distant chorus most — a uniform
-   * pick spent a third of its events on goldcrests and chiffchaffs at ninety
+   * pick spent a third of its events on honeycreepers and hermits at ninety
    * metres, which does not sound like a small bird a long way off, it sounds
    * like nothing at all and a wood that is emptier than the event rate says.
    */
@@ -1319,11 +1642,12 @@ export class Wildlife {
    * because this term exists.
    *
    * What it buys at first light is that the chorus does not merely thicken, it
-   * ARRIVES IN ORDER. At dawn 1 a robin is weighted two and a half times its
-   * daytime share and a blackcap under half of its, so the first minutes are
-   * robins and blackbirds and song thrushes and the warblers turn up late —
-   * which is the actual sequence, and is audible as the wood assembling itself
-   * rather than fading up.
+   * ARRIVES IN ORDER. At dawn 1 a motmot is weighted 2.2 times its daytime
+   * share and a tanager half of its, so the first minutes are motmots and
+   * solitaires hooting in the dark, the pihas and the oropendolas come in as it
+   * gets light, the toucans start up in the canopy after that, and the
+   * understorey birds turn up last — which is the actual sequence, and is
+   * audible as the forest assembling itself rather than fading up.
    */
   _weight(voice, distance, dark) {
     const early = 1 + (voice.early - 1) * this.dawn;
@@ -1348,7 +1672,7 @@ export class Wildlife {
    * WHERE IT IS. Quantise the position into five-metre cells, hash it with the
    * species, and the answer is stable for as long as the bird stays in its
    * tree and different for the one answering from forty metres away. The
-   * chaffinch in that oak is always a shade flat and always slightly hurried;
+   * trogon in that fig is always a shade flat and always slightly hurried;
    * walk away, come back, and it still is. Nothing is stored, nothing leaks,
    * and two Wildlifes built over the same wood agree.
    *
@@ -1468,7 +1792,7 @@ export class Wildlife {
    *   That is the same argument the file opens this constant with: a rate that
    *   lives in the caller cannot be balanced against the rate that lives here,
    *   so it is balanced here. It takes midnight to about fifteen a minute,
-   *   which against a nightingale's carry is one bird at a time.
+   *   which against a potoo's carry is one bird at a time.
    *
    * Both factors are exactly 1 at `dark = dawn = 0`, which is the pinned
    * automation hour — so `scripts/audio-probe.mjs` and every other stored
@@ -1527,20 +1851,64 @@ export class Wildlife {
   }
 
   /**
-   * One note of birdsong: a sine carrier with a sine modulator, a short
-   * exponential envelope on both, and a glide.
+   * One note of birdsong: a whistle that MOVES for its whole length.
    *
-   * The modulation envelope is what makes it a voice — it decays much faster
-   * than the amplitude, so the note has a bright chiff at the front and is a
-   * pure tone by the time it ends. That is the shape of every whistled sound
-   * there has ever been and it is two `exponentialRampToValueAtTime` calls.
+   * WHAT THIS USED TO BE, AND WHY IT WAS WRONG. The first version was a sine
+   * carrier, a sine modulator whose index collapsed to nothing in the first
+   * two thirds of the note, and a six-millisecond attack onto a bare
+   * exponential decay. Every one of those three choices is, individually, the
+   * textbook recipe for a struck wooden bar: a spectral flash at the onset that
+   * dies away to a pure tone IS a mallet hitting something, the amplitude shape
+   * of a bar is exactly an instant attack with no plateau, and a pitch that
+   * holds still for its whole length is a tuned bar and not an animal. Put
+   * together they did not sound like sixteen species of bird, they sounded like
+   * sixteen tunes played on a xylophone, which is what was reported.
+   *
+   * The header above is right that a syrinx is very nearly a pure tone. What it
+   * missed is the other half of the same sentence: it is a pure tone whose
+   * PITCH IS NEVER STILL. Frequency modulation in the literal sense — the note
+   * sliding around inside its own duration — is the single acoustic feature
+   * that separates birdsong from every instrument a human plays, and birds
+   * discriminate each other on the fine detail of it. So the note is now:
+   *
+   *   A CONTOUR, not a glide. `arc` is a handful of semitone offsets spread
+   *   across the note and the pitch is walked through them. A tinamou's whistle
+   *   swells up and sags; a potoo's note falls all the way through; a piha's
+   *   scream leaps most of an octave and drops off a cliff. That shape happens INSIDE one note and
+   *   it is most of what makes a species recognisable close up.
+   *
+   *   AN ONSET THAT IS PITCH, NOT TIMBRE. Notes still need articulation or a
+   *   phrase turns to porridge, but the old spectral flash was the mallet. A
+   *   real syrinx starts flat and snaps up as it comes under tension, so the
+   *   note now leads in from a little below. It articulates just as hard and
+   *   there is nothing percussive in it.
+   *
+   *   A PLATEAU. Attack, hold, release. A whistle sustains and a struck bar
+   *   cannot, and this is the difference between a bird and a marimba even with
+   *   everything else held equal.
+   *
+   *   A MODULATOR THAT TRACKS THE CARRIER. It is swept through the same contour
+   *   so the ratio holds, which keeps the spectrum harmonic while the note
+   *   moves. A fixed modulator under a sweeping carrier is a ratio that drifts,
+   *   which is inharmonic, which is a bell — the old code got away with it only
+   *   because nothing moved far enough to notice.
+   *
+   *   AND THE INDEX STAYS PUT. It tapers gently rather than collapsing, so it
+   *   is a timbre for the whole note instead of a strike at the front of one.
+   *
+   * The anti-buzz doctrine is untouched and is in fact easier to hold now:
+   * every one of these is an oscillator frequency or a gain, there is still not
+   * a filter parameter automated anywhere in the file, and the index ceiling is
+   * still 2.2. A sine sliding around cannot rasp; there is nothing in it to
+   * rasp with.
    */
   _note(dest, when, midi, voice, gain, shape = _flatShape) {
     if (this.voices > VOICE_CEILING) return;
     const ctx = this.ctx;
+    const dur = Math.max(0.012, voice.decay * (shape.decay ?? 1));
     const f = midiToFreq(midi);
-    const to = midiToFreq(midi + voice.glide * (shape.glide ?? 1));
-    const decay = voice.decay * (shape.decay ?? 1);
+    const bend = shape.glide ?? 1;
+    const arc = voice.arc ?? _straightArc;
     /**
      * Scaled, never raised past the table's own ceiling.
      *
@@ -1554,28 +1922,62 @@ export class Wildlife {
 
     const carrier = ctx.createOscillator();
     carrier.type = 'sine';
-    carrier.frequency.setValueAtTime(f, when);
-    carrier.frequency.exponentialRampToValueAtTime(Math.max(40, to), when + decay);
+    sweep(carrier.frequency, f, when, dur, arc, voice.glide, bend, voice.lead ?? 1.4);
 
     const mod = ctx.createOscillator();
     mod.type = 'sine';
-    mod.frequency.value = f * voice.ratio;
+    sweep(mod.frequency, f * voice.ratio, when, dur, arc, voice.glide, bend, voice.lead ?? 1.4);
     const modGain = ctx.createGain();
     modGain.gain.setValueAtTime(f * index, when);
-    modGain.gain.exponentialRampToValueAtTime(f * 0.005, when + decay * 0.7);
+    // A taper, not a collapse. The old line went to f * 0.005 in 0.7 of the
+    // note, which is the mallet. This is the same tone at the end as at the
+    // start, only slightly softer, which is a voice.
+    modGain.gain.linearRampToValueAtTime(f * index * 0.6, when + dur);
     mod.connect(modGain).connect(carrier.frequency);
 
+    /**
+     * The vibrato, for the rows that have one.
+     *
+     * Real syringeal FM sits somewhere between four and thirty hertz depending
+     * on the species and it is a big part of why an oropendola sounds liquid
+     * and a toucan sounds like a croak. Kept shallow on purpose: at these depths
+     * it is heard as a warble on a whistle. Deep and fast it would be sidebands,
+     * which is the rasp this file exists to avoid, so `warbleDepth` is small
+     * everywhere it is set at all.
+     */
+    let lfo = null;
+    let lfoDepth = null;
+    if (voice.warble && dur > 0.05) {
+      lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = voice.warble;
+      lfoDepth = ctx.createGain();
+      lfoDepth.gain.value = f * (SEMI ** (voice.warbleDepth ?? 0.18) - 1);
+      lfo.connect(lfoDepth).connect(carrier.frequency);
+      lfo.start(when);
+      lfo.stop(when + dur + 0.04);
+    }
+
+    /**
+     * Attack, HOLD, release. The hold is the whole point — see the block above.
+     * Clamped at both ends so that a tanager's fifty-five millisecond note still
+     * gets an onset and a tinamou's six-tenths of a second does not spend it all
+     * fading.
+     */
+    const atk = clamp(dur * 0.2, 0.005, 0.04);
+    const rel = clamp(dur * 0.5, 0.015, 0.4);
+    const hold = Math.max(atk + 0.001, dur - rel);
     const env = ctx.createGain();
     env.gain.setValueAtTime(0.0001, when);
-    // 6 ms attack. Shorter is a click, longer and the note loses the chirp.
-    env.gain.exponentialRampToValueAtTime(gain, when + 0.006);
-    env.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+    env.gain.exponentialRampToValueAtTime(gain, when + atk);
+    env.gain.setValueAtTime(gain, when + hold);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + dur);
 
     carrier.connect(env).connect(dest);
     carrier.start(when);
     mod.start(when);
-    carrier.stop(when + decay + 0.04);
-    mod.stop(when + decay + 0.04);
+    carrier.stop(when + dur + 0.04);
+    mod.stop(when + dur + 0.04);
     this.voices++;
     carrier.onended = () => {
       this._release(carrier);
@@ -1583,6 +1985,8 @@ export class Wildlife {
         env.disconnect();
         mod.disconnect();
         modGain.disconnect();
+        lfo?.disconnect();
+        lfoDepth?.disconnect();
       } catch {
         /* already gone */
       }
@@ -1615,8 +2019,8 @@ export class Wildlife {
    *   THE LENGTH. A rendition uses somewhere between half and all of the body
    *   of the phrase, and a cyclic one may run half again as long. Cuts come out
    *   of the MIDDLE — `tail` notes at the end are the ending and always play —
-   *   because a chaffinch that stops before its flourish is not a short
-   *   chaffinch, it is a broken one.
+   *   because a piha that stops before its scream is not a short piha, it is
+   *   a broken one.
    *
    *   THE RENDITION. A little transposition and a little tempo on top of the
    *   individual's own, per performance, plus a note dropped now and then out
@@ -1652,6 +2056,8 @@ export class Wildlife {
     // per-phrase roll used to have, split so that most of it stays put.
     const shift = transpose + (whoPitch - 0.5) * 2.2 + rngRange(rng, -0.45, 0.45);
     const pace = (0.92 + whoPace * 0.18) * rngRange(rng, 0.95, 1.06);
+    /** How far this particular bird's notes swing. See the note loop. */
+    const swing = 0.8 + whoLength * 0.45;
 
     /**
      * How much of the phrase this one gets.
@@ -1660,7 +2066,7 @@ export class Wildlife {
      * be run long: a phrase with an ending cannot be, because the only way to
      * extend it is to cycle back through notes it has already sung and then say
      * the ending twice. Voices with no ending are cycles by construction —
-     * chiffchaffs, nuthatches, wrens — and running those long is precisely what
+     * trogons, toucans, antshrikes — and running those long is precisely what
      * a real one does.
      */
     const n = voice.notes.length;
@@ -1677,17 +2083,17 @@ export class Wildlife {
      * idea being a net loss.
      *
      * Varying the length is right for a phrase that is a shape and wrong for
-     * one that is a repeated unit, and the table contains both. A song thrush
-     * cut anywhere is a song thrush that said something twice instead of three
-     * times, which is what song thrushes do. A CUCKOO CUT AT AN ODD NUMBER IS
-     * "cuck-oo, cuck-oo, cuck" — the most recognisable sound in this project,
-     * broken, in the one way everybody would notice. So `unit` is the size of
+     * one that is a repeated unit, and the table contains both. A trogon
+     * cut anywhere is a trogon that hooted eight times instead of eleven
+     * times, which is what trogons do. A KISKADEE CUT SHORT IS "kis-ka" — the
+     * most recognisable sound in this project, broken, in the one way everybody
+     * would notice. So `unit` is the size of
      * the repeating group and the count is a multiple of it, which for the wood
-     * pigeon's five-note idiom means it is simply never cut at all.
+     * kiskadee's three-syllable idiom means it is simply never cut at all.
      */
     const unit = voice.unit ?? 1;
     let count = Math.max(unit, Math.round((body * frac) / unit) * unit) + tail;
-    // Long cyclic songs only. A cuckoo with a note missing is not a variation,
+    // Long cyclic songs only. A kiskadee with a note missing is not a variation,
     // it is a fault, and the phrases short enough to notice are exactly the
     // ones whose shape is the whole species.
     const mayDrop = tail === 0 && n >= 9;
@@ -1695,12 +2101,29 @@ export class Wildlife {
     /**
      * A STREAMING VOICE IS MEASURED IN SECONDS, NOT IN NOTES, which is the
      * whole distinction the field exists to draw. Every other row is a phrase
-     * and its length is however long its notes take; a skylark is a stretch of
+     * and its length is however long its notes take; a musician wren is a stretch of
      * time that happens to be full of notes, so `stream` is `[min, max]`
      * seconds and the count falls out of the tempo. An individual carries its
-     * own stamina on top — some larks go on much longer than others, and it is
+     * own stamina on top — some wrens go on much longer than others, and it is
      * the same bird every time you stand under it.
      */
+    /**
+     * HOW LONG THIS PHRASE WILL LAST, IN SECONDS, AND WHO NEEDS TO KNOW.
+     *
+     * `fauna.js` does. A bird that sings and does not move while it sings is a
+     * loudspeaker in a tree, and the whole reported problem with this wood is
+     * that you can hear birds and never find one — so the percher now performs
+     * for exactly as long as the sound it is making, which means it has to be
+     * told. Falling out of the scheduler is the only honest source for it: the
+     * phrase length is a per-rendition roll here and nothing outside this
+     * method can predict it.
+     *
+     * For a streamed voice it is the planned seconds rather than what has been
+     * scheduled so far, because `t` at the point of return is only the first
+     * lookahead window. For everything else the loop below runs to completion
+     * before the return, so `t - t0` plus the last note's decay is exact.
+     */
+    let planned = 0;
     if (streaming) {
       let mean = 0;
       for (const g of voice.gaps) mean += g;
@@ -1710,6 +2133,7 @@ export class Wildlife {
         (0.75 + whoLength * 0.5) *
         (1 - short * 0.45);
       count = Math.max(12, Math.round(seconds / Math.max(0.01, mean)));
+      planned = seconds;
     }
 
     const streamAhead = streaming ? STREAM_AHEAD : Infinity;
@@ -1726,7 +2150,7 @@ export class Wildlife {
      * `_release` and the same failure it prevents: a stream that decremented
      * twice — which `dispose` clearing the counter under a pump in flight would
      * cause — leaves it NEGATIVE, and a negative counter does not refuse the
-     * next skylark, it silently allows two. A counter guarding a limit must not
+     * next wren, it silently allows two. A counter guarding a limit must not
      * be able to drift in the permissive direction.
      */
     let holding = streaming;
@@ -1750,7 +2174,7 @@ export class Wildlife {
 
     /**
      * Schedule everything that starts before the horizon, then either finish or
-     * come back for more. For every voice but the skylark the horizon is
+     * come back for more. For every voice but the musician wren the horizon is
      * infinite and this runs exactly once, which is the same straight loop it
      * has always been.
      */
@@ -1767,7 +2191,7 @@ export class Wildlife {
        * the loop below would find `t` a long way behind the clock and schedule
        * the whole missed stretch into the past, which Web Audio renders as
        * everything at once — twenty notes in a frame, which is a click. Skip
-       * the piece that was missed instead. A skylark heard through a tab switch
+       * the piece that was missed instead. A wren heard through a tab switch
        * has a hole in it, which is the truthful outcome and the quiet one.
        */
       if (t < ctx.currentTime) t = ctx.currentTime + 0.02;
@@ -1781,7 +2205,20 @@ export class Wildlife {
             voice.root + voice.notes[src] + shift + rngRange(rng, -0.1, 0.1),
             snap
           );
-          _shape.glide = rngRange(rng, 0.7, 1.3) * (last && hold > 1 ? Math.sqrt(hold) : 1);
+          /**
+           * The individual's own contour depth, on top of the per-note roll.
+           *
+           * `shape.glide` scales the whole pitch shape — arc and glide together
+           * — so this is how far a given bird's notes swing. It is a fixed
+           * property of the individual like its key and its tempo, which means
+           * one trogon in the wood is consistently flatter and more clipped
+           * than the one answering it, and still is ten minutes later. Before
+           * this the only per-bird differences were pitch and pace, so two
+           * individuals were the same performance transposed; contour is the
+           * dimension a listener actually hears as a different animal.
+           */
+          _shape.glide =
+            swing * rngRange(rng, 0.78, 1.22) * (last && hold > 1 ? Math.sqrt(hold) : 1);
           _shape.decay = last ? hold : 1;
           _shape.index = Math.pow(pure, k);
           this._note(
@@ -1818,7 +2255,14 @@ export class Wildlife {
 
     if (streaming) this._streams++;
     pump();
-    return { at: t0, notes: count, voice: voiceIndex };
+    return {
+      at: t0,
+      notes: count,
+      voice: voiceIndex,
+      // See `planned`. Delay included, because the caller wants to know when
+      // the sound stops and not how long it lasts once it starts.
+      dur: (streaming ? planned : t - t0 + voice.decay * hold) + delay,
+    };
   }
 
   /**
@@ -1842,11 +2286,28 @@ export class Wildlife {
    * and it is now the smallest of the three things making them distinguishable
    * rather than the only one.
    */
+  /**
+   * RETURNS THE PHRASE, OR NULL, AND THAT RETURN IS LOAD-BEARING NOW.
+   *
+   * It used to return nothing, because nothing needed to know. What needs to
+   * know is `fauna.js`: the percher that asked to sing has to PERFORM while the
+   * sound is happening — a bird that holds still through its own song is the
+   * single reason a player can hear this wood and never find anything in it —
+   * and it can only do that if it is told two things this method knows and the
+   * caller cannot possibly work out. Whether the song happened at all, because
+   * the leaky bucket refuses most of them and a bird miming to a refused token
+   * is worse than one standing still; and how long it lasts, because the
+   * rendition length is rolled per performance in `_phrase`.
+   *
+   * `{ at, notes, voice, dur }` or null. The answer and the contact note that
+   * follow are deliberately NOT included in `dur` — they come from somewhere
+   * else in the wood, and the bird in front of you should stop when it stops.
+   */
   song(position, voiceIndex, { answer = false, gain = 1, throttle = true } = {}) {
-    if (!this.built) return;
+    if (!this.built) return null;
     // The density limiter. `throttle: false` is the distant chorus, which is
     // rate-limited by its own scheduler — see SONG_REFILL.
-    if (throttle && !this._afford()) return;
+    if (throttle && !this._afford()) return null;
     const rng = this.rng;
     const snap = clamp01((this.tripLevel - 0.15) / 0.6);
     /**
@@ -1856,7 +2317,7 @@ export class Wildlife {
      * and the species is that individual's identity — it cannot be re-picked
      * here without the bird in the tree in front of you changing what it is.
      * So the window arrives as a level instead: at the wrong end of the day a
-     * great tit drops to about half, which is a bird having one more go rather
+     * tanager drops to about half, which is a bird having one more go rather
      * than a bird that has been switched off. Floored well above zero for the
      * same reason the window itself is: silence here would read as broken.
      */
@@ -1878,7 +2339,7 @@ export class Wildlife {
         delay: rngRange(rng, 1.4, 3.2),
       });
     }
-    if (!answer) return;
+    if (!answer) return sung;
     /**
      * The reply is placed by hand rather than by picking another percher,
      * because it must come from beyond the trees — a bird you can see is not
@@ -1901,7 +2362,7 @@ export class Wildlife {
         // conviction in it, which is what answering something is.
         short: 1,
       });
-      return;
+      return sung;
     }
     /**
      * A DIFFERENT BIRD ANSWERS, which is not a conversation and is arguably
@@ -1917,12 +2378,13 @@ export class Wildlife {
      * really a workaround — it is the difference between "that bird is
      * repeating itself" and "there are several of them out there".
      */
-    if (roll > 0.7) return;
+    if (roll > 0.7) return sung;
     this._phrase(_answerAt, this._pick(r, this.dark), {
       gain: gain * 0.7,
       snap,
       delay: rngRange(rng, 0.9, 2.4),
     });
+    return sung;
   }
 
   /**
@@ -1930,8 +2392,8 @@ export class Wildlife {
    *
    * A songbird sings for a few minutes a day. It makes noise for all of it, and
    * a recording of a real wood is nine parts small utterance to one part
-   * set-piece — a tick from a robin, two notes from a great tit crossing a ride,
-   * a wren swearing at a cat four gardens away, a fledgling that will not stop.
+   * set-piece — a tick from a tanager, two notes from a trogon crossing a gap,
+   * an antshrike swearing at a snake, a fledgling that will not stop.
    * The table had none of it, and the effect was not that the wood was quiet.
    * The effect was that every single sound in it was a PERFORMANCE, delivered
    * from a fixed position, complete, and then over — which is why the silences
@@ -1964,7 +2426,7 @@ export class Wildlife {
    * On `worldBus`, all four, by the file's own test — these are voices carrying
    * from elsewhere and not addressed to you, and a player turning them down is
    * turning the wood down. The alarm is the arguable one and it goes the same
-   * way as the crow for the same reason: a bird forty metres off shouting about
+   * way as the macaws for the same reason: a bird forty metres off shouting about
    * a sparrowhawk is the wood having an alarm system, not an event about you.
    * The two calls that ARE about you already exist, they are the squirrel and
    * the roe deer, and they are both on sfx.
@@ -1984,7 +2446,7 @@ export class Wildlife {
      * are the whole difference between the four.
      *
      * `shape.glide` is a MULTIPLIER on the row's own glide, which is signed —
-     * a wren's notes rise and a robin's fall — so two of these four have to
+     * an antbird's notes rise and a potoo's fall — so two of these four have to
      * assert a direction rather than a depth. A flight call falls, always,
      * because it is a bird receding; a juvenile rises, always, because that is
      * what makes begging sound like begging rather than like sighing. `down`
@@ -2156,7 +2618,7 @@ export class Wildlife {
    * being FRIGHTENED, and three of the four things it does say so: the sub-200 Hz
    * whump of a panic launch, the alarm note, and `_startle`, which stops the
    * whole wood for four seconds. Those are exactly right when you have walked
-   * into a thicket and exactly wrong when a chaffinch has decided the next tree
+   * into a thicket and exactly wrong when a tanager has decided the next tree
    * looks better — and `_startle` is the one that cannot simply be turned down,
    * because a wood that goes quiet every time any bird moves is a wood that is
    * silent. So the wings are the shared half and the panic is `flush`'s own.
@@ -2271,7 +2733,7 @@ export class Wildlife {
 
     /**
      * The bearing is away from the listener because that is where a frightened
-     * one goes, and the eight metres of travel is about what a blackbird covers
+     * one goes, and the eight metres of travel is about what a trogon covers
      * before it is behind the next trunk.
      */
     const away = Math.atan2(position.x - this.lx, position.z - this.lz);
@@ -2372,12 +2834,12 @@ export class Wildlife {
    * much of a hush it leaves behind. Both call sites in `fauna.js` were passing
    * the product and now pass them apart.
    */
-  bolt(position, kind = 'deer', nearness = 1, mass = 1) {
+  bolt(position, kind = 'tapir', nearness = 1, mass = 1) {
     if (!this.built) return;
     const ctx = this.ctx;
     const rng = this.rng;
     const t0 = ctx.currentTime + 0.01;
-    const heavy = kind === 'deer';
+    const heavy = kind === 'tapir';
     const spatial = this._place(position, {
       refDistance: 6,
       rolloff: 1.3,
@@ -2418,19 +2880,24 @@ export class Wildlife {
      * WHAT THE ANIMAL SAYS ABOUT IT, which is the half that was missing.
      *
      * The leaves above tell you something ran; they do not tell you what, and
-     * the three species in this wood are enormously different about it. A
-     * rabbit says nothing at all — it is the silent one, and leaving it silent
-     * is what makes the other two mean anything. A squirrel does not run away
-     * quietly, it gets somewhere safe and then swears at you for half a minute.
-     * A roe deer barks, once or twice, and a roe bark at thirty metres in a
-     * wood is genuinely alarming the first time you hear one because it sounds
-     * like a dog that should not be there.
+     * the three species in this wood are enormously different about it. An
+     * AGOUTI says nothing at all — it is the silent one, and leaving it silent
+     * is what makes the other two mean anything. A CAPUCHIN does not run away
+     * quietly, it gets somewhere safe and then swears at you for half a minute,
+     * and a troop will keep it up for as long as you stand there. A TAPIR gives
+     * a single thin whistle, which is the most surprising noise in this wood:
+     * a quarter-tonne animal that sounds like a small bird.
+     *
+     * THESE THREE CLAUSES ARE THE SAME THREE THEY ALWAYS WERE. The rename from
+     * deer/rabbit/squirrel changed which animal fills each role and not the
+     * roles themselves — silent, scolding, and one voice — because that split
+     * is about how an ENCOUNTER should read, not about zoology.
      *
      * Both are scheduled AFTER the leaves rather than under them: the animal
      * has to get clear before it complains, and the half-second of gap is what
      * makes the scold read as coming from a different place than the rustle.
      */
-    if (kind === 'squirrel' && rng() < 0.75) {
+    if (kind === 'capuchin' && rng() < 0.75) {
       this._chitter(position, t0 + rngRange(rng, 0.45, 0.9), nearness);
     } else if (heavy && rng() < 0.5) {
       /**
@@ -2461,7 +2928,7 @@ export class Wildlife {
   }
 
   /**
-   * A voiced noise burst — the crow, the deer bark, and anything else in this
+   * A voiced noise burst — the macaw, the deer bark, and anything else in this
    * wood with a throat rather than a whistle.
    *
    * THIS IS THE ONE PLACE THE HEADER'S RULE LOOKS LIKE IT IS BEING BROKEN, so
@@ -2651,9 +3118,19 @@ export class Wildlife {
     const bus = this.ctx.createGain();
     bus.gain.value = this.songGain * 1.3 * (0.4 + nearness * 0.8);
     bus.connect(spatial.input);
-    const reed = { decay: 0.13, index: 1.4, glide: -3.2, ratio: 1.0 };
+    // Up an octave-ish with the rest of the file — a squirrel's reedy note sits
+    // with the ticks around it at one to two kilohertz, not down among the
+    // motmots — and given an arc so it sags rather than sliding flat.
+    const reed = {
+      decay: 0.13,
+      index: 1.4,
+      glide: -3.2,
+      ratio: 1.0,
+      arc: [0.4, -1.0],
+      lead: 2.2,
+    };
     for (let i = 0; i < 2; i++) {
-      this._note(bus, when + 0.12 + i * rngRange(rng, 0.22, 0.4), rngRange(rng, 79, 85), reed, 0.3);
+      this._note(bus, when + 0.12 + i * rngRange(rng, 0.22, 0.4), rngRange(rng, 87, 93), reed, 0.26);
     }
     const life = (t - this.ctx.currentTime + 1.4) * 1000;
     setTimeout(() => {
@@ -2667,158 +3144,281 @@ export class Wildlife {
   }
 
   /**
-   * A crow, a long way off and above.
+   * A PAIR OF MACAWS, crossing high and a long way off.
    *
-   * Two to four caws with uneven gaps, the second usually the loudest. Built
-   * out of `_throat`, so it is pure noise through two fixed wide band-passes —
-   * a crow really is almost entirely broadband and the reason it sounds harsh
-   * is the attack and the formant pair, not any kind of ringing.
+   * Two to four screeches with uneven gaps. Built out of `_throat`, so it is
+   * pure noise through two fixed wide band-passes — a macaw really is almost
+   * entirely broadband, and the reason it sounds harsh is the attack and the
+   * formant pair rather than any kind of ringing. That is also the whole reason
+   * it is here rather than in `VOICES`: putting a screech through the FM path
+   * would need an index up where sidebands start, which is the sound this file
+   * exists to refuse.
    *
-   * It exists because it is the only voice here that is not beautiful. Eleven
-   * species of whistling songbird plus a woodpecker is a nature documentary; a
-   * wood also contains something disagreeable shouting at a distance, and the
-   * chorus is more convincing for having one member that is clearly not part
-   * of it.
+   * It exists because it is the only voice here that is not beautiful. Twenty
+   * species of whistling bird plus a woodpecker is a nature documentary; a
+   * forest also contains something enormous and disagreeable shouting as it
+   * goes over, and the chorus is more convincing for having one member that is
+   * clearly not part of it.
+   *
+   * A PAIR, AND NOT ONE BIRD, WHICH IS THE ONE THING THIS VOICE HAS THAT THE
+   * CROW IT REPLACED DID NOT. Macaws fly mated pairs and they call to each
+   * other while they do it, so the second bird is offset a few metres sideways
+   * and answers between the first one's screeches — a beat behind, a little
+   * quieter, and with its own formant draw so it is unmistakably a second
+   * animal. Two spatial nodes a couple of minutes apart is nothing, and the
+   * effect is that the sound has a DIRECTION OF TRAVEL and a size, which is
+   * exactly the impression a macaw pair leaves.
+   *
+   * Longer, lower and louder than the crow: the screech tail runs to half a
+   * second against the crow's 0.3, the low formant sits at 380-500 Hz, and the
+   * spatial source reaches 300 m rather than 220. A scarlet macaw is audible
+   * across a valley.
    */
-  caw(position) {
-    if (!this.built || this.voices > VOICE_CEILING * 0.7) return;
-    const rng = this.rng;
-    const t0 = this.ctx.currentTime + 0.02;
-    const spatial = this._place(position, { refDistance: 16, rolloff: 1.0, maxDistance: 220 });
-    const caws = 2 + Math.floor(rng() * 3);
-    let t = t0;
-    for (let i = 0; i < caws; i++) {
-      this._throat(position, t, spatial, {
-        high: rngRange(rng, 1250, 1650),
-        low: rngRange(rng, 430, 560),
-        snap: 0.07,
-        tail: rngRange(rng, 0.18, 0.3),
-        gain: 0.46 * (i === 1 ? 1 : rngRange(rng, 0.72, 0.92)),
-        rate: rngRange(rng, 0.9, 1.2),
-      });
-      t += rngRange(rng, 0.38, 0.72);
-    }
-    setTimeout(() => {
-      try {
-        spatial.dispose();
-      } catch {
-        /* already gone */
-      }
-    }, (t - t0 + 1.6) * 1000);
-  }
-
-  /**
-   * A jay, and the wood's opinion of you.
-   *
-   * There is already a crow and it is described as the voice here that is not
-   * beautiful, so a second harsh bird needs a better argument than "more ugly".
-   * It has one, and it is not about the timbre. A CROW IS TALKING TO OTHER
-   * CROWS AND A JAY IS TALKING ABOUT YOU. A jay is the alarm system of a
-   * European wood — it screams at anything it does not like, everything else
-   * within two hundred metres shuts up, and the fact that you can hear one
-   * getting further away tells you it has been watching you for a while. That
-   * is a completely different piece of information from a rook going home.
-   *
-   * The sound is the difference too. A caw is two formants and a clean attack;
-   * this is a TEAR — twice the length, and built from a `_throat` with three
-   * short overlapping puffs laid across it at jittered levels and rates. Those
-   * three are the whole trick: they put raggedness into the amplitude of a
-   * sound whose spectrum never moves, which reads as a voice under strain
-   * without one filter parameter being automated anywhere. Formants sit low, at
-   * about 1.4 kHz and 620 Hz, and it stays well down in level, because a jay is
-   * genuinely unpleasant and a loud unpleasant thing every ninety seconds is a
-   * reason to turn the wood off.
-   *
-   * `worldBus`, on the crow's precedent: a distant bird on the chorus's own
-   * schedule, not an impact.
-   */
-  jay(position, nearness = 0.6) {
+  macaw(position) {
     if (!this.built || this.voices > VOICE_CEILING * 0.65) return;
     const rng = this.rng;
     const t0 = this.ctx.currentTime + 0.02;
-    const spatial = this._place(position, { refDistance: 14, rolloff: 1.05, maxDistance: 200 });
-    const screams = 2 + Math.floor(rng() * 3);
+    const spatial = this._place(position, { refDistance: 18, rolloff: 0.95, maxDistance: 300 });
+    // The mate, off to one side and a touch further away. Its own node, so the
+    // two arrive from different bearings and the pair reads as two birds.
+    _macawAt.x = position.x + rngRange(rng, -9, 9);
+    _macawAt.y = position.y + rngRange(rng, -3, 3);
+    _macawAt.z = position.z + rngRange(rng, -9, 9);
+    const mate = this._place(_macawAt, { refDistance: 18, rolloff: 0.95, maxDistance: 300 });
+    const screeches = 2 + Math.floor(rng() * 3);
     let t = t0;
-    for (let i = 0; i < screams; i++) {
-      const level = 0.3 * (0.55 + nearness * 0.6) * Math.pow(rngRange(rng, 0.82, 1.04), i);
-      const length = rngRange(rng, 0.34, 0.52);
+    for (let i = 0; i < screeches; i++) {
       this._throat(position, t, spatial, {
-        high: rngRange(rng, 1300, 1560),
-        low: rngRange(rng, 560, 690),
-        snap: 0.1,
-        tail: length,
-        gain: level,
-        rate: rngRange(rng, 0.86, 1.06),
+        high: rngRange(rng, 1500, 2100),
+        low: rngRange(rng, 380, 500),
+        snap: 0.09,
+        tail: rngRange(rng, 0.3, 0.5),
+        gain: 0.5 * (i === 1 ? 1 : rngRange(rng, 0.7, 0.92)),
+        rate: rngRange(rng, 0.85, 1.15),
       });
-      // The tear. Three short bursts inside the scream at the same two
-      // frequencies, so nothing new appears in the spectrum and the envelope
-      // stops being smooth — which is all "harsh" has ever meant here.
-      for (let k = 0; k < 3; k++) {
-        this._puff(position, t + 0.06 + k * rngRange(rng, 0.06, 0.11), {
-          freq: rngRange(rng, 900, 1500),
-          q: 1.1,
-          decay: rngRange(rng, 0.035, 0.06),
-          gain: level * rngRange(rng, 0.3, 0.6),
-          rate: rngRange(rng, 0.8, 1.25),
-          spatial,
+      // The answer, in the gap rather than on top of it. A macaw pair
+      // alternates; two birds screeching together is a flock, which is the
+      // parrot mob below and a different event.
+      if (rng() < 0.7) {
+        this._throat(_macawAt, t + rngRange(rng, 0.22, 0.36), mate, {
+          high: rngRange(rng, 1400, 2000),
+          low: rngRange(rng, 360, 480),
+          snap: 0.09,
+          tail: rngRange(rng, 0.26, 0.44),
+          gain: 0.36 * rngRange(rng, 0.8, 1.0),
+          rate: rngRange(rng, 0.82, 1.1),
         });
       }
-      t += length + rngRange(rng, 0.16, 0.42);
+      t += rngRange(rng, 0.5, 0.9);
     }
     setTimeout(() => {
-      try {
-        spatial.dispose();
-      } catch {
-        /* already gone */
+      for (const s of [spatial, mate]) {
+        try {
+          s.dispose();
+        } catch {
+          /* already gone */
+        }
       }
     }, (t - t0 + 1.8) * 1000);
   }
 
   /**
-   * A cock pheasant, which is two sounds and the second one is the good one.
+   * A FLOCK OF PARROTS GOING UP, and the forest's opinion of you.
    *
-   * The call is a hard double bark — "korrk-KOK", the second louder and a beat
-   * behind — and on its own it is a `_throat` with low formants and nothing
-   * remarkable about it. What makes a pheasant a pheasant is what follows about
-   * a third of a second later: a burst of WING CLAPS, eight or ten of them,
-   * fast and mechanical and dying out. It is the only sound in this wood that
-   * is percussion produced deliberately by an animal, and it is the reason this
-   * bird is here rather than a second corvid — the file has whistles, throats
-   * and impacts, and this is the one voice that is a throat and an impact in
-   * the same breath.
+   * There is already a macaw pair and it is described as the voice here that is
+   * not beautiful, so a second harsh bird needs a better argument than "more
+   * ugly". It has one, and it is not about the timbre. A MACAW PAIR IS TALKING
+   * TO EACH OTHER AND A PARROT MOB IS TALKING ABOUT YOU. A dozen amazons coming
+   * out of one tree at once is what a rainforest does when something walks
+   * underneath it; everything else within two hundred metres shuts up, and the
+   * fact that you can hear them getting further away tells you they had been
+   * watching you for a while.
    *
-   * The claps are the flush's wingbeats an octave down and much harder: 130 Hz,
-   * 25 ms, no acceleration and no glide out, because a pheasant is not going
-   * anywhere. It is standing still, making a noise, and hitting itself.
+   * The sound is the difference too. A macaw screech is two formants and a
+   * clean attack, one bird at a time, with space around it. THIS IS A CROWD:
+   * three to eight squawks from four bearings, overlapping, densest at the
+   * front and thinning out as the flock gets away. Each one is a
+   * `_throat` with three short overlapping puffs laid across it at jittered
+   * levels and rates — the tear that was the jay's whole trick, and it is kept
+   * because it does exactly the same job here: raggedness in the amplitude of a
+   * sound whose spectrum never moves, which reads as a voice under strain
+   * without one filter parameter being automated anywhere.
+   *
+   * SEVERAL BEARINGS IS THE POINT AND IT IS WHAT MAKES IT A FLOCK. The jay was
+   * one source shouting several times, which is a bird. Panning short events
+   * around you from different directions over a second and a half is a flock,
+   * and there is no other way to get that: level and density cannot say "these
+   * came from different places".
+   *
+   * FOUR BEARINGS, NOT ONE PER BIRD, AND THE FIRST VERSION DID IT PER BIRD.
+   * Every `_place` is an HRTF PannerNode, which is a convolution and the most
+   * expensive node this project creates — a nine-bird flock was nine of them,
+   * on top of the ~45 nodes the throats and tears already cost, and it took the
+   * peak concurrent voice count to 49 of 58. That is not a failure but it is
+   * most of the headroom a flush spike needs.
+   *
+   * The cap is four because the ear cannot do better. Localisation blur for a
+   * broadband transient is a good ten degrees, the whole burst is over in two
+   * seconds, and the events overlap — nobody has ever resolved nine
+   * simultaneous bearings and four is already more than a listener will count.
+   * Birds are assigned round-robin, so consecutive squawks always come from
+   * different directions, which is the part that actually reads.
+   *
+   * Levels stay well down per bird, because eleven of them sum. A loud
+   * unpleasant thing every ninety seconds is a reason to turn the forest off.
+   *
+   * `worldBus`, on the macaw's precedent: distant birds on the chorus's own
+   * schedule, not an impact.
    */
-  pheasant(position) {
+  parrots(position, nearness = 0.6) {
+    if (!this.built || this.voices > VOICE_CEILING * 0.5) return;
+    const rng = this.rng;
+    const t0 = this.ctx.currentTime + 0.02;
+    /**
+     * How many birds go up, against how much room there is to put them.
+     *
+     * Eleven birds is about forty nodes, which is most of the ceiling on its
+     * own, so the count is trimmed by what is already sounding rather than
+     * being refused outright at the door. A thin flock is a flock; a flock that
+     * does not happen because a deer was running is a silence in the one place
+     * a silence reads as a bug.
+     */
+    const room = clamp01((VOICE_CEILING * 0.72 - this.voices) / 30);
+    const birds = 3 + Math.floor(rng() * 4 * room + 2 * room);
+    /**
+     * The bearings, built once. See the block above the method — four panners
+     * for up to eight birds, assigned round-robin so consecutive squawks never
+     * share a direction.
+     *
+     * Spread grows with the index rather than with the bird, so the bearings a
+     * straggler uses are the wide ones: the flock is scattering, and the last
+     * thing you hear is the furthest out.
+     */
+    const BEARINGS = 4;
+    const nodes = [];
+    for (let b = 0; b < Math.min(BEARINGS, birds); b++) {
+      const spread = 4 + (b / BEARINGS) * 16;
+      const a = rng() * Math.PI * 2;
+      _mobAt.x = position.x + Math.cos(a) * spread * rngRange(rng, 0.4, 1);
+      _mobAt.y = position.y + rngRange(rng, -2, 5);
+      _mobAt.z = position.z + Math.sin(a) * spread * rngRange(rng, 0.4, 1);
+      nodes.push({
+        spatial: this._place(_mobAt, { refDistance: 14, rolloff: 1.05, maxDistance: 220 }),
+        at: { x: _mobAt.x, y: _mobAt.y, z: _mobAt.z },
+      });
+    }
+    let last = t0;
+    for (let i = 0; i < birds; i++) {
+      const { spatial, at } = nodes[i % nodes.length];
+      /**
+       * The front of the burst is where the birds are, and the tail of it is
+       * where they went. `i / birds` squared piles the first few almost on top
+       * of each other and then lets the stragglers string out, which is the
+       * shape a flock leaving a tree actually has.
+       */
+      const t = t0 + Math.pow(i / birds, 1.5) * rngRange(rng, 1.3, 2.2);
+      last = Math.max(last, t);
+      const level = 0.22 * (0.55 + nearness * 0.6) * rngRange(rng, 0.7, 1.1) * (1 - (i / birds) * 0.45);
+      const length = rngRange(rng, 0.2, 0.36);
+      this._throat(at, t, spatial, {
+        high: rngRange(rng, 1400, 2000),
+        low: rngRange(rng, 620, 820),
+        snap: 0.08,
+        tail: length,
+        gain: level,
+        rate: rngRange(rng, 0.86, 1.12),
+      });
+      /**
+       * THE TEAR THINS OUT DOWN THE FLOCK, and it is a node budget rather than
+       * a sound design.
+       *
+       * Every bird is five nodes with a three-puff tear on it and up to nine of
+       * them go at once — measured, that put the peak concurrent voice count at
+       * 49 of 58, which is not a failure but is most of the headroom the flush
+       * spike needs. The front three birds keep the full tear because that is
+       * the part of the burst anybody hears as texture; the stragglers get one
+       * puff, which at their level and against two seconds of everything else
+       * is inaudible as a difference and is two thirds of the cost.
+       */
+      const tears = i < 3 ? 3 : 1;
+      for (let k = 0; k < tears; k++) {
+        this._puff(at, t + 0.05 + k * rngRange(rng, 0.05, 0.1), {
+          freq: rngRange(rng, 1000, 1700),
+          q: 1.1,
+          decay: rngRange(rng, 0.03, 0.055),
+          gain: level * rngRange(rng, 0.3, 0.6),
+          rate: rngRange(rng, 0.8, 1.25),
+          spatial,
+        });
+      }
+    }
+    setTimeout(() => {
+      for (const n of nodes) {
+        try {
+          n.spatial.dispose();
+        } catch {
+          /* already gone */
+        }
+      }
+    }, (last - t0 + 2) * 1000);
+  }
+
+  /**
+   * A crested guan, which is two sounds and the second one is the good one.
+   *
+   * The call is a hard honking double bark — "keh-LEEP", the second louder and
+   * a beat behind — and on its own it is a `_throat` with low formants and
+   * nothing remarkable about it. What makes a guan a guan is what follows about
+   * half a second later: the WING DRUM, a burst of ten or a dozen hard mechanical
+   * beats that accelerate into a rattle and die out. It is the only sound in
+   * this forest that is percussion produced deliberately by an animal, and it
+   * is the reason this bird is here rather than a third screecher — the file
+   * has whistles, throats and impacts, and this is the one voice that is a
+   * throat and an impact in the same breath.
+   *
+   * IT INHERITED THE PHEASANT'S MACHINERY AND IT FITS BETTER THAN IT DID
+   * THERE. A pheasant claps its wings standing still, which is why the old
+   * version had "no acceleration and no glide out, because a pheasant is not
+   * going anywhere". A guan's drumming is done in flight, on a shallow dive
+   * between two trees, and it speeds up as it goes — so the gap now shrinks
+   * about six per cent a beat and the whole burst is a thing that moves. Same
+   * eight lines; one of the numbers became a ramp.
+   *
+   * The beats are the flush's wingbeats an octave down and much harder: 130 Hz,
+   * 28 ms, at a body size nothing else here has.
+   */
+  guan(position) {
     if (!this.built || this.voices > VOICE_CEILING * 0.6) return;
     const rng = this.rng;
     const t0 = this.ctx.currentTime + 0.02;
-    const spatial = this._place(position, { refDistance: 12, rolloff: 1.2, maxDistance: 170 });
+    const spatial = this._place(position, { refDistance: 13, rolloff: 1.15, maxDistance: 200 });
     for (let i = 0; i < 2; i++) {
-      this._throat(position, t0 + i * rngRange(rng, 0.15, 0.21), spatial, {
-        high: rngRange(rng, 880, 1120),
-        low: rngRange(rng, 330, 430),
-        snap: 0.04,
-        tail: 0.11,
-        gain: 0.34 * (i ? 1.15 : 0.8),
-        rate: rngRange(rng, 0.92, 1.1),
+      this._throat(position, t0 + i * rngRange(rng, 0.17, 0.24), spatial, {
+        high: rngRange(rng, 940, 1220),
+        low: rngRange(rng, 300, 400),
+        snap: 0.05,
+        tail: i ? 0.19 : 0.11,
+        gain: 0.34 * (i ? 1.2 : 0.75),
+        rate: rngRange(rng, 0.9, 1.08),
       });
     }
-    if (rng() < 0.7) {
-      const claps = 7 + Math.floor(rng() * 5);
-      let t = t0 + rngRange(rng, 0.42, 0.62);
-      for (let i = 0; i < claps; i++) {
+    if (rng() < 0.75) {
+      const beats = 9 + Math.floor(rng() * 6);
+      let t = t0 + rngRange(rng, 0.48, 0.72);
+      let gap = rngRange(rng, 0.072, 0.086);
+      for (let i = 0; i < beats; i++) {
         this._puff(position, t, {
-          freq: rngRange(rng, 110, 165),
+          freq: rngRange(rng, 105, 160),
           q: 0.5,
           decay: 0.028,
-          gain: 0.26 * (1 - i / (claps + 3)),
+          // Swells into the middle of the dive and then goes away with it,
+          // rather than starting loud: the bird is coming past, not stopping.
+          gain: 0.26 * Math.sin((Math.PI * (i + 0.7)) / (beats + 1.4)),
           rate: 0.5,
           spatial,
         });
-        t += rngRange(rng, 0.052, 0.068);
+        t += gap;
+        gap *= 0.94;
       }
     }
     setTimeout(() => {
@@ -2827,27 +3427,38 @@ export class Wildlife {
       } catch {
         /* already gone */
       }
-    }, 3000);
+    }, 3200);
   }
 
   /**
-   * A buzzard, and the only voice in this file that comes from the sky.
+   * An ornate hawk-eagle, and the only voice in this file that comes from the
+   * sky.
    *
-   * Every other sound here happens somewhere in or under the canopy: the crow
-   * is twenty metres up, the woodpecker is on a trunk, the owl is in a tree a
-   * hundred metres off. A buzzard is four hundred feet above all of it, out
-   * over the open ground, circling — so it is placed at a height nothing else
-   * in the file uses and the effect of that alone is worth the twelve nodes.
-   * You look UP, which no other event in this wood has ever made anyone do.
+   * Every other sound here happens somewhere in or under the canopy: the macaws
+   * are twenty metres up, the woodpecker is on a trunk, the owl is in a tree a
+   * hundred metres off. A hawk-eagle is four hundred feet above all of it, out
+   * over the river or a treefall gap, circling — so it is placed at a height
+   * nothing else in the file uses and the effect of that alone is worth the
+   * twelve nodes. You look UP, which no other event in this forest has ever
+   * made anyone do.
    *
-   * It is also the simplest voice here: one long plaintive descending cry, two
-   * of them a few seconds apart, and a cry is a single note. Six semitones down
-   * over most of a second with a soft attack — `_note` with an ad-hoc voice
-   * object, the same trick the squirrel's reed uses. There is no phrase, no
-   * rhythm and no contour beyond the fall, which is exactly right: a buzzard
-   * mew carries for a mile because there is nothing in it.
+   * WHAT CHANGED WHEN THE BUZZARD BECAME THIS, and it is one number and a loop.
+   * A buzzard's mew is one long plaintive cry, so the old version fired one or
+   * two of them several seconds apart. A hawk-eagle's call is a SERIES —
+   * "whee-whee-whee-whee-WHEEP", four to seven loud whistles that accelerate
+   * slightly and climb a couple of semitones as they go, the last one the
+   * highest and the most emphatic. So the cries are now a short train with a
+   * shrinking gap and a rising root, which is the same twelve nodes arranged
+   * into the shape of a different animal.
+   *
+   * The note itself is nearly unchanged and did not need to be. A raptor's cry
+   * is a hard rise onto pitch and then a long sag — `arc` says up 4.5 semitones,
+   * hold, down 3.9 — and that shape is common to both birds. `index` stays at
+   * 0.3, like the motmot and the potoo and for the same reason: this is very
+   * nearly a pure tone with a catch at the front of it, and any real brightness
+   * turns a raptor into a kazoo.
    */
-  mew(position) {
+  eagle(position) {
     if (!this.built || this.voices > VOICE_CEILING * 0.7) return;
     const rng = this.rng;
     const t0 = this.ctx.currentTime + 0.05;
@@ -2855,20 +3466,37 @@ export class Wildlife {
     const bus = this.ctx.createGain();
     bus.gain.value = this.songGain * 1.5;
     bus.connect(spatial.input);
-    /**
-     * `index` 0.3 and falling to nothing, like the cuckoo and the wood pigeon
-     * and for the same reason: this is very nearly a pure tone with a catch at
-     * the front of it, and any real brightness turns a raptor into a kazoo.
-     */
-    const cry = { decay: 0.78, index: 0.3, glide: -6, ratio: 1.0 };
-    const cries = 1 + Math.floor(rng() * 2);
+    const cry = {
+      decay: 0.5,
+      index: 0.3,
+      glide: 0,
+      ratio: 1.0,
+      arc: [4.5, 1.0, -3.9],
+      lead: 2.4,
+    };
+    const cries = 4 + Math.floor(rng() * 4);
+    // The whole train fits inside about three seconds, against the buzzard's
+    // seven. It is one bird saying one thing, not two cries with a wait in
+    // between, and the wait was most of what made the buzzard read as lazy.
+    let gap = rngRange(rng, 0.62, 0.78);
+    const step = rngRange(rng, 0.4, 0.75);
+    const base = rngRange(rng, 93, 95);
     let t = t0;
     for (let i = 0; i < cries; i++) {
       _shape.glide = rngRange(rng, 0.85, 1.15);
-      _shape.decay = rngRange(rng, 0.9, 1.25);
+      // The last one is held and is the one you hear from the ground.
+      _shape.decay = rngRange(rng, 0.9, 1.2) * (i === cries - 1 ? 1.7 : 1);
       _shape.index = 1;
-      this._note(bus, t, rngRange(rng, 76, 80), cry, 0.34 * (i ? 0.85 : 1), _shape);
-      t += rngRange(rng, 1.9, 3.4);
+      this._note(
+        bus,
+        t,
+        base + i * step,
+        cry,
+        0.24 * (0.8 + (i / cries) * 0.35),
+        _shape
+      );
+      t += gap;
+      gap *= 0.93;
     }
     setTimeout(() => {
       try {
@@ -2883,7 +3511,8 @@ export class Wildlife {
   /**
    * Something small coming down through the canopy.
    *
-   * An acorn, a bit of dead twig, whatever a squirrel has just dropped. Three
+   * A fig, a seed pod, a bit of dead twig, whatever a monkey has just dropped.
+   * Three
    * or four bright ticks getting lower and further apart as it hits fewer
    * leaves on the way down, and then one dull knock on the litter.
    *
@@ -2891,7 +3520,7 @@ export class Wildlife {
    * silence and the thing that makes silence read as an outdoor place rather
    * than as an audio gap is that it keeps getting interrupted by small physical
    * events that are obviously not addressed to you. A bird call is a
-   * performance; an acorn falling is the world carrying on.
+   * performance; a fruit falling is the world carrying on.
    *
    * The panner's Y is ramped down over the descent, so it genuinely arrives
    * from above and lands at your feet. Two AudioParam ramps.
@@ -2927,7 +3556,7 @@ export class Wildlife {
       gap *= rngRange(rng, 1.25, 1.7);
     }
     // The landing. Dull and low, because leaf litter is the deadest surface
-    // in the world and an acorn hitting it does not ring at all.
+    // in the world and a fruit hitting it does not ring at all.
     this._puff(_fallAt, t, {
       freq: rngRange(rng, 190, 330),
       q: 0.7,
@@ -3143,20 +3772,42 @@ export class Wildlife {
   }
 
   /**
-   * A tawny owl, a long way off.
+   * A mottled owl, a long way off.
    *
-   * Two sines an octave apart with a slow scoop up and back down, a very soft
-   * attack, and the classic hesitation: a short first hoot, four fifths of a
-   * second of nothing, then the long quavering one. The quaver is a 7 Hz
-   * amplitude wobble — on the GAIN, not on a filter, because a wobble on a
-   * filter cutoff is a resonant sweep and we are not doing that.
+   * THE SPECIES CHANGED AND THE SYNTHESIS DID NOT, WHICH IS THE POINT WORTH
+   * WRITING DOWN. This was a tawny owl and everything below was measured off
+   * one — and a mottled owl, which is the owl of a Neotropical lowland forest,
+   * gives a deep quavering hoot in the same 400-700 Hz band with the same long
+   * hesitation in the middle of it. It also duets, so the female answer a fifth
+   * up that this method already had turns out to be MORE true of the new bird
+   * than the old. Nothing here needed retuning; the comment needed a new name.
+   *
+   * Three sines an octave apart with a slow scoop up and back down, a very soft
+   * attack, and the classic hesitation. The quaver is a 7 Hz amplitude wobble —
+   * on the GAIN, not on a filter, because a wobble on a filter cutoff is a
+   * resonant sweep and we are not doing that.
+   *
+   * MEASURED, AND IT MOVED TWO THINGS. A study of male Strix aluco territorial
+   * hoots puts note one between 320 and 805 Hz with its maximum at 592, and the
+   * root here was 47 to 51 — a hundred and twenty to a hundred and fifty hertz,
+   * an octave and a half under the real animal. That is the same error the
+   * songbird table had and it had it for the same reason: an owl is the low one
+   * in the wood, so it got written at the bottom of a piano.
+   *
+   * The other thing the measurements gave is THE SHAPE, which is better than
+   * what was here. The real call is not two hoots four fifths of a second
+   * apart. It is a long note, then very nearly FOUR SECONDS of nothing, then a
+   * short grunt, then half a second, then the long quavering one — 0.72 s,
+   * 3.87, 0.09, 0.58, 1.38. That enormous middle silence is the whole character
+   * of the call and it is why an owl is the most atmospheric sound in any
+   * forest: you have stopped waiting by the time the rest of it arrives.
    */
   owl(position) {
     if (!this.built) return;
     const ctx = this.ctx;
     const rng = this.rng;
     const t0 = ctx.currentTime + 0.05;
-    const root = rngRange(rng, 47, 51);
+    const root = rngRange(rng, 65, 68);
     const level = this.nightGain;
     if (level < 0.01) return;
     const spatial = this._place(position, { refDistance: 22, rolloff: 0.9, maxDistance: 240 });
@@ -3181,7 +3832,10 @@ export class Wildlife {
       // hear — it measured at half full scale before the panner at 0.9, which
       // for something that is supposed to be a hundred metres away in the dark
       // is not distant, it is in the room.
-      const peak = 0.42 * level;
+      // Down from 0.42 with the retune: the same amplitude an octave and a half
+      // higher is a good deal louder to a human ear, which is most sensitive
+      // exactly where this voice has just moved to.
+      const peak = 0.3 * level;
       const env = ctx.createGain();
       env.gain.setValueAtTime(0.0001, when);
       env.gain.exponentialRampToValueAtTime(peak, when + 0.09);
@@ -3231,7 +3885,7 @@ export class Wildlife {
      *
      * The hoot above is the male. The sharp rising shriek everyone thinks is
      * the same owl is the female answering, and "twit-twoo" is not one call at
-     * all — it is two tawny owls a field apart, which is a genuinely nicer fact
+     * all — it is two owls a ridge apart, which is a genuinely nicer fact
      * than most of the ones this file gets to use. So it is scheduled as a
      * reply, from its own bearing, a second or two after his: the call-and-
      * answer idea the songbirds already run on, applied to the one voice in the
@@ -3253,11 +3907,20 @@ export class Wildlife {
       const bus = ctx.createGain();
       bus.gain.value = level * 0.95;
       bus.connect(her.input);
-      const shriek = { decay: 0.19, index: 0.85, glide: 9.5, ratio: 1.0 };
+      // Up with the male, and for the same reason. `arc` gives the shriek its
+      // kink — it tears upward and then keeps going, rather than sliding.
+      const shriek = {
+        decay: 0.19,
+        index: 0.85,
+        glide: 9.5,
+        ratio: 1.0,
+        arc: [3.5, 1.2],
+        lead: 2.6,
+      };
       _shape.glide = rngRange(rng, 0.85, 1.15);
       _shape.decay = rngRange(rng, 0.9, 1.15);
       _shape.index = 1;
-      this._note(bus, when, rngRange(rng, 69, 73), shriek, 0.5, _shape);
+      this._note(bus, when, rngRange(rng, 76, 80), shriek, 0.5, _shape);
       this._puff(_owlAt, when, {
         freq: rngRange(rng, 1500, 2100),
         q: 0.9,
@@ -3266,29 +3929,69 @@ export class Wildlife {
         rate: 1.3,
         spatial: her,
       });
-      setTimeout(() => {
+      /**
+       * MEASURED FROM `when`, NOT FROM NOW, and this is a fix rather than a
+       * tidy-up: she was inaudible.
+       *
+       * `when` is an absolute context time and this timer is wall clock from
+       * the synchronous call, so a fixed 2600 only worked if she answered
+       * within 2.6 seconds. She was scheduled at `t0 + 2.9` to `t0 + 4.4` — so
+       * in the one-in-three case where the female answers at all, her
+       * bus was disconnected between a third of a second and nearly two seconds
+       * BEFORE her note sounded, every time, since the voice was written. The
+       * male covered for it: you heard an owl either way and nothing about the
+       * call sounded broken, it was simply always one bird.
+       *
+       * Same class of bug as the phrase teardown in `_phrase`, which carries
+       * the same warning, and it wants the same shape: the only quantity that
+       * is ever correct here is the distance from now to the end of the sound.
+       */
+      setTimeout(
+        () => {
+          try {
+            bus.disconnect();
+            her.dispose();
+          } catch {
+            /* already gone */
+          }
+        },
+        (when - ctx.currentTime + 2.6) * 1000
+      );
+    };
+
+    /**
+     * The real running order, from the measurements in the docblock: long note,
+     * the big silence, the little grunt, a beat, then the quavering one.
+     *
+     * The gap is jittered rather than fixed at the published 3.87 because the
+     * one thing worse than a four second pause is the SAME four second pause,
+     * and it is shortened a little because a bird that has been going all night
+     * does too.
+     */
+    const restA = rngRange(rng, 2.7, 3.9);
+    const restB = rngRange(rng, 0.5, 0.7);
+    const grunt = t0 + 0.72 + restA;
+    const last = grunt + 0.09 + restB;
+    hoot(t0, rngRange(rng, 0.62, 0.8), false);
+    hoot(grunt, 0.09, false);
+    hoot(last, rngRange(rng, 1.2, 1.5), true);
+    const done = last + 1.5;
+    // A third of the time she is out there, and once in a while she goes first.
+    const reply = rng();
+    if (reply < 0.34) kewick(done + rngRange(rng, 0.6, 2.1));
+    else if (reply > 0.9) kewick(t0 - 0.02);
+    setTimeout(
+      () => {
         try {
-          bus.disconnect();
-          her.dispose();
+          spatial.dispose();
         } catch {
           /* already gone */
         }
-      }, 2600);
-    };
-
-    hoot(t0, 0.42, false);
-    hoot(t0 + 1.15, 1.15, true);
-    // A third of the time she is out there, and once in a while she goes first.
-    const reply = rng();
-    if (reply < 0.34) kewick(t0 + rngRange(rng, 2.9, 4.4));
-    else if (reply > 0.9) kewick(t0 - 0.02);
-    setTimeout(() => {
-      try {
-        spatial.dispose();
-      } catch {
-        /* already gone */
-      }
-    }, 4200);
+      },
+      // Follows the call instead of being a constant, which the old 4200 was —
+      // and which the new arrangement would have torn down mid-hoot.
+      (done - ctx.currentTime + 3.2) * 1000
+    );
   }
 
   /**
@@ -3395,7 +4098,7 @@ export class Wildlife {
      * two: the wood restarting is a stronger moment than the wood stopping was.
      *
      * It covers the SINGERS and nothing else. The insects keep going, the
-     * acorns keep falling, the wind and the stream never noticed — because a
+     * fruit keeps falling, the wind and the stream never noticed — because a
      * hush that silenced everything would read as the audio dropping out, and
      * what it has to read as is the birds having seen something.
      */
@@ -3484,9 +4187,9 @@ export class Wildlife {
          *
          * The dusk end deliberately does NOT get the same treatment. `dark`
          * multiplies the interval by up to 3.5, so evening thins out, and the
-         * roster's own windows mean what is left is blackbirds, then a robin,
-         * then a nightingale and an owl. A wood going quiet is a better use of
-         * dusk than a second chorus.
+         * roster's own windows mean what is left is motmots, then a solitaire,
+         * then a tinamou, a potoo and an owl. A forest going quiet is a better
+         * use of dusk than a second chorus.
          */
         this._nextDistant =
           (rngRange(rng, 3.4, 11) * spacing * (1 + tripLevel * 1.4) * (1 + dark * 2.5)) /
@@ -3505,21 +4208,21 @@ export class Wildlife {
       }
 
       /**
-       * The crow. Far, high, and only while there is light — corvids are at the
-       * roost before the owl starts, so the two never overlap, which is worth
-       * more than either of them alone: the moment you notice the crows have
-       * stopped is the moment the wood has actually changed.
+       * The macaw pair. Far, high, and only while there is light — parrots are
+       * at the roost before the owl starts, so the two never overlap, which is
+       * worth more than either of them alone: the moment you notice the macaws
+       * have stopped is the moment the forest has actually changed.
        */
       if (dark < 0.62) {
-        this._nextCrow -= dt;
-        if (this._nextCrow <= 0) {
+        this._nextMacaw -= dt;
+        if (this._nextMacaw <= 0) {
           const a = rng() * Math.PI * 2;
           const r = 45 + rng() * 85;
           _distantAt.x = listener.x + Math.cos(a) * r;
           _distantAt.y = listener.y + rngRange(rng, 8, 22);
           _distantAt.z = listener.z + Math.sin(a) * r;
-          this.caw(_distantAt);
-          this._nextCrow = rngRange(rng, 55, 165) * spacing;
+          this.macaw(_distantAt);
+          this._nextMacaw = rngRange(rng, 55, 165) * spacing;
         }
       }
 
@@ -3560,63 +4263,64 @@ export class Wildlife {
       }
 
       /**
-       * The jay, the pheasant and the buzzard, which share a block because they
-       * share a job: they are the three voices that are not part of the chorus
-       * and do not sound like it.
+       * The parrot mob, the guan and the hawk-eagle, which share a block
+       * because they share a job: they are the three voices that are not part
+       * of the chorus and do not sound like it.
        *
        * All three are rare on purpose and all three are rarer than they feel,
-       * because each is the only thing of its kind. A jay every ninety seconds
-       * is not a wood with jays in it, it is a wood with a jay problem.
+       * because each is the only thing of its kind. A flock going up every
+       * ninety seconds is not a forest with parrots in it, it is a forest with
+       * a parrot problem.
        *
-       *   The JAY thins out toward dark but does not stop where the crow does,
-       *   because a jay will scream at a tawny owl at dusk and that is arguably
-       *   the most characteristic thing it does.
+       *   The PARROTS thin out toward dark but do not stop where the macaws do,
+       *   because a roosting flock will blast off at an owl at dusk and that is
+       *   arguably the most characteristic thing they do.
        *
-       *   The PHEASANT is a dawn and dusk bird almost exclusively, so its
-       *   interval is divided by both — the one voice here that is commoner in
-       *   the last hour of light than in the middle of the day.
+       *   The GUAN is a dawn and dusk bird almost exclusively, so its interval
+       *   is divided by both — the one voice here that is commoner in the last
+       *   hour of light than in the middle of the day.
        *
-       *   The BUZZARD needs thermals, which means it needs sun, so it is
+       *   The HAWK-EAGLE needs thermals, which means it needs sun, so it is
        *   daylight only and it is placed higher than anything else in the file
        *   by a factor of five.
        */
       if (dark < 0.78) {
-        this._nextJay -= dt;
-        if (this._nextJay <= 0) {
+        this._nextParrots -= dt;
+        if (this._nextParrots <= 0) {
           const a = rng() * Math.PI * 2;
           const r = 35 + rng() * 90;
           _distantAt.x = listener.x + Math.cos(a) * r;
           _distantAt.y = listener.y + rngRange(rng, 3, 14);
           _distantAt.z = listener.z + Math.sin(a) * r;
-          this.jay(_distantAt, clamp01(1 - r / 140));
-          this._nextJay = rngRange(rng, 70, 210) * spacing * (1 + dark);
+          this.parrots(_distantAt, clamp01(1 - r / 140));
+          this._nextParrots = rngRange(rng, 70, 210) * spacing * (1 + dark);
         }
       }
 
-      this._nextPheasant -= dt;
-      if (this._nextPheasant <= 0) {
+      this._nextGuan -= dt;
+      if (this._nextGuan <= 0) {
         const a = rng() * Math.PI * 2;
         const r = 40 + rng() * 80;
         _distantAt.x = listener.x + Math.cos(a) * r;
         _distantAt.y = listener.y - 1.2;
         _distantAt.z = listener.z + Math.sin(a) * r;
-        this.pheasant(_distantAt);
+        this.guan(_distantAt);
         // Loudest at the two ends of the day. `dusk` peaks where `dark` is
-        // halfway, which is the hour a pheasant goes up to roost shouting.
+        // halfway, which is the hour a guan goes up to roost shouting.
         const dusk = 1 - Math.abs(dark - 0.5) * 2;
-        this._nextPheasant = (rngRange(rng, 100, 280) * spacing) / (1 + this.dawn * 1.5 + dusk);
+        this._nextGuan = (rngRange(rng, 100, 280) * spacing) / (1 + this.dawn * 1.5 + dusk);
       }
 
       if (dark < 0.35) {
-        this._nextBuzzard -= dt;
-        if (this._nextBuzzard <= 0) {
+        this._nextEagle -= dt;
+        if (this._nextEagle <= 0) {
           const a = rng() * Math.PI * 2;
           const r = 50 + rng() * 130;
           _distantAt.x = listener.x + Math.cos(a) * r;
           _distantAt.y = listener.y + rngRange(rng, 55, 110);
           _distantAt.z = listener.z + Math.sin(a) * r;
-          this.mew(_distantAt);
-          this._nextBuzzard = rngRange(rng, 130, 340) * spacing;
+          this.eagle(_distantAt);
+          this._nextEagle = rngRange(rng, 130, 340) * spacing;
         }
       }
     }
@@ -3626,7 +4330,7 @@ export class Wildlife {
      *
      * Deliberately NOT on the chorus wave's schedule and deliberately not
      * suppressed by anything: gravity does not care whether the birds are
-     * singing, and an acorn landing in the middle of a lull is the best
+     * singing, and a fruit landing in the middle of a lull is the best
      * possible use of that lull.
      */
     this._nextFall -= dt;
@@ -3701,7 +4405,7 @@ export class Wildlife {
      * A pump in flight will see `built` false on its next tick and give its
      * stream back on its own, so this is not a leak — but `build()` can be
      * called again on the same instance, and between the two the counter would
-     * read one and refuse the first skylark of the new wood for no reason
+     * read one and refuse the first wren of the new wood for no reason
      * anybody could ever have diagnosed. One line, and the state is exactly
      * what a fresh instance's is.
      */
@@ -3735,6 +4439,10 @@ const _burstAt = { x: 0, y: 0, z: 0 };
 const _fallAt = { x: 0, y: 0, z: 0 };
 const _callAt = { x: 0, y: 0, z: 0 };
 const _owlAt = { x: 0, y: 0, z: 0 };
+/** The second macaw of the pair, which needs its own bearing. See `macaw`. */
+const _macawAt = { x: 0, y: 0, z: 0 };
+/** One bird of the parrot mob, rewritten per bird. See `parrots`. */
+const _mobAt = { x: 0, y: 0, z: 0 };
 
 /**
  * The per-note scale factors, and the do-nothing one.

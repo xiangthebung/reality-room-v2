@@ -1888,6 +1888,34 @@ const FRAGMENT_BODY = /* glsl */ `
      */
     float rrGdetail = mix(0.28, 1.0, 1.0 - smoothstep(7.0, 48.0, rrGdist));
 
+    /**
+     * AND IT FADES WITH THE FOG TOO, NOT ONLY WITH DISTANCE — which is the
+     * answer to a yellow middle distance that no palette change could reach.
+     *
+     * The distance fade above bottoms out at 0.28, not at 0. That is right for
+     * the RELIEF term, which is a brightness wobble and stays plausible however
+     * far away it is. It is wrong for the MATERIAL tints below, because this
+     * whole block is spliced in after dithering_fragment, i.e. after
+     * fog_fragment: by the time it runs gl_FragColor has already been mixed
+     * toward the fog colour, and at forty metres in a dense wood that mix is
+     * most of the way over. So a 0.28-strength multiply of (1.28, 0.97, 0.60)
+     * was landing on AIR — crushing blue by a fifth over roughly half of every
+     * distant hillside, which is aerial perspective running backwards. Real
+     * distance desaturates toward the sky; this was saturating toward mustard.
+     *
+     * The block twenty lines below already worked this out for the trip's own
+     * colour fields and recomputes the fog factor to defend against exactly
+     * this. It just never occurred to anyone that the SOBER ground tint, which
+     * runs unconditionally and ships to every player, had the same bug.
+     *
+     * Cost is one exp on a varying three has already declared. The relief term
+     * deliberately keeps the old fade; only the material tints take this.
+     */
+    float rrGsolid = 1.0;
+    #if defined(USE_FOG) && defined(FOG_EXP2)
+      rrGsolid = exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
+    #endif
+
     vec3 rrG = gl_FragColor.rgb;
     rrG *= clamp(
       1.0 + (rrRelief * 1.5 * (1.0 + rrDet * 0.2) + rrFineRelief * 1.5 * (1.0 + rrDet * 1.6)
@@ -1900,8 +1928,9 @@ const FRAGMENT_BODY = /* glsl */ `
     // the same ground is most of what a forest floor is.
     float rrLitter = smoothstep(0.05, 0.5, rrFbm2(rrGp * 0.42 + 11.0));
     float rrMossPatch = smoothstep(-0.1, 0.38, rrFbm2(rrGp * 0.27 + 57.0));
-    rrG = mix(rrG, rrG * vec3(1.28, 0.97, 0.60), rrLitter * 0.55 * rrGdetail);
-    rrG = mix(rrG, rrG * vec3(0.62, 1.14, 0.55), rrMossPatch * 0.55 * rrGdetail);
+    float rrGmat = rrGdetail * rrGsolid;
+    rrG = mix(rrG, rrG * vec3(1.28, 0.97, 0.60), rrLitter * 0.55 * rrGmat);
+    rrG = mix(rrG, rrG * vec3(0.62, 1.14, 0.55), rrMossPatch * 0.55 * rrGmat);
     gl_FragColor.rgb = rrG;
   #endif
 

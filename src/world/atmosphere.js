@@ -1,8 +1,24 @@
 import * as THREE from 'three';
 import { TAU, clamp, clamp01, makeRng, rngRange } from '../core/util.js';
 import { WATER_LEVEL, WORLD_RADIUS, heightAt, streamBearing, streamPointNear } from './terrain.js';
-import { glowSprite, mistBand } from './textures.js';
+import { glowSprite, mistBand, rainStreak } from './textures.js';
 import { NOISE3, tripUniforms } from '../trip/living.js';
+import { worldClock } from '../core/world-clock.js';
+/**
+ * THE THREE AIR KNOBS ARE CLAIMED HERE AND NOT IN main.js.
+ *
+ * Every other quality knob is registered in main.js beside the object it moves,
+ * and that is the better place for them — but shaft density, mist layers and
+ * the grade all move things that exist only inside this file and this file's
+ * pipeline, and main.js is owned by another pass. Registering where the object
+ * is built is at least defensible on its own terms: `Settings.register` applies
+ * the current value immediately, so a knob claimed here picks up whatever the
+ * player already chose without anything having to replay it, exactly as the
+ * audio buses do when they register late.
+ *
+ * Worth moving to main.js next time somebody is in there anyway.
+ */
+import { quality } from '../core/quality.js';
 import {
   AUTHORED_PHASE,
   CYCLE_SECONDS,
@@ -19,6 +35,24 @@ import {
   setDayScale,
   sunVector,
 } from './daylight.js';
+
+/**
+ * The cave depth past which THE SKY HAS STOPPED EXISTING, on the 0..1 ramp that
+ * `setCave` takes — see `caveMix` in main.js, which is the number itself.
+ *
+ * EXPORTED BECAUSE TWO FILES DECIDE THE SAME THING AND THEY MUST NOT DRIFT.
+ * main.js latches the water plane, the sun shafts, the mist, the sky dome, the
+ * motes and the animals off at this depth; the rain has to go out at the same
+ * instant, and it is switched HERE rather than there because `points.visible` is
+ * written every frame by the weather block below — a latch in main.js would be
+ * overwritten within one frame, which is the trap that block's own header spends
+ * a paragraph on from the other direction.
+ *
+ * There is no version of this cloud that rains outside a mouth and not inside
+ * one: the box is 46 m centred on the eye and a drop knows nothing about rock.
+ * So the honest cut is the same one everything else in the sky already makes.
+ */
+export const CAVE_BURIED = 0.55;
 
 /**
  * Light, air and water.
@@ -418,20 +452,50 @@ const DAY_KEYS = [
    * segment runs from 0.87 to 1.0, so this is the row midnight is approached
    * from. A mismatch here would be a seam once every twenty minutes at exactly
    * the moment nobody is watching, which is the worst kind.
+   *
+   * ==== AND IT WAS NOT IDENTICAL, FOR THE WHOLE LIFE OF THE TABLE ===========
+   *
+   * Eight of the fifteen channels disagreed with the row at 0, and the ones
+   * that disagreed most were the ones that carry the night:
+   *
+   *   dir       0.18 against 0.26      the moon, 31% dimmer
+   *   hemi      0.58 against 0.80      the sky term, 28% dimmer
+   *   ambient   1.00 against 1.25      the light that makes night walkable
+   *   fill      0.60 against 0.75
+   *   hemiSky   #44659e against #5478b8
+   *   hemiGround, ambientColour, fillColour, fog, dirColour all darker too
+   *
+   * So the last eight minutes before midnight faded steadily to a night about a
+   * quarter darker than the one at midnight, and then at the instant the phase
+   * wrapped past 1 the whole world stepped BACK UP in a single frame. Not a
+   * subtle seam: a 28% jump in the hemisphere light and a visible colour shift
+   * in the fog, once a cycle.
+   *
+   * It hid because of exactly what the paragraph above predicted — it happens
+   * at midnight, the darkest and least-watched moment of the cycle, and every
+   * automated instrument in this repo is pinned to the authored mid-morning
+   * phase and has never rendered a frame anywhere near it.
+   *
+   * The row at 0 wins because it is the one the OTHER side of midnight is
+   * authored against: 0.13 'small hours' is a near-copy of it, so making this
+   * row match 0 leaves the whole 0.87 -> 0.13 stretch smooth, whereas making
+   * row 0 match this one would have moved 'small hours' too and darkened the
+   * night everywhere.
    */
   {
     p: 1,
     name: 'midnight',
-    dir: 0.18, dirColour: 0xb4c8ec,
-    hemi: 0.58, hemiSky: 0x44659e, hemiGround: 0x1a2130,
-    ambient: 1, ambientColour: 0x44506c,
-    fill: 0.6, fillColour: 0x5878a8,
-    fog: 0x232c48, fogDensity: 1.15,
+    dir: 0.26, dirColour: 0xc0d2f0,
+    hemi: 0.8, hemiSky: 0x5478b8, hemiGround: 0x232c42,
+    ambient: 1.25, ambientColour: 0x525f80,
+    fill: 0.75, fillColour: 0x6484b8,
+    fog: 0x2b3552, fogDensity: 1.15,
     skyTop: 0x070d1e, skyHorizon: 0x18233e, skyGround: 0x070910, skySun: 0x9fb6e0,
     sunDisc: 0, sunHalo: 0, stars: 1, moonGlow: 1,
     shafts: 0.1, mist: 1.9, water: 0.22,
   },
 ];
+
 
 /** The row the whole world is authored as. Found once; the lights read it. */
 const AUTHORED_KEY = DAY_KEYS.find((k) => k.name === 'authored');
@@ -444,6 +508,29 @@ const COLOURS = [
   'dirColour', 'hemiSky', 'hemiGround', 'ambientColour', 'fillColour',
   'fog', 'skyTop', 'skyHorizon', 'skyGround', 'skySun',
 ];
+
+/**
+ * THE WRAP ROW MUST EQUAL THE ROW AT p = 0, CHANNEL FOR CHANNEL, AND IT IS
+ * ASSERTED RATHER THAN TRUSTED.
+ *
+ * The comment on the wrap row said the two were identical, and it was wrong for
+ * the whole life of the table — see the block there for what that cost. A
+ * comment cannot fail. This can. It runs once at module load, costs one pass
+ * over twenty-two keys, and is the only thing standing between a future edit to
+ * one midnight row and a step in the light once every twenty minutes at the
+ * moment nobody is watching.
+ *
+ * A warning rather than a throw: a mismatched palette is a wrong picture, not a
+ * broken program, and a world that refuses to start is a worse outcome than a
+ * seam. It is loud in the console, which is where `look-shots.mjs` and
+ * `day-check.mjs` both already print console problems.
+ */
+{
+  const first = DAY_KEYS[0];
+  const last = DAY_KEYS[DAY_KEYS.length - 1];
+  const off = [...SCALARS, ...COLOURS].filter((k) => first[k] !== last[k]);
+  if (off.length) console.warn(`[day] midnight wrap row disagrees with p=0 on: ${off.join(', ')}`);
+}
 
 /**
  * The interpolated palette, as one reused object.
@@ -767,10 +854,68 @@ function buildShafts(scene, seed) {
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
+    /**
+     * ONE DRAW, NOT TWO. Verified in the local three@0.185.1: `renderObject`
+     * (three.module.js:18127) splits any material with `transparent && side ===
+     * DoubleSide && !forceSinglePass` into a BackSide draw and a FrontSide draw
+     * — and sets `material.needsUpdate = true` BETWEEN them, which forces a
+     * full `getParameters()` object build, a `getProgramCacheKey()` array join
+     * and a complete uniform re-upload, twice per object per frame, on the main
+     * thread. It also permanently retains a `flipSided` program variant.
+     *
+     * It does NOT halve the fill — both passes together rasterise the same
+     * fragments — so the saving is the draw call and the per-frame CPU churn,
+     * not pixels.
+     *
+     * SAFE HERE BECAUSE THE BLENDING IS ADDITIVE, which is commutative: the
+     * shaft is an open-ended cylinder, so its far and near walls both draw
+     * either way, and a sum does not care which arrived first. The same
+     * argument covers the campfire flames. The two mist materials are flat
+     * planes, where a pixel only ever has one face, so the question does not
+     * arise for them at all.
+     */
+    forceSinglePass: true,
     uniforms: {
       uTime: tripUniforms.uTime,
       uLevel: tripUniforms.uLevel,
-      uColour: { value: new THREE.Color(0xffe0a8) },
+      uColour: { value: new THREE.Color(0xffe8bc) },
+      /**
+       * WHAT THE LIGHT TURNS INTO ON ITS WAY DOWN, and it is the one thing
+       * that makes a shaft read as a RAINFOREST shaft rather than as a shaft in
+       * a barn.
+       *
+       * Sunlight entering a gap in this canopy is white at the top of the gap
+       * and, twenty metres lower, has been through several layers of leaf —
+       * which transmit green and absorb most of the rest. So the beam is warm
+       * where it enters and turns green as it descends, and the eye reads that
+       * gradient as "there is a great deal of leaf above me" without ever being
+       * told. One uniform colour up the whole cone says "a hole in a roof".
+       */
+      uColourLow: { value: new THREE.Color(0x8fd47a) },
+      /**
+       * The window a shaft is drawn in, as (nearOut, nearIn, farIn, farOut) in
+       * metres. Two fades, and the NEAR one matters more than the far one.
+       *
+       * FAR: the lattice reaches 80 m to a corner and the fog has closed by
+       * then, so without a fade the outer ring is adding light to pixels the
+       * fog has already flattened. It is what lets the lattice be dense enough
+       * near the player to matter without the far ones turning the middle
+       * distance into one uniform glow.
+       *
+       * NEAR, AND THIS IS THE ONE THAT WAS MISSING. A shaft is a shell, and a
+       * shell you are standing INSIDE covers the whole frame at nearly full
+       * facing — so walking into one did not look like walking into a beam of
+       * light, it looked like somebody had put a milky gel over the lens. That
+       * is the exact percept this file exists to refuse, arriving from the one
+       * system that is allowed to be made of light. Fading the first few metres
+       * out means a shaft is always something you see ACROSS rather than
+       * something you are inside, which is also how you have ever seen one.
+       *
+       * It is the fill saving as well, and a large one: a cone at 3 m covers
+       * hundreds of times the pixels of the same cone at 40 m, so the fragments
+       * this deletes are the most expensive ones the feature has.
+       */
+      uReach: { value: new THREE.Vector4(5, 18, 52, 92) },
       uStrength: { value: 1 },
       /**
        * A SECOND multiplier, and it exists because the director owns the first.
@@ -795,13 +940,27 @@ function buildShafts(scene, seed) {
       varying vec3 vToEye;
       void main() {
         vUvS = uv;
-        vec4 world = modelMatrix * vec4(position, 1.0);
+        /**
+         * ONE MESH NOW, AND instanceMatrix IS WHERE EVERY SHAFT'S PLACE LIVES.
+         *
+         * three declares this attribute for us whenever the object being drawn
+         * is an InstancedMesh, and this material is only ever put on one — so
+         * there is exactly one program for it and no variant anybody can cross
+         * at runtime. That distinction is the whole reason this is allowed:
+         * a knob that flips USE_INSTANCING would be a 1.4 s compile mid-play,
+         * whereas a mesh that is instanced from the moment it is built compiles
+         * once, with everything else, during the load.
+         *
+         * The instance matrix carries position, the sun lean and the per-shaft
+         * width and length; modelMatrix is the group's, which is identity.
+         */
+        vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
         // WORLD position, not object position. The cone is a unit primitive
-        // scaled per shaft now, so an object-space flicker phase would be
-        // identical in all 25 of them — they would pulse in unison, which is
-        // the one thing a field of independent light shafts must not do.
+        // scaled per shaft, so an object-space flicker phase would be identical
+        // in all of them — they would pulse in unison, which is the one thing a
+        // field of independent light shafts must not do.
         vLocal = world.xyz;
-        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        vWorldNormal = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
         vToEye = cameraPosition - world.xyz;
         gl_Position = projectionMatrix * viewMatrix * world;
       }
@@ -812,13 +971,39 @@ function buildShafts(scene, seed) {
       uniform float uStrength;
       uniform float uDaylight;
       uniform vec3 uColour;
+      uniform vec3 uColourLow;
+      uniform vec4 uReach;
       varying vec2 vUvS;
       varying vec3 vLocal;
       varying vec3 vWorldNormal;
       varying vec3 vToEye;
       void main() {
-        // Fade at both ends, so the shaft has no top or bottom edge.
-        float along = smoothstep(0.0, 0.35, vUvS.y) * smoothstep(1.0, 0.45, vUvS.y);
+        /**
+         * Fade at both ends, so the shaft has no top or bottom edge — AND THE
+         * BOTTOM FADE IS NOW MOST OF THE CONE, WHICH IS WHERE THE GROUND IS.
+         *
+         * A shell has to be clipped by whatever it runs into, and what a shaft
+         * runs into is the floor. Where the cone crossed a slope facing the
+         * camera, the visible part was a large patch bounded by two straight
+         * silhouette lines meeting at a corner, at nearly full brightness right
+         * up to the cut: unmistakably a polygon, and the more so the better the
+         * beams got. The proper fix is a depth texture and a soft-particle
+         * fade, which is a bigger change than this pass should carry.
+         *
+         * The cheap fix is to make sure there is almost nothing left of the
+         * beam by the time it reaches anything. Two halves, and they work
+         * together: the cones are now seated two metres ABOVE the ground rather
+         * than one below it (see the seating loop), and this ramp runs over the
+         * HALF of the cone instead of the bottom third — so a 28 m shaft is at
+         * a tenth of its peak for its first seven metres and does not reach
+         * full strength until about fourteen. What lands on the floor is a soft
+         * pool rather than a cut edge, and a slope crossing the beam crosses it
+         * where it is faint.
+         *
+         * The beams themselves are not weakened: the peak is unchanged and it
+         * sits in the middle of the cone, which is where you look at it.
+         */
+        float along = smoothstep(0.0, 0.5, vUvS.y) * smoothstep(1.0, 0.45, vUvS.y);
 
         /**
          * THE SILHOUETTE FADE MUST BE VIEW-RELATIVE.
@@ -836,8 +1021,53 @@ function buildShafts(scene, seed) {
          * the middle, zero where the surface turns edge-on. That is exactly
          * |N·V|, it costs a dot product, and it follows the viewer for free.
          */
-        float facing = abs(dot(normalize(vWorldNormal), normalize(vToEye)));
-        float radial = pow(facing, 1.15);
+        vec3 toEye = vToEye;
+        float facing = abs(dot(normalize(vWorldNormal), normalize(toEye)));
+        /**
+         * THE EXPONENT WENT UP, NOT DOWN, AND IT WAS TRIED THE OTHER WAY.
+         *
+         * The reasoning for lowering it was that an exponent above one
+         * concentrates the brightness into the middle of the shell and thins
+         * the rest, drawing a core with a fast edge, whereas below one the
+         * shaft is nearly as bright two thirds of the way out as in the middle
+         * — which is what a column of lit air is. That is true of the shaft in
+         * WORLD space and completely wrong in SCREEN space, which is the only
+         * one that has an opinion about whether an edge looks hard.
+         *
+         * At the silhouette the shell is edge-on, so its normal swings through
+         * ninety degrees inside a handful of pixels. Whatever falloff is
+         * written against |N·V| therefore has to happen inside those pixels.
+         * An exponent below one puts nearly all of its falloff in the last few
+         * per cent of |N·V| — that is, inside the few pixels where the surface
+         * is turning — so the shaft is uniformly bright right up to a straight
+         * line and then stops. The clearing shot showed exactly that: a flat
+         * translucent wedge with a hard diagonal border across a quarter of the
+         * frame, which is the polygonal wedge this shader's own history is
+         * about, arriving through a different door.
+         *
+         * An exponent ABOVE one spends its falloff over the whole width of the
+         * shell, where there are hundreds of pixels to spend it over. So the
+         * beam has a soft core and no outline at all. 2.0 rather than the 1.15
+         * that was here before, because the beams are now much narrower and a
+         * narrow shaft can afford a tighter profile.
+         *
+         * It is the cheap half of "reads as volume". The expensive half would
+         * be marching the beam, and a march is a per-pixel loop over the one
+         * surface in this world that already covers the most screen.
+         */
+        float radial = facing * facing;
+
+        /**
+         * Out of range, out of the frame. See uReach.
+         *
+         * length() rather than the squared form because the falloff has to be
+         * linear in metres to line up with the fog, and comparing a square
+         * against a smoothstep's two ends means squaring the ends and getting
+         * a curve that bunches at the far one.
+         */
+        float dist = length(toEye);
+        float reach = smoothstep(uReach.x, uReach.y, dist) * (1.0 - smoothstep(uReach.z, uReach.w, dist));
+        if (reach <= 0.0) discard;
 
         float flicker = 0.78 + 0.22 * sin(uTime * 0.5 + vLocal.x * 0.4 + vLocal.z * 0.3);
         /**
@@ -848,8 +1078,65 @@ function buildShafts(scene, seed) {
          * became flat white slabs with hard clipped edges, which is the one
          * thing guaranteed to make a soft volumetric read as a solid object.
          */
-        float a = along * radial * flicker * uStrength * uDaylight * (0.08 + uLevel * 0.11);
-        gl_FragColor = vec4(uColour * a, a);
+        /**
+         * ==== THE AMPLITUDE, RAISED, AND WHY THAT IS NOT FREE MONEY ==========
+         *
+         * 0.08 was chosen to stay under the bright pass, and it succeeded so
+         * completely that the shafts were not visible either — every look shot
+         * taken at the authored hour has no god rays in it at all, which for a
+         * feature whose entire job is to be seen is the worse failure of the
+         * two. 0.22 through a single shell, 0.44 through the pair that
+         * DoubleSide gives you down the middle of a beam, sits just inside the
+         * bright pass's soft knee (threshold 0.85, knee 0.55, so it opens from
+         * about 0.30): the core of a shaft now feeds the bloom a little and the
+         * body of it does not. That is exactly the wanted behaviour — a beam
+         * with a glow ON it rather than a beam made of glow.
+         *
+         * RAISING ALPHA IS FREE IN FRAGMENTS. An additive fragment costs the
+         * same whatever number it adds; what costs is how many pixels the cones
+         * cover. So brightness came up 2.75x and the fill bill did not move —
+         * the fill bill moved because the lattice got denser, which is paid for
+         * separately and out of the 24 draw calls the instancing gave back.
+         *
+         * THE TRIP'S SHARE CAME DOWN, from 0.11 to 0.05, and it has to. The
+         * director multiplies this by up to 2.7 at a surge (see its own note on
+         * why 2.7 is the ceiling), and it fitted that ceiling against a sober
+         * base of 0.08. Against 0.22 the same multiplier would put a single
+         * shell at 0.73 and the overlap at 1.5, which is the flat white slab
+         * both files already have a paragraph about.
+         */
+        float a = along * radial * reach * flicker * uStrength * uDaylight
+                * (0.46 + uLevel * 0.05);
+        /**
+         * A CEILING, BECAUSE THE DIRECTOR OWNS uStrength AND CAN REACH 2.7.
+         *
+         * Every previous attempt to make these read has ended at the same
+         * place: a single shell past about 0.8 additive is a flat white slab
+         * with a clipped edge, and a slab is the one thing a soft volumetric
+         * must never become. That failure used to be prevented by keeping the
+         * sober amplitude so low that 2.7x of it was still safe, which is also
+         * why the sober frame had no god rays in it.
+         *
+         * A ceiling separates the two. The sober amplitude can be whatever the
+         * picture wants, and a surge can push as hard as it likes without ever
+         * producing the artefact — it simply stops getting brighter, which is
+         * what a real over-exposure does and is very much less objectionable
+         * than what an unbounded one does. min() rather than a smooth knee: the
+         * knee would compress the sober frame too, and the sober frame is the
+         * one that had to be fixed.
+         */
+        a = min(a, 0.72);
+        /**
+         * Warm at the top of the beam, green at the bottom. See uColourLow.
+         *
+         * vUvS.y is the cylinder's own height coordinate and the geometry is
+         * built with its NARROW end at +Y, which is the end that gets rotated
+         * to point at the sun — so v = 1 is where the light comes in and v = 0
+         * is where it lands. The gradient therefore runs the right way round by
+         * construction rather than by a sign that has to be remembered.
+         */
+        vec3 col = mix(uColourLow, uColour, smoothstep(0.1, 0.8, vUvS.y));
+        gl_FragColor = vec4(col * a, a);
       }
     `,
   });
@@ -875,23 +1162,85 @@ function buildShafts(scene, seed) {
    * One unit cone, scaled per shaft, rather than 22 geometries: the taper is a
    * fixed 0.28 ratio, so a non-uniform scale reproduces the old shapes exactly.
    */
-  const geo = new THREE.CylinderGeometry(0.28, 1, 1, 14, 1, true);
+  const geo = new THREE.CylinderGeometry(0.28, 1, 1, 18, 1, true);
   geo.translate(0, 0.5, 0);
   const lean = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), SUN_DIR);
   const _up = new THREE.Vector3(0, 1, 0);
-  const meshes = [];
-  for (let i = 0; i < SHAFT_SPAN * SHAFT_SPAN; i++) {
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.quaternion.copy(lean);
-    mesh.renderOrder = 4;
-    // The cone leans, so its own bounding sphere is wrong for the rotated mesh
-    // in a way three does not account for at this aspect ratio; it is 25 shells
-    // of additive haze and the frustum test is not worth the risk of one
-    // vanishing at the edge of the screen.
-    mesh.frustumCulled = false;
-    meshes.push(mesh);
-    group.add(mesh);
+
+  /**
+   * ==== ONE DRAW CALL, AND THE 24 IT GAVE BACK ARE THE BUDGET FOR THE REST ==
+   *
+   * This was 25 separate THREE.Mesh objects sharing one geometry and one
+   * material — that is, 25 draw calls submitting the same 28 triangles with a
+   * different model matrix each, which is precisely and only what instancing
+   * exists for. One InstancedMesh draws the whole lattice in one call, the
+   * per-shaft matrix moves from an object transform into `instanceMatrix`, and
+   * nothing about the picture changes.
+   *
+   * What that bought is the reason it was worth doing at all: the lattice could
+   * then get 3.2x denser and the alpha 2.75x brighter and still submit FEWER
+   * draw calls than it did when it was invisible.
+   *
+   * THE CELL LIST IS SORTED NEAREST-FIRST, and that is what makes the quality
+   * knob work. `InstancedMesh.count` draws a PREFIX of the instances, so if the
+   * cells were seated in scan order a lower count would delete the bottom rows
+   * of the neighbourhood and leave the player standing at the edge of a
+   * rectangle of light. Sorted by distance from the middle cell, a lower count
+   * deletes the FURTHEST shafts — which is the same thing the reach fade is
+   * already doing to them, so Low simply loses the ones that were nearly gone.
+   *
+   * Sorted once, at build time, because the offsets are relative to whichever
+   * cell the player is in and therefore never change.
+   */
+  const SHAFT_HALF = (SHAFT_SPAN - 1) / 2;
+  const CELLS = [];
+  for (let j = -SHAFT_HALF; j <= SHAFT_HALF; j++) {
+    for (let k = -SHAFT_HALF; k <= SHAFT_HALF; k++) CELLS.push(k, j);
   }
+  {
+    const pairs = [];
+    for (let i = 0; i < CELLS.length; i += 2) pairs.push([CELLS[i], CELLS[i + 1]]);
+    pairs.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+    for (let i = 0; i < pairs.length; i++) {
+      CELLS[i * 2] = pairs[i][0];
+      CELLS[i * 2 + 1] = pairs[i][1];
+    }
+  }
+  const MAX_SHAFTS = CELLS.length / 2;
+
+  const mesh = new THREE.InstancedMesh(geo, material, MAX_SHAFTS);
+  mesh.renderOrder = 4;
+  // The cones lean, so the mesh's own bounding sphere is wrong for the rotated
+  // instances in a way three does not account for at this aspect ratio; it is a
+  // lattice of additive shells and the frustum test is not worth the risk of
+  // the whole field vanishing at the edge of the screen.
+  mesh.frustumCulled = false;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  group.add(mesh);
+
+  /**
+   * Where each shaft is and how big, kept on the side.
+   *
+   * `setLean` has to rebuild every instance matrix when the sun moves, and a
+   * matrix is not a thing you can extract a clean position and scale back out
+   * of when part of it is a rotation you are about to replace. Two small typed
+   * arrays are cheaper to keep than a decompose per instance per commit.
+   */
+  const place = new Float32Array(MAX_SHAFTS * 3);
+  const size = new Float32Array(MAX_SHAFTS * 2);
+  const _sm = new THREE.Matrix4();
+  const _sp = new THREE.Vector3();
+  const _ss = new THREE.Vector3();
+
+  const rebuild = () => {
+    for (let i = 0; i < MAX_SHAFTS; i++) {
+      _sp.set(place[i * 3], place[i * 3 + 1], place[i * 3 + 2]);
+      _ss.set(size[i * 2], size[i * 2 + 1], size[i * 2]);
+      _sm.compose(_sp, lean, _ss);
+      mesh.setMatrixAt(i, _sm);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  };
 
   let originX = NaN;
   let originZ = NaN;
@@ -902,23 +1251,40 @@ function buildShafts(scene, seed) {
     if (cx === originX && cz === originZ) return false;
     originX = cx;
     originZ = cz;
-    const half = (SHAFT_SPAN - 1) / 2;
-    let i = 0;
-    for (let j = -half; j <= half; j++) {
-      for (let k = -half; k <= half; k++) {
-        const gx = cx + k;
-        const gz = cz + j;
-        // Seeded on the cell, so this shaft is this shaft forever.
-        const r = makeRng(`${seed}:shaft:${gx}:${gz}`);
-        const sx = (gx + r()) * SHAFT_CELL;
-        const sz = (gz + r()) * SHAFT_CELL;
-        const len = rngRange(r, 16, 30);
-        const width = rngRange(r, 1.6, 5.2);
-        const mesh = meshes[i++];
-        mesh.position.set(sx, heightAt(sx, sz) - 1, sz);
-        mesh.scale.set(width, len, width);
-      }
+    for (let i = 0; i < MAX_SHAFTS; i++) {
+      const gx = cx + CELLS[i * 2];
+      const gz = cz + CELLS[i * 2 + 1];
+      // Seeded on the cell, so this shaft is this shaft forever.
+      const r = makeRng(`${seed}:shaft:${gx}:${gz}`);
+      const sx = (gx + r()) * SHAFT_CELL;
+      const sz = (gz + r()) * SHAFT_CELL;
+      /**
+       * NARROWER THAN IT WAS, NOT WIDER, AND THE COUNT WENT UP INSTEAD.
+       *
+       * 1.6-5.2 m over a 30 m lattice put the player inside a shaft about 3% of
+       * the time and it was 3% too much — see the near fade on uReach. Beams
+       * are things you look ACROSS. So the range came down and the lattice came
+       * in, which buys the same amount of light in the air out of more, smaller
+       * columns: more places for it to be, less chance of being in one, and a
+       * strictly smaller total projected area at any distance you can see them.
+       */
+      const len = rngRange(r, 20, 36);
+      const width = rngRange(r, 1.1, 3.4);
+      place[i * 3] = sx;
+      /**
+       * ABOVE THE GROUND, NOT BELOW IT. This was `- 1`, which buried the wide
+       * end of the cone and put the brightest reachable part of the beam in
+       * contact with the floor. See the note on the bottom fade in the shader:
+       * a shaft that terminates in air cannot draw a hard intersection with
+       * anything, and a shaft whose lowest ten metres are nearly transparent
+       * still looks like it reaches the ground.
+       */
+      place[i * 3 + 1] = heightAt(sx, sz) + 2;
+      place[i * 3 + 2] = sz;
+      size[i * 2] = width;
+      size[i * 2 + 1] = len;
     }
+    rebuild();
     return true;
   };
   follow(0, 0);
@@ -931,20 +1297,33 @@ function buildShafts(scene, seed) {
    * standing in it — and that is the sort of mismatch you cannot name but can
    * absolutely see.
    *
-   * Twenty-five quaternion copies, and they happen only on the frames the sun's
-   * direction is COMMITTED (see `_commitSun`), which is a handful of times a
-   * minute rather than every frame. Riding the same event as the shadow map is
-   * free by construction: those frames are already the expensive ones, and
-   * putting this on any other schedule would mean the shafts and the shadows
-   * disagreed about the sun for a few frames at a time.
+   * One matrix compose per instance and one buffer upload, and they happen only
+   * on the frames the sun's direction is COMMITTED (see `_commitSun`), which is
+   * a handful of times a minute rather than every frame. Riding the same event
+   * as the shadow map is free by construction: those frames are already the
+   * expensive ones, and putting this on any other schedule would mean the
+   * shafts and the shadows disagreed about the sun for a few frames at a time.
    */
   const setLean = (dir) => {
     lean.setFromUnitVectors(_up, dir);
-    for (let i = 0; i < meshes.length; i++) meshes[i].quaternion.copy(lean);
+    rebuild();
+  };
+
+  /**
+   * How much of the lattice to draw, 0..1. The `shaftDensity` quality knob.
+   *
+   * Writing `count` is the entire implementation: the buffer stays allocated at
+   * its maximum, every matrix stays valid, and the renderer simply submits a
+   * prefix. Nothing is rebuilt, nothing is uploaded, and pushing the knob up
+   * and down is free — which is what a knob an Auto governor may touch mid-play
+   * has to be.
+   */
+  const setDensity = (v) => {
+    mesh.count = clamp(Math.round(MAX_SHAFTS * v), 1, MAX_SHAFTS);
   };
 
   scene.add(group);
-  return { group, material, follow, setLean };
+  return { group, mesh, material, follow, setLean, setDensity, maxCount: MAX_SHAFTS };
 }
 
 /**
@@ -959,6 +1338,21 @@ function buildMist(scene) {
   const tex = mistBand({ key: 'hollow' });
   const layers = new THREE.Group();
   layers.name = 'mist';
+  /**
+   * THE STREAM'S THREE CARDS ARE NOW A SUBGROUP OF THE MIST ROOT.
+   *
+   * `layers` is the object main.js latches off underground, so it has to stay
+   * the root of everything that is mist. What it may no longer be is the thing
+   * that gets ROTATED onto the river's bearing and slid along it, because there
+   * is now mist in the rest of the world too and it is not on the river. So the
+   * bearing and the along-channel snap moved down one level onto `stream`, and
+   * `follow` positions that instead. One indirection, and it is the difference
+   * between adding mist to the world and rotating the world's mist onto the
+   * river.
+   */
+  const stream = new THREE.Group();
+  stream.name = 'mist-stream';
+  layers.add(stream);
   const mats = [];
   /**
    * Three layers, low, faint, and NAILED TO THE STREAM.
@@ -983,6 +1377,9 @@ function buildMist(scene) {
       depthWrite: false,
       color: 0xd6e6e1,
       side: THREE.DoubleSide,
+      // A flat plane presents one face per pixel, so the BackSide/FrontSide
+      // split three would otherwise do is a wasted draw. See the shaft material.
+      forceSinglePass: true,
       fog: true,
     });
     mat.map.wrapS = THREE.RepeatWrapping;
@@ -1006,15 +1403,391 @@ function buildMist(scene) {
      */
     mesh.position.set(0, WATER_LEVEL + 0.5 + i * 0.7, 0);
     mesh.renderOrder = 3;
-    layers.add(mesh);
+    stream.add(mesh);
     mats.push(mat);
   }
   // Local +X runs along the river. `rotation.y = a` sends local +X to
   // (cos a, 0, -sin a), so the angle that lands it on (streamCos, 0, streamSin)
   // is the negative of the bearing.
-  layers.rotation.y = -streamBearing();
+  stream.rotation.y = -streamBearing();
+
+  /**
+   * ==== AND MIST EVERYWHERE ELSE =============================================
+   *
+   * Everything above this line is the STREAM's mist, and until now it was the
+   * only mist in the world — three cards in one channel, on one bearing, in a
+   * world that is otherwise endless. Walk two hundred metres from the water and
+   * the air has nothing in it at all, which is most of why the middle distance
+   * reads as a diagram: there is no medium between you and the fifth rank of
+   * trunks except a flat fog colour.
+   *
+   * Two more things, built out of one shader:
+   *
+   *   HOLLOWS. Mist lies in dips. Not "mist is drawn at a fixed height and
+   *   happens to be in a dip sometimes" — the sheet knows how far the ground is
+   *   below it at every point and is transparent wherever that distance is
+   *   small. So on a flat floor it is not there, over a gully it is thick, and
+   *   from a ridge you look down onto a valley with mist in the bottom of it.
+   *   That is the whole of the effect and it is one smoothstep.
+   *
+   *   THE CANOPY BAND. The same sheet, put fifteen and twenty-two metres up.
+   *   Seen from below it is the light haze that hangs under a rainforest roof,
+   *   and its real job is DEPTH: a horizontal surface at a known height is the
+   *   only cue in the frame that tells you how far away the sixth trunk is
+   *   rather than merely that it is paler. The same ground-distance term turns
+   *   it off where a hill rises through it, which is what stops it reading as a
+   *   lid.
+   *
+   * WHY THIS IS A SHADER AND THE STREAM'S IS NOT. The stream band is a texture
+   * on a MeshBasicMaterial and it works because it lives at a fixed place on a
+   * fixed bearing, so its UVs mean something. A sheet that follows the player
+   * cannot use UVs: moving it moves the pattern with it, and a mist that slides
+   * over the world as you walk is a mist stuck to your face. The pattern here
+   * is therefore a function of WORLD position out of the shared noise lattice,
+   * which is anchored by construction and does not repeat at any period you can
+   * see — and having a shader anyway is what makes the ground-distance term
+   * possible at all.
+   */
+  const world = buildWorldMist();
+  layers.add(world.group);
+
   scene.add(layers);
-  return { layers, mats };
+  return { layers, stream, mats, world };
+}
+
+/**
+ * How big a world-mist sheet is, how coarsely its ground is sampled, and how
+ * far the player may walk before it is re-seated.
+ *
+ * THE SNAP IS ABOUT THE GROUND SAMPLE, NOT ABOUT THE PATTERN. The pattern is
+ * world-space noise and would be happy for the sheet to track the eye exactly.
+ * What cannot track the eye is `aGround` — the terrain height under each vertex
+ * — because that is 289 `heightAt` calls, which is 0.29 ms and cannot happen
+ * every frame. So the sheet sits on a lattice and only re-samples when the
+ * player crosses a cell: once per 36 m of walking, on a frame that is already
+ * re-rendering the shadow map.
+ *
+ * The three numbers are then forced by each other. The sheet has to still reach
+ * past the alpha fade when the player is at the WORST place inside a cell,
+ * which is a corner: 25 m from the centre. 120 m of half-width minus 25 is 95,
+ * and the fade is over by 86, so the sheet's own edge can never be seen. That
+ * margin is the only reason the border needs no feathering.
+ */
+const MIST_TILE = 240;
+const MIST_GRID = 16;
+const MIST_SNAP = 36;
+/**
+ * The window a sheet is drawn in: (nearOut, nearIn, farIn, farOut) in metres.
+ *
+ * THE NEAR END IS THE ONE THAT MATTERS AND IT WAS MISSING. Without it a sheet
+ * five metres in front of your face contributes at full alpha, and since it is
+ * a horizontal plane at roughly eye height that is a bank of grey across the
+ * whole middle of the frame with the wood behind it gone — the milky sheet this
+ * file has failed at twice before. Mist is something you see IN THE DISTANCE;
+ * standing inside it, what you notice is that the far things are gone, not that
+ * there is white in front of you. Fading the first twenty metres says exactly
+ * that, and it deletes the most expensive fragments the feature has.
+ */
+const MIST_FADE = new THREE.Vector4(6, 20, 58, 90);
+
+function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
+  return new THREE.ShaderMaterial({
+    name: 'mist-sheet',
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    // Flat planes, one face per pixel — see the shaft material. Five sheets at
+    // Ultra, so this is five draws and five uniform re-uploads a frame.
+    forceSinglePass: true,
+    uniforms: {
+      uTime: tripUniforms.uTime,
+      uLevel: tripUniforms.uLevel,
+      uNoiseTex: tripUniforms.uNoiseTex,
+      uColour: { value: new THREE.Color(colour) },
+      /** The hour's own amount. Written by `applyDay`, like the stream's. */
+      uOpacity: { value: opacity },
+      /** Authored level, never written. The hour multiplies this. */
+      uAuthored: { value: opacity },
+      /**
+       * Metres of air between the sheet and the ground at which it turns on and
+       * is fully on. This is the whole "pools in hollows" mechanism.
+       */
+      uDepth: { value: new THREE.Vector2(depth[0], depth[1]) },
+      /** The distance window the sheet is drawn in. See MIST_FADE. */
+      uFade: { value: fade.clone() },
+      /**
+       * How far above the eye a sheet has to be before it is drawn, so a card
+       * the player is standing level with never becomes a sheet of white across
+       * the middle of the frame. Zero for the hollows, which are below.
+       */
+      uAbove: { value: height },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aGround;
+      varying float vDepth;
+      varying float vDist;
+      varying vec2 vWorld;
+      varying float vRise;
+      void main() {
+        vec4 w = modelMatrix * vec4(position, 1.0);
+        vWorld = w.xz;
+        // How much air is under this corner of the sheet. The attribute is the
+        // terrain; the sheet's own height is in the model matrix, and it moves
+        // continuously while the attribute only changes on a re-seat.
+        vDepth = w.y - aGround;
+        vRise = w.y - cameraPosition.y;
+        vec3 toEye = cameraPosition - w.xyz;
+        vDist = length(toEye);
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      ${NOISE3}
+      uniform vec3 uColour;
+      uniform float uOpacity;
+      uniform vec2 uDepth;
+      uniform vec4 uFade;
+      uniform float uAbove;
+      uniform float uTime;
+      uniform float uLevel;
+      varying float vDepth;
+      varying float vDist;
+      varying vec2 vWorld;
+      varying float vRise;
+      void main() {
+        /**
+         * The body of it, as world-space noise rather than as a texture.
+         *
+         * Two octaves and two fetches. The coarse one is what makes one bank of
+         * mist and not another; the fine one stops the coarse one reading as a
+         * single smooth blob. The clock term is a drift rather than a scroll —
+         * the domain moves, so the mist evolves in place instead of travelling
+         * across the world in a direction.
+         *
+         * COMPUTED FIRST BECAUSE THE POOLING TERM NEEDS IT. The ground under
+         * the sheet is known only at the vertices, on a 15 m grid, so a
+         * threshold on the interpolated value draws STRAIGHT LINES along the
+         * mesh triangles wherever the sheet fades in — and a straight line is
+         * the one thing mist may never have. Perturbing the depth by the noise
+         * before the threshold breaks every one of those edges for free, and it
+         * is physically the right statement as well: the top of a mist bank is
+         * not level, it is lumpy.
+         */
+        float t = uTime * 0.013;
+        float n = rrNoise(vec3(vWorld * 0.0115, t));
+        n += 0.45 * rrNoise(vec3(vWorld * 0.043 + 17.0, t * 2.1));
+
+        // The pooling term. Nothing at all where the ground is close.
+        float pool = smoothstep(uDepth.x, uDepth.y, vDepth + n * 3.2);
+        // The distance window. The far end hides the sheet's own border, which
+        // is why the border needs no feathering; the near end keeps a sheet the
+        // player is standing in off the front of the lens. See MIST_FADE.
+        float win = smoothstep(uFade.x, uFade.y, vDist) * (1.0 - smoothstep(uFade.z, uFade.w, vDist));
+        float a = uOpacity * pool * win;
+        /**
+         * A CARD AT EYE LEVEL IS A LAKE, and this is the guard against it.
+         *
+         * The one documented failure of horizontal mist in this project was a
+         * big plane a metre below the eye in the clearing: from just above, a
+         * horizontal surface does not read as mist, it reads as water — the
+         * glade appeared to be flooded. So a sheet only counts where it is
+         * decisively above the eye or decisively below it, and the band in
+         * between, where it would be seen edge-on and would read as a surface,
+         * is exactly where it is not drawn.
+         *
+         * THE HOLLOW SHEETS TAKE THE ABSOLUTE VALUE AND THE CANOPY ONES DO NOT,
+         * and the asymmetry is the point. A canopy band under which you are
+         * standing is haze; a canopy band you have climbed above is a lid, and
+         * there is no altitude in this world from which a lid is wanted. A
+         * hollow sheet is legitimate from either side: below it you are in the
+         * mist looking up through it, above it you are on the rim looking down
+         * onto it, and both of those are things a valley does.
+         *
+         * The three hollow sheets sit at different heights, so this also makes
+         * the stack SELECT itself: whichever one happens to be level with your
+         * eye stands down and the ones a few metres either side of it carry the
+         * effect. Walk downhill and they hand over continuously.
+         */
+        float rise = uAbove > 0.5 ? vRise : abs(vRise);
+        a *= smoothstep(0.8, 3.4, rise);
+        /**
+         * And a hollow sheet is never a ceiling. Standing at the bottom of a
+         * gorge the fill level is at your feet, but a step down a bank puts it
+         * over your head for a second and a half while the damping catches up,
+         * and a white plane over your head is a lid however briefly it is
+         * there. Above nine metres it is gone.
+         */
+        if (uAbove < 0.5) a *= 1.0 - smoothstep(5.0, 9.0, vRise);
+        a *= clamp(0.42 + n * 0.72, 0.0, 1.0);
+        // The trip thickens the air, the same as it does the stream's cards.
+        a *= 1.0 + uLevel * 1.4;
+        if (a < 0.004) discard;
+        gl_FragColor = vec4(uColour, a);
+      }
+    `,
+  });
+}
+
+/**
+ * The sheets, their geometry, and how they follow.
+ *
+ * TWO GEOMETRIES FOR FIVE SHEETS, and that is the whole reason this is
+ * affordable. `aGround` is the expensive thing here — 289 terrain lookups —
+ * and every hollow sheet wants exactly the same one, because they are at the
+ * same place and differ only in how high they float and how thick they are. So
+ * the hollow sheets share one geometry and the canopy sheets share another, and
+ * a re-seat samples the terrain once for the whole system rather than once per
+ * layer. Adding the fifth layer costs a draw call and nothing else.
+ *
+ * The canopy grid is COARSE on purpose: its ground term only has to know that a
+ * hill is coming up through it, which is a hundred-metre feature, whereas the
+ * hollow term has to resolve a gully. 5x5 against 17x17 is 25 lookups against
+ * 289, and the whole re-seat is cheaper for it.
+ */
+function buildWorldMist() {
+  const group = new THREE.Group();
+  group.name = 'mist-world';
+
+  const makeGeo = (seg) => {
+    const g = new THREE.PlaneGeometry(MIST_TILE, MIST_TILE, seg, seg);
+    g.rotateX(-Math.PI / 2);
+    const n = g.attributes.position.count;
+    const ground = new THREE.BufferAttribute(new Float32Array(n), 1);
+    ground.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('aGround', ground);
+    // The sheet is a horizontal slab that never leaves the neighbourhood of the
+    // eye and is drawn without depth writes; a frustum test on it is a test
+    // that can only ever produce a wrong answer at the edge of the screen.
+    return g;
+  };
+  const hollowGeo = makeGeo(MIST_GRID);
+  const canopyGeo = makeGeo(4);
+
+  /**
+   * THE LAYER ORDER IS THE ORDER THEY ARE WORTH, because the quality knob draws
+   * a PREFIX of this list. The first hollow sheet and the first canopy band do
+   * most of the work between them — one puts something in the low ground and
+   * the other gives the middle distance a ceiling to be measured against — so
+   * they are first and second, and the extra thicknesses come after.
+   */
+  const SHEETS = [
+    { geo: hollowGeo, y: 1.1, colour: 0xd8ece6, opacity: 0.15, depth: [1.2, 7.0], above: 0 },
+    { geo: canopyGeo, y: 16.5, colour: 0xd2e8dc, opacity: 0.085, depth: [7.0, 20.0], above: 1 },
+    { geo: hollowGeo, y: 2.6, colour: 0xdff0e8, opacity: 0.115, depth: [2.4, 9.0], above: 0 },
+    { geo: canopyGeo, y: 23.5, colour: 0xcfe4e4, opacity: 0.06, depth: [10.0, 26.0], above: 1 },
+    { geo: hollowGeo, y: 4.2, colour: 0xe4f2ea, opacity: 0.08, depth: [4.0, 12.0], above: 0 },
+  ];
+
+  const sheets = [];
+  const mats = [];
+  for (let i = 0; i < SHEETS.length; i++) {
+    const s = SHEETS[i];
+    const mat = mistSheetMaterial({
+      colour: s.colour,
+      opacity: s.opacity,
+      depth: s.depth,
+      height: s.above,
+      fade: MIST_FADE,
+    });
+    const mesh = new THREE.Mesh(s.geo, mat);
+    mesh.position.y = s.y;
+    mesh.renderOrder = 3;
+    mesh.frustumCulled = false;
+    group.add(mesh);
+    sheets.push(mesh);
+    mats.push(mat);
+  }
+
+  /**
+   * ==== THE LEVEL THE MIST FILLS TO, AND WHAT IT IS NOT =====================
+   *
+   * The first version made this the MEAN of the whole sampled tile, on the
+   * reasoning that a 240 m average moves about as slowly as the landscape does
+   * and would therefore not answer the player's footsteps. It is a good
+   * argument and the picture disproved it in one shot: the spawn clearing has a
+   * mountain inside its tile, so the mean came out THIRTEEN METRES above the
+   * clearing floor, every vertex in the glade read as thirteen metres of air,
+   * and the whole pooling term saturated. The glade got a lid.
+   *
+   * A mean is the wrong statistic for "the level water would stand at" whenever
+   * the relief is larger than the mist is deep, which in this world is
+   * everywhere. So the reference is the ground UNDER THE PLAYER, and the
+   * footstep problem is solved where it belongs — by damping. `setLevel` is
+   * called once a frame with a first-order lag of about a second and a half, so
+   * a root or a step does not move it at all and walking down into a gully
+   * lowers it smoothly a second or so behind you. Mist lagging your descent is
+   * also simply what mist does.
+   *
+   * The pooling term then reads "this bit of ground is lower than the ground I
+   * am standing on", which is the statement that was wanted all along, and it
+   * is true in a valley and true on a plateau and true on the side of a
+   * mountain, none of which is true of a tile mean.
+   */
+  let baseY = 0;
+  let cellX = NaN;
+  let cellZ = NaN;
+
+  const sample = (geo, cx, cz) => {
+    const pos = geo.attributes.position.array;
+    const gnd = geo.attributes.aGround.array;
+    const n = geo.attributes.aGround.count;
+    for (let i = 0; i < n; i++) gnd[i] = heightAt(cx + pos[i * 3], cz + pos[i * 3 + 2]);
+    geo.attributes.aGround.needsUpdate = true;
+  };
+
+  const follow = (x, z) => {
+    const cx = Math.round(x / MIST_SNAP);
+    const cz = Math.round(z / MIST_SNAP);
+    if (cx === cellX && cz === cellZ) return false;
+    cellX = cx;
+    cellZ = cz;
+    const wx = cx * MIST_SNAP;
+    const wz = cz * MIST_SNAP;
+    sample(hollowGeo, wx, wz);
+    sample(canopyGeo, wx, wz);
+    group.position.x = wx;
+    group.position.z = wz;
+    return true;
+  };
+  follow(0, 0);
+
+  /**
+   * The damped fill level. One `heightAt` and one lerp a frame.
+   *
+   * The coefficient is `1 - exp(-dt / TAU)` rather than a fixed fraction, so
+   * the lag is a real time constant and not a frame-rate one — at 240 Hz and at
+   * 60 Hz the mist settles at the same speed, which matters because this repo
+   * measures at both. Snapped on the first call so a fresh page does not open
+   * with the mist a hundred metres underground and rise into view.
+   */
+  const LEVEL_TAU = 1.5;
+  let levelled = false;
+  const setLevel = (x, z, dt) => {
+    const want = heightAt(x, z);
+    if (!levelled) {
+      levelled = true;
+      baseY = want;
+    } else {
+      // `dt || 0` and not `dt`: one NaN here would be latched into baseY
+      // forever and every sheet in the world would silently stop drawing.
+      baseY += (want - baseY) * (1 - Math.exp(-Math.max(dt || 0, 0) / LEVEL_TAU));
+    }
+    group.position.y = baseY;
+  };
+
+  /**
+   * How many sheets to draw. The `mistLayers` quality knob.
+   *
+   * `visible` rather than removing them: a hidden mesh costs a boolean test in
+   * the render list build and nothing else, and the knob may be pushed either
+   * way by the Auto governor mid-play, where anything that reallocates is a
+   * hitch.
+   */
+  const setLayers = (n) => {
+    for (let i = 0; i < sheets.length; i++) sheets[i].visible = i < n;
+  };
+
+  return { group, sheets, mats, follow, setLevel, setLayers, max: sheets.length };
 }
 
 /**
@@ -1076,12 +1849,46 @@ const _mistPoint = { x: 0, y: 0, z: 0, angle: 0 };
  * of the world now gets light too. Odd span so the player's own cell is the
  * middle one.
  */
-const SHAFT_CELL = 30;
-const SHAFT_SPAN = 5;
+/**
+ * DENSER AND WIDER, PAID FOR BY THE INSTANCING.
+ *
+ * 30 m cells over a 5x5 neighbourhood was one shaft per 900 m² reaching 75 m,
+ * and it was 25 draw calls. 19 m cells over 9x9 is one per 361 m² reaching
+ * 76 m — two and a half times the density over the same distance — and it is
+ * ONE draw call. The reach fade in the shader (uReach) then thins the outer
+ * ring, so the number of shafts you can actually see at once roughly doubles
+ * while the number of draw calls the feature costs falls by 24.
+ *
+ * WHY DENSITY RATHER THAN SIZE. Both make the light more present and only one
+ * of them is cheap. Fill cost is the projected area of the cones, and doubling
+ * a cone's width doubles its area for one more shaft's worth of presence;
+ * doubling the COUNT of narrow ones doubles the area too but puts the light in
+ * twice as many PLACES, which is what a canopy full of holes actually is. The
+ * width range went up only slightly, and mostly at the top end so a few of them
+ * are broad enough to stand in.
+ */
+const SHAFT_CELL = 19;
+const SHAFT_SPAN = 9;
 
 function buildMotes(scene, seed) {
   const rng = makeRng(`${seed}:motes`);
-  const COUNT = 2600;
+  /**
+   * 3800, UP FROM 2600, AND THE ARITHMETIC THAT ALLOWS IT IS NOT THE DRAW CALL.
+   *
+   * It was never the draw call — this has always been one THREE.Points. What
+   * bounded it is `MOTE_SLICE`: the ground height under every mote has to be
+   * refreshed on the CPU, and the whole cloud is walked 64 motes a frame. At
+   * 2600 that is a full cycle every 41 frames; at 3800 it is 60, about a
+   * second, and a mote that has just wrapped is 96 m away and invisible for the
+   * twelve seconds it takes to sprint to it. So the slice does not get bigger
+   * and the cost per frame does not move at all — only the staleness does, from
+   * 0.7 s to 1.0 s, against a 12 s budget.
+   *
+   * What it does cost is fill: 46% more point sprites. They are small, they are
+   * faded past 30 m, and the quality knob's presets were re-fitted so that only
+   * Ultra actually draws all of them. See `particleDensity`.
+   */
+  const COUNT = 3800;
   const positions = new Float32Array(COUNT * 3);
   const seeds = new Float32Array(COUNT);
   const sizes = new Float32Array(COUNT);
@@ -1109,13 +1916,155 @@ function buildMotes(scene, seed) {
    * eighty metres underground.
    */
   const ground = new Float32Array(COUNT);
-  for (let i = 0; i < COUNT; i++) {
+  /**
+   * ==== THIS CLOUD IS THREE THINGS NOW, AND IT IS STILL ONE DRAW CALL =======
+   *
+   * The brief asked for gnat swarms hanging in the sun shafts and for
+   * fireflies at night. Both are "a few hundred small bright specks in the air
+   * at eye level, wrapped around the player" — which is precisely, to the
+   * attribute, what this cloud already is. So they are not new systems. They
+   * are a KIND flag on the existing points:
+   *
+   *   0  dust     what was here before, unchanged in every respect.
+   *   1  gnat     clustered into swarms, low, fast, day only.
+   *   2  firefly  sparse, low, slow, blinking, night only.
+   *
+   * WHAT THIS BUYS. A separate THREE.Points for each would be two more draw
+   * calls, two more materials, two more programs and two more copies of the
+   * ground-height refresh machinery below — and the refresh is the expensive
+   * part, because it is `heightAt` calls. Sharing the cloud means the slice
+   * walker already covers all three and the cost of the whole feature is one
+   * extra float attribute and a handful of ALU in a shader that runs on 2600
+   * points. Measured as part of the same pass: no change to the frame that
+   * `perf:gate` can distinguish from noise.
+   *
+   * WHY THE COUNT DID NOT GO UP. 2600 was chosen against `MOTE_SLICE` and the
+   * 2.6 ms of `heightAt` that a full per-frame refresh would cost. Gnats and
+   * fireflies are carved OUT of that budget rather than added to it — a fifth
+   * of the cloud becomes gnats and a twentieth becomes fireflies, so there is
+   * slightly less dust than there was. That is the right trade: dust is
+   * atmosphere and the other two are ANIMALS, and one animal is worth a great
+   * deal more than one speck of dust in a brief that asks for life.
+   */
+  const kinds = new Float32Array(COUNT);
+  /**
+   * 0.14, DOWN FROM 0.2, AND IT IS A COUNT AND NOT A FRACTION THAT MATTERS.
+   *
+   * The cloud went from 2600 points to 3800 for the dust's sake, and a fixed
+   * share carried the gnats up with it — 520 insects became 760, all of them
+   * still packed into the same 22 swarms, so each swarm got 46% denser without
+   * anybody choosing that. Additive sprites in a tight cluster sum toward
+   * white, so a density increase is a brightness increase; this is the same
+   * trap as correlated signals summing by amplitude. 0.14 of 3800 is 532, which
+   * is the number of gnats there always were.
+   */
+  const GNAT_SHARE = 0.14;
+  const FIREFLY_SHARE = 0.12;
+  /**
+   * Gnats come in swarms and a swarm is the whole point of them.
+   *
+   * A gnat scattered uniformly through the air like dust is invisible — it is
+   * a speck, and one speck reads as dust however it moves. What the eye
+   * notices, and what actually happens in a light gap, is a COLUMN of them:
+   * two or three hundred insects boiling inside a metre-wide volume, holding
+   * station over one spot while each individual jitters. So the gnat portion
+   * of the cloud is seeded around a small number of anchors rather than
+   * uniformly, and each one keeps a tight offset from its anchor.
+   *
+   * 22 anchors over a 192 m box is one swarm per ~1670 m², against the shaft
+   * lattice's one per 900 m² — so roughly every second shaft has a swarm in
+   * it, which is about right. They are not placed ON the shafts deliberately:
+   * the shafts are on their own lattice and tying the two together would make
+   * the coincidence look authored the moment a player noticed it once.
+   */
+  const SWARMS = 22;
+  const swarmX = new Float32Array(SWARMS);
+  const swarmZ = new Float32Array(SWARMS);
+  for (let s = 0; s < SWARMS; s++) {
     const a = rng() * TAU;
     const r = Math.pow(rng(), 0.5) * (MOTE_SPAN * 0.5);
-    const x = Math.cos(a) * r;
-    const z = Math.sin(a) * r;
+    swarmX[s] = Math.cos(a) * r;
+    swarmZ[s] = Math.sin(a) * r;
+  }
+  /**
+   * ==== THE KINDS ARE INTERLEAVED NOW, AND IT WAS A REAL BUG ================
+   *
+   * The three kinds used to be laid down in RUNS: gnats first, then fireflies,
+   * then dust. main.js thins this cloud with `setDrawRange(0, count * v)` and
+   * its note says the order in the array has nothing to do with where a mote
+   * is — which is true of POSITION, because one rng scattered them all, and
+   * completely false of KIND. Cutting the tail cut dust and only dust. At Low's
+   * old 0.3 the drawn cloud was 67% gnats and 33% fireflies with essentially NO
+   * DUST IN IT AT ALL: the one kind that is the actual atmosphere, gone, on the
+   * tier that has the least else in the frame. The two animals meanwhile kept
+   * every single one of their number, which is the exact opposite of the trade
+   * anyone would choose.
+   *
+   * A deterministic stride fixes it. Each index's kind is a function of
+   * `i % 25`, so any prefix of the array holds the shares to within one mote in
+   * twenty-five, and the draw range now thins all three evenly — which is what
+   * its own comment always claimed it did.
+   *
+   * Five in twenty-five is 20% gnats and three is 12% fireflies, which are the
+   * shares the two constants above already named.
+   */
+  const GNAT_STRIDE = Math.max(1, Math.round(1 / GNAT_SHARE));
+  const FLY_SLOTS = Math.round(25 * FIREFLY_SHARE);
+  const kindOf = (i) => {
+    const slot = i % 25;
+    if (slot % GNAT_STRIDE === 0) return 1;
+    // The fireflies take the last few slots that are not already a gnat's.
+    return slot >= 25 - FLY_SLOTS ? 2 : 0;
+  };
+  for (let i = 0; i < COUNT; i++) {
+    let x;
+    let z;
+    let y;
+    const kind = kindOf(i);
+    if (kind === 1) {
+      kinds[i] = 1;
+      const s = i % SWARMS;
+      /**
+       * Tight, but NOT AS TIGHT AS IT WAS, and the reason is blending.
+       *
+       * "A swarm you can walk through is a swarm; a swarm ten metres across is
+       * a haze" is still the rule and 2.4 m is still a swarm. But at 1.35 m
+       * with an exponent of 0.6 the points piled into the middle, and where
+       * additive sprites overlap they add — so the core of every swarm summed
+       * past 1.0 and clipped to flat white. Photographed at the clearing it was
+       * a column of hard white discs that read as confetti pasted on the glass,
+       * and it was the first thing the eye went to in the frame.
+       *
+       * Widening the radius and flattening the radial exponent spreads the same
+       * number of insects over about three times the area, which is where most
+       * of the overlap went. The rest is on the two lines below and in the
+       * fragment stage.
+       */
+      const a = rng() * TAU;
+      const r = Math.pow(rng(), 0.8) * 2.4;
+      x = swarmX[s] + Math.cos(a) * r;
+      z = swarmZ[s] + Math.sin(a) * r;
+      // Head height and below, which is where they actually hang and also
+      // where the player will walk face-first into one.
+      y = rngRange(rng, 0.7, 2.6);
+    } else if (kind === 2) {
+      kinds[i] = 2;
+      const a = rng() * TAU;
+      const r = Math.pow(rng(), 0.5) * (MOTE_SPAN * 0.5);
+      x = Math.cos(a) * r;
+      z = Math.sin(a) * r;
+      // Fireflies work the understory, not the canopy.
+      y = rngRange(rng, 0.5, 4.5);
+    } else {
+      kinds[i] = 0;
+      const a = rng() * TAU;
+      const r = Math.pow(rng(), 0.5) * (MOTE_SPAN * 0.5);
+      x = Math.cos(a) * r;
+      z = Math.sin(a) * r;
+      y = rngRange(rng, 0.4, 14);
+    }
     positions[i * 3] = x;
-    positions[i * 3 + 1] = rngRange(rng, 0.4, 14);
+    positions[i * 3 + 1] = y;
     positions[i * 3 + 2] = z;
     ground[i] = heightAt(x, z);
     seeds[i] = rng();
@@ -1125,6 +2074,7 @@ function buildMotes(scene, seed) {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
   geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('aKind', new THREE.BufferAttribute(kinds, 1));
   const groundAttr = new THREE.BufferAttribute(ground, 1);
   groundAttr.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('aGround', groundAttr);
@@ -1151,21 +2101,58 @@ function buildMotes(scene, seed) {
        * lets a few of the brightest survive into the moonlight.
        */
       uDaylight: { value: 1 },
+      /**
+       * WHERE THE SUN IS, SO THE DUST CAN CATCH IT.
+       *
+       * A speck of dust is not a light source and is not evenly lit either: it
+       * is a scatterer, and scattering off something much larger than the
+       * wavelength is overwhelmingly FORWARD. So a mote between you and the sun
+       * is several times brighter than the identical mote with the sun behind
+       * you, which is the entire reason you can see dust in a sunbeam and
+       * cannot see it anywhere else in the same room.
+       *
+       * Writing that down is what ties the cloud to the shafts. They are on
+       * separate lattices and are deliberately not placed together, but they
+       * are both answers to the same sun — so the dust lights up along the same
+       * bearing the beams lean on, and the two read as one phenomenon without
+       * either knowing anything about the other.
+       *
+       * The CONTINUOUS sun, not the quantised light direction: this is what the
+       * eye sees rather than what the shadow map is using, and a stepped
+       * scattering lobe would be a whole field of dust flickering in unison a
+       * few times a minute.
+       */
+      uSunDir: { value: SUN_DIR.clone() },
+      /**
+       * How much the lobe is worth, as a multiplier on the dust's own alpha.
+       *
+       * A uniform rather than a literal so it can be switched off in a live
+       * frame without a rebuild. Two quite different layers can both produce a
+       * cluster of bright dots in a dark wood, and turning one of them off is
+       * the only way to tell which one is doing it.
+       */
+      uScatter: { value: 2.2 },
     },
     vertexShader: /* glsl */ `
       ${NOISE3}
       uniform float uTime;
       uniform float uLevel;
       uniform vec3 uEye;
+      uniform vec3 uSunDir;
       uniform float uPixelRatio;
       attribute float aSeed;
       attribute float aSize;
       attribute float aGround;
+      attribute float aKind;
       uniform float uSpan;
+      uniform float uDaylight;
       varying float vFade;
       varying float vSeed;
+      varying float vKind;
+      varying float vScatter;
       void main() {
         vSeed = aSeed;
+        vKind = aKind;
         /**
          * Wrap into a box centred on the eye. GLSL's mod() is floor-based and
          * therefore correct for negatives, so this lands every
@@ -1183,17 +2170,133 @@ function buildMotes(scene, seed) {
         p.z += rrNoise(vec3(p.zx * 0.05, t + 7.3)) * 2.4;
         p.y += sin(t * 2.1 + aSeed * 6.28) * 0.9;
 
+        /**
+         * A GNAT DOES NOT DRIFT, IT JITTERS, and that difference is the whole
+         * reason a swarm reads as alive rather than as blowing dust.
+         *
+         * The dust motion above is a slow noise wander at 0.06-0.11 Hz. An
+         * insect holding station is doing something categorically different:
+         * a fast, small, erratic dance about a fixed point, at a few hertz,
+         * with the horizontal much larger than the vertical. Three sines at
+         * mutually irrational rates give that without a second noise fetch —
+         * and a noise fetch is the expensive thing in this shader, so the
+         * animals are cheaper per point than the dust is.
+         *
+         * uDaylight gates the amplitude rather than only the brightness in
+         * the fragment stage, so at night the swarm does not merely dim, it
+         * SETTLES. Gnats go to bed. A cloud of invisible insects still dancing
+         * at midnight would cost the same and be a lie.
+         */
+        if (aKind > 0.5 && aKind < 1.5) {
+          float g = uTime * (2.6 + aSeed * 2.2);
+          float wake = 0.25 + 0.75 * uDaylight;
+          p.x += sin(g + aSeed * 21.0) * 0.32 * wake;
+          p.z += sin(g * 1.37 + aSeed * 47.0) * 0.32 * wake;
+          p.y += sin(g * 0.83 + aSeed * 13.0) * 0.14 * wake;
+        }
+
+        /**
+         * The forward-scatter lobe. See uSunDir.
+         *
+         * The dot is between the direction FROM THE EYE TO THE MOTE and the
+         * direction to the sun, so it is 1 when the mote is directly between
+         * the two. Raised to a power because the lobe is narrow: a broad one
+         * brightens half the sky's worth of dust at once and reads as the
+         * exposure having moved, whereas a tight one lights up only the specks
+         * you are actually looking through the sun at — which is the thing that
+         * looks like air.
+         */
+        vec3 fromEye = p - uEye;
+        vScatter = pow(max(dot(normalize(fromEye), uSunDir), 0.0), 5.0);
+        /**
+         * A GNAT DOES NOT FORWARD-SCATTER, BECAUSE A GNAT IS NOT DUST.
+         *
+         * The lobe is a statement about a particle small enough that light goes
+         * mostly THROUGH it and comes out the far side; that is why a speck of
+         * dust between you and the sun is several times brighter than the same
+         * speck with the sun behind you. An insect is opaque and a thousand
+         * times bigger. Looking toward the sun it is a silhouette, not a lamp.
+         *
+         * Giving them the lobe was worth up to another 3.2x on top of a cluster
+         * that was already summing past white, and it was the largest single
+         * contributor to the confetti. What a backlit gnat legitimately gets is
+         * the uDaylight-cubed term in the fragment stage, which was always the
+         * right way to say it.
+         */
+        if (aKind > 0.5 && aKind < 1.5) vScatter = 0.0;
+
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         float dist = -mv.z;
         // Fade in the distance and very close up, so nothing pops at the
         // near plane and the far field does not turn into a wall of dots.
         vFade = smoothstep(70.0, 30.0, dist) * smoothstep(1.2, 5.0, dist);
+        /**
+         * The two animals are SMALLER THAN DUST AND CLOSER IN. A speck of dust
+         * is lit by the sun and can be read at fifty metres; a gnat at fifty
+         * metres is nothing at all, and drawing it there is the difference
+         * between a swarm and a smear. Pulling their fade in to 26 m also means
+         * that most of the time most of them are not drawn, which is where the
+         * cost of this feature went.
+         */
+        /**
+         * THE TWO ANIMALS FADE AT DIFFERENT DISTANCES, and getting this wrong
+         * is what made the fireflies invisible on the first night shot.
+         *
+         * A GNAT is a dark speck lit from behind; past about twenty-five metres
+         * there is nothing there to see and drawing it is a smear. 26 m.
+         *
+         * A FIREFLY IS A LIGHT SOURCE. It is the one object in this cloud that
+         * emits rather than reflects, so it stays legible at a distance where
+         * everything else has gone — that is the entire experience of them, a
+         * green spark forty metres off between the trunks. 44 m.
+         *
+         * The arithmetic that forced this: at the old shared 26 m fade and a 5%
+         * share, the number of fireflies inside the visible disc was 2600 x
+         * 0.05 x (pi x 26^2 / 192^2) = about seven, and the blink's duty cycle
+         * is roughly a sixth — so ONE was lit at any moment, over a 192 m box.
+         * At 12% and 44 m it is about forty in range and a dozen lit, which is
+         * a scatter you can actually watch.
+         */
+        if (aKind > 0.5 && aKind < 1.5) vFade *= smoothstep(26.0, 11.0, dist);
+        else if (aKind > 1.5) vFade *= smoothstep(44.0, 20.0, dist);
         gl_Position = projectionMatrix * mv;
         float grow = 1.0 + uLevel * 1.6;
-        // Capped. Without the ceiling a mote that drifts within a metre of the
-        // eye becomes a 150 px disc of light, and the frame is suddenly full of
-        // white blobs that have nothing to do with the forest.
-        gl_PointSize = min(26.0, aSize * grow * uPixelRatio * 42.0 / max(dist, 1.0));
+        /**
+         * A GNAT IS SMALLER THAN DUST AND A FIREFLY IS MUCH BIGGER, and
+         * collapsing those into one multiplier is what made the fireflies
+         * invisible for two rounds of night shots.
+         *
+         * Both are animals, so the instinct was that both should shrink — dust
+         * catches the sun and reads large, an insect is a speck. That is right
+         * for the gnat and exactly backwards for the firefly, which is not
+         * being LIT, it is EMITTING. A lamp reads bigger than its own body at
+         * every distance; that is what a lamp is.
+         *
+         * Measured before the fix: at 0.55 a firefly at twenty metres came out
+         * at 1.7 px and at forty metres at 0.9 px, i.e. under one pixel at the
+         * range its own fade had just been extended to. It was drawing
+         * perfectly correctly and there was nothing there to see. Alpha,
+         * blending, count and the blink were all checked first and all three
+         * were fine — the failure was entirely in the point size.
+         */
+        if (aKind > 0.5 && aKind < 1.5) grow *= 0.55;
+        else if (aKind > 1.5) grow *= 1.9;
+        /**
+         * Capped. Without the ceiling a mote that drifts within a metre of the
+         * eye becomes a 150 px disc of light, and the frame is suddenly full of
+         * white blobs that have nothing to do with the forest.
+         *
+         * AND THE GNATS GET A MUCH LOWER CEILING OF THEIR OWN, because 26 px
+         * was written for dust and a gnat is not dust. The 0.55 multiplier
+         * above makes them smaller than dust AT THE SAME DISTANCE and does
+         * nothing about the fact that a swarm is a thing you walk up to: at
+         * five metres a gnat came out at 22 px, which is a disc you can see the
+         * edge of, and thirty of them a metre apart is confetti. A real gnat is
+         * a speck at every distance you can see it at, so it gets a speck's
+         * ceiling. This is also where most of the swarm's fill went.
+         */
+        float cap = (aKind > 0.5 && aKind < 1.5) ? 7.0 : 26.0;
+        gl_PointSize = min(cap, aSize * grow * uPixelRatio * 42.0 / max(dist, 1.0));
       }
     `,
     fragmentShader: /* glsl */ `
@@ -1203,8 +2306,11 @@ function buildMotes(scene, seed) {
       uniform float uTime;
       uniform float uDaylight;
       uniform vec4 uAudio;
+      uniform float uScatter;
       varying float vFade;
       varying float vSeed;
+      varying float vKind;
+      varying float vScatter;
       void main() {
         vec4 tex = texture2D(uMap, gl_PointCoord);
         // Warm by day, cool by night — a mote at midnight is catching moonlight
@@ -1219,8 +2325,140 @@ function buildMotes(scene, seed) {
         // A mix, not 0.22 + 0.78 * uDaylight: at uDaylight = 1 the mix is
         // exactly 1 and the authored frame is untouched to the bit. See the
         // same note in the water shader.
-        float a = tex.a * vFade * (0.30 + uLevel * 0.75) * (1.0 + uAudio.w * 0.5)
-                * mix(0.22, 1.0, uDaylight);
+        /**
+         * 0.30 became 0.36, and the scatter lobe is worth up to 2.2x more on
+         * top of that — so a mote seen through the sun is about three times
+         * what it was and a mote with the sun behind you is very nearly what it
+         * always was. The RATIO is the whole effect. Making the dust uniformly
+         * brighter would only be a haze on the lens, which is the thing this
+         * file exists to refuse.
+         *
+         * The lobe is scaled by uDaylight because what it is scattering is
+         * SUNLIGHT; at midnight there is none, and the moon term the mix below
+         * carries is all that is left.
+         */
+        float a = tex.a * vFade * (0.36 + uLevel * 0.75) * (1.0 + uAudio.w * 0.5)
+                * mix(0.22, 1.0, uDaylight)
+                * (1.0 + vScatter * uScatter * uDaylight);
+
+        /**
+         * ==== THE TWO ANIMALS ===================================================
+         *
+         * GNATS ARE BACKLIT, WHICH IS WHY ADDITIVE BLENDING IS RIGHT FOR THEM.
+         * The instinct is that an insect is a dark speck and additive blending
+         * can only add light, so this cannot work. But a gnat swarm is only
+         * ever VISIBLE when it is between you and a light source — that is the
+         * entire reason you notice one in a wood — and what you see then is a
+         * boil of bright points against shade, not dark points against sky. So
+         * the blending mode this cloud already uses is the correct one, and
+         * they are drawn slightly warmer and harder than the dust around them.
+         *
+         * They are killed at night by uDaylight cubed rather than linearly:
+         * a swarm that lingers at half brightness through dusk looks like a
+         * bug in the fade, whereas one that is simply gone by the time the sky
+         * goes orange looks like evening.
+         */
+        if (vKind > 0.5 && vKind < 1.5) {
+          /**
+           * DIMMER AND LESS WHITE THAN IT WAS: 1.35 became 0.75, and the warm
+           * mix goes to a colour that is not near-white.
+           *
+           * The old numbers were fitted against a single sprite. A swarm is by
+           * construction the place in this cloud where the most sprites
+           * overlap, and additive blending against itself only ever goes one
+           * way — so the value that is right for one gnat is far too high for
+           * the thirty of them the eye actually sees at once. Judging the
+           * per-sprite alpha is judging the wrong quantity; what has to stay
+           * under the bright pass is the SUM.
+           *
+           * With the looser swarm, the size ceiling and the scatter lobe gone,
+           * a swarm core now lands under the sunlit ground it hangs in front
+           * of, which is the test: an insect is darker than the light behind
+           * it, always.
+           */
+          col = mix(col, vec3(0.92, 0.84, 0.62), 0.45);
+          /**
+           * tex.a A SECOND TIME, WHICH SQUARES THE SPRITE'S OWN PROFILE.
+           *
+           * Measured at the clearing, the swarm was peaking at 255/255/241
+           * against a brightest sunlit ground pixel of 155/193/105 — 2.2x in
+           * linear terms, i.e. a hard white disc in front of a lit floor, which
+           * is backwards for an opaque insect. A flat multiplier would have
+           * fixed the peak and left the shape: the glow sprite is a hot core
+           * with a steep falloff, and at the seven-pixel ceiling these now have
+           * that falloff is compressed into two or three pixels, so every gnat
+           * read as a hard-edged dot however dim it was.
+           *
+           * Multiplying by the sprite's alpha again leaves the core roughly
+           * where it was and cuts the skirt by a factor of five, so a gnat
+           * stops having an edge and becomes a smudge of light, which is what
+           * one is.
+           *
+           * THE MULTIPLIER IS 1.0 AND NOT 1.35 BECAUSE OF WHAT ELSE CHANGED,
+           * not because of the confetti — see the postscript below. The swarms
+           * lost the forward-scatter lobe, gained a seven-pixel size ceiling
+           * and went back to their historical count, and each of those takes
+           * light out of a cluster; the remaining cut here is the amount that
+           * puts one gnat back where it always was.
+           *
+           * POSTSCRIPT, BECAUSE THE DIAGNOSIS WAS WRONG FIRST TIME AND THE
+           * METHOD IS WORTH MORE THAN THE FIX. A column of hard white discs at
+           * the clearing was blamed on these, and the reasoning was good — a
+           * tight cluster of additive sprites sums toward white by
+           * construction, and this pass had just raised the count and added a
+           * lobe worth up to 3.2x. Two rounds of tuning moved the picture
+           * hardly at all, so the cloud was switched off entirely in a live
+           * frame: the count of pixels over 235 luma went from 1611 to 1574.
+           * The discs were never the motes. Hiding each top-level object in
+           * turn found them in the fauna group. Turn a suspect OFF before
+           * tuning it: an effect that survives its own cause is telling you
+           * something no amount of care with the numbers will.
+           */
+          a *= tex.a * 1.0 * uDaylight * uDaylight * uDaylight;
+        }
+        /**
+         * FIREFLIES ARE THE OPPOSITE ON EVERY AXIS: night only, and they BLINK.
+         *
+         * The blink is the whole animal. A steady green dot is a pixel; a dot
+         * that comes up over about a second, holds, and dies away, while the
+         * dot four metres from it is doing the same thing out of phase, is
+         * unmistakably alive. vSeed scattered into the phase is what keeps
+         * them out of phase — this is the one place in the file where two
+         * points must NOT agree with each other.
+         *
+         * pow(x, 6) on a sine is a cheap way to get a long dark gap and a
+         * short bright pulse out of one trig call, which is the shape of a
+         * real firefly's duty cycle. A plain sine gives a thing that pulses
+         * like a heartbeat monitor and reads as machinery.
+         */
+        if (vKind > 1.5) {
+          float blink = sin(uTime * 1.15 + vSeed * 62.8) * 0.5 + 0.5;
+          blink = pow(blink, 3.5);
+          col = vec3(0.72, 1.0, 0.45);
+          /**
+           * ITS ALPHA IS COMPUTED FROM SCRATCH, NOT MULTIPLIED ONTO THE DUST'S,
+           * AND THAT WAS THE ACTUAL BUG BEHIND THREE BLANK NIGHT SHOTS.
+           *
+           * The line above this branch builds a for a speck of DUST, and two
+           * of its factors are statements about dust that are false about a
+           * firefly: a base of 0.30, and mix(0.22, 1.0, uDaylight), which is
+           * the note further up about there being dust at night but no sunlight
+           * to light it. Multiplying a light SOURCE by "how much sun is there to
+           * reflect" is a category error — and at night it is a multiply by
+           * 0.22, on top of a 0.30, which is where 93% of the brightness went.
+           *
+           * Diagnosed by forcing the branch to opaque red: 856 px of firefly
+           * appeared, so the geometry, the count, the fade, the blink and the
+           * blending were all correct all along and the whole loss was in these
+           * two inherited factors. Assigning rather than multiplying is the fix.
+           *
+           * (1 - uDaylight) squared is kept because that one IS true of a
+           * firefly: it is not that daylight fails to light them, it is that
+           * they do not switch on until dusk.
+           */
+          a = tex.a * vFade * blink * 0.9 * (1.0 - uDaylight) * (1.0 - uDaylight);
+        }
+
         if (a < 0.003) discard;
         gl_FragColor = vec4(col * a, a);
       }
@@ -1241,18 +2479,47 @@ function buildMotes(scene, seed) {
    * rather than re-sending 10 KB every frame for 256 changed bytes.
    */
   let cursor = 0;
+  /**
+   * The wrapped position each mote's height was last taken at.
+   *
+   * THE SAMPLE POINT DOES NOT MOVE WHEN YOU DO, which is not obvious from the
+   * arithmetic above and is the whole reason this cache is worth its 30 KB.
+   * Writing `u = pos - eyeX + half`, the line below is `wx = eyeX - half + (u
+   * mod SPAN)` — and as the eye advances by d, `u` falls by d and `u mod SPAN`
+   * falls by d with it, so the two cancel exactly. `wx` is PIECEWISE CONSTANT:
+   * it holds still while you walk and jumps by one whole MOTE_SPAN at the
+   * moment a mote wraps to the other side of the cloud.
+   *
+   * So the loop was calling `heightAt` — two region fbm2 calls plus the ridge,
+   * the clearing dish and the stream carve — 64 times a frame to get 64 answers
+   * it already had, and standing still it was redundant every single time. Only
+   * the handful that wrapped this frame are new.
+   *
+   * NaN-initialised so the first pass over each mote always misses; NaN fails
+   * every comparison, which is the behaviour wanted here rather than a hazard.
+   */
+  const lastWx = new Float32Array(COUNT).fill(NaN);
+  const lastWz = new Float32Array(COUNT).fill(NaN);
   const refresh = (eyeX, eyeZ) => {
     const half = MOTE_SPAN * 0.5;
     const start = cursor;
+    let changed = false;
     for (let n = 0; n < MOTE_SLICE; n++) {
       const i = (start + n) % COUNT;
       const relX = positions[i * 3] - eyeX;
       const relZ = positions[i * 3 + 2] - eyeZ;
       const wx = eyeX + (((relX + half) % MOTE_SPAN) + MOTE_SPAN) % MOTE_SPAN - half;
       const wz = eyeZ + (((relZ + half) % MOTE_SPAN) + MOTE_SPAN) % MOTE_SPAN - half;
+      if (wx === lastWx[i] && wz === lastWz[i]) continue;
+      lastWx[i] = wx;
+      lastWz[i] = wz;
       ground[i] = heightAt(wx, wz);
+      changed = true;
     }
     cursor = (start + MOTE_SLICE) % COUNT;
+    // Nothing in this slice wrapped, so the buffer the GPU holds is already
+    // right and the upload would be 256 bytes of the same numbers.
+    if (!changed) return;
     // The slice wraps around the end of the buffer once a cycle; re-sending the
     // whole thing on that one frame is simpler than two ranges and is still
     // only 10 KB.
@@ -1263,6 +2530,164 @@ function buildMotes(scene, seed) {
   };
 
   return { points, material, refresh };
+}
+
+/**
+ * ==== RAIN ================================================================
+ *
+ * The single strongest weather cue available, and one of the cheapest things
+ * in this file — because a raindrop is the one object in the world that needs
+ * no state at all.
+ *
+ * NO SIMULATION, NO GROUND LOOKUP, NO CPU WORK PER FRAME. A drop's position is
+ * a closed-form function of its seed and the clock: it falls at a constant
+ * speed and wraps in a box centred on the eye, all three axes done with one
+ * mod() in the vertex shader. Compare the mote cloud above, which needs
+ * `aGround` refreshed 64 points a frame because a mote hovers at a height
+ * ABOVE the terrain and therefore has to know where the terrain is. Rain does
+ * not care: it falls through the box, and whether it has passed the ground is
+ * invisible under a canopy at the densities that matter. That deletes the
+ * entire `refresh` half of the mote machinery, so this system is materially
+ * cheaper per particle than the dust is.
+ *
+ * IT COSTS NOTHING WHEN IT IS NOT RAINING, and that is not a figure of speech.
+ * `points.visible` is false below a threshold, so a dry world does not submit
+ * the draw, does not run the vertex shader and does not touch a texel. The
+ * feature's cost is exactly proportional to how often it rains.
+ *
+ * RAIN_COUNT IS 3600 AND IT LOOKS LIKE FAR MORE. Rain reads by DENSITY IN
+ * SCREEN SPACE rather than by count, and the box below is small — 46 m across
+ * against the motes' 192 — so the same number of particles is packed into a
+ * seventeenth of the volume. Drawing rain out to the fog limit is the standard
+ * way to make this expensive: the drops past about twenty-five metres are
+ * subpixel, they alias into a grey shimmer, and they cost the same as the ones
+ * you can see. So this cloud is deliberately a local one and the far field is
+ * done with fog and light instead, which is what distance does to real rain
+ * anyway.
+ */
+const RAIN_SPAN = 46;
+const RAIN_COUNT = 3600;
+
+function buildRain(scene, seed) {
+  const rng = makeRng(`${seed}:rain`);
+  const positions = new Float32Array(RAIN_COUNT * 3);
+  const seeds = new Float32Array(RAIN_COUNT);
+  for (let i = 0; i < RAIN_COUNT; i++) {
+    positions[i * 3] = rngRange(rng, -RAIN_SPAN * 0.5, RAIN_SPAN * 0.5);
+    // Seeded through a tall column. The vertical wrap below turns this into a
+    // continuous fall, so the initial spread only has to avoid every drop
+    // starting on the same line.
+    positions[i * 3 + 1] = rngRange(rng, 0, 34);
+    positions[i * 3 + 2] = rngRange(rng, -RAIN_SPAN * 0.5, RAIN_SPAN * 0.5);
+    seeds[i] = rng();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+
+  const material = new THREE.ShaderMaterial({
+    name: 'rain',
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uTime: tripUniforms.uTime,
+      uEye: tripUniforms.uEye,
+      uMap: { value: rainStreak({ key: 'rain' }) },
+      uPixelRatio: { value: 1 },
+      uSpan: { value: RAIN_SPAN },
+      /** 0 dry, 1 downpour. Drives count-by-discard, length and brightness. */
+      uRain: { value: 0 },
+      /** Rain is lit by the sky, so it goes out at night like everything else. */
+      uDaylight: { value: 1 },
+    },
+    vertexShader: /* glsl */ `
+      uniform float uTime;
+      uniform vec3 uEye;
+      uniform float uPixelRatio;
+      uniform float uSpan;
+      uniform float uRain;
+      attribute float aSeed;
+      varying float vFade;
+      varying float vSeed;
+      void main() {
+        vSeed = aSeed;
+        /**
+         * Fall, then wrap — all three axes, one mod each.
+         *
+         * The vertical term is the only one that moves with time. 14 m/s is
+         * close to a real drop's terminal velocity and it matters: too slow and
+         * it is snow, too fast and the streaks tear into dashed lines because
+         * a drop moves further than its own length between frames.
+         *
+         * Every drop falls at a slightly different rate off its seed, which is
+         * not physical — real drops of the same size fall at the same speed —
+         * but without it the whole cloud wraps in lockstep and a horizontal
+         * seam sweeps up the screen once every couple of seconds.
+         */
+        float speed = 14.0 + aSeed * 5.0;
+        float column = 34.0;
+        float y = position.y - uTime * speed;
+        y = mod(y, column);
+        vec2 rel = position.xz - uEye.xz;
+        vec2 wrapped = uEye.xz + mod(rel + uSpan * 0.5, uSpan) - uSpan * 0.5;
+        // The column hangs from above the eye rather than from the ground, so
+        // looking up shows rain coming down at you, which is most of the shot.
+        vec3 p = vec3(wrapped.x, uEye.y - 9.0 + y, wrapped.y);
+
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float dist = -mv.z;
+        /**
+         * THE DENSITY IS DONE BY THROWING DROPS AWAY, NOT BY DRAWING FEWER.
+         *
+         * The buffer is a fixed 3600 and always has been; what changes with the
+         * weather is how many of them are allowed to be visible. A drop whose
+         * seed is above the current rain level collapses to zero size and zero
+         * alpha and is discarded in the fragment stage. That means light rain
+         * and heavy rain cost the same vertex work — which is fine, vertex work
+         * on 3600 points is nothing — and very different FILL, which is the
+         * part that actually costs. It also means the transition between them
+         * is continuous with no reallocation and no popping.
+         */
+        float alive = step(aSeed, uRain);
+        vFade = alive * smoothstep(24.0, 8.0, dist) * smoothstep(0.6, 2.5, dist);
+        gl_Position = projectionMatrix * mv;
+        // Longer streaks in heavier rain, which is what harder rain looks like.
+        float len = 15.0 + uRain * 9.0;
+        // Capped lower than the motes' 26 for the opposite reason: a mote that
+        // fills the screen is a bloom, a raindrop that fills it is a white bar.
+        gl_PointSize = alive * min(52.0, uPixelRatio * len * 34.0 / max(dist, 1.0));
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D uMap;
+      uniform float uRain;
+      uniform float uDaylight;
+      varying float vFade;
+      varying float vSeed;
+      void main() {
+        if (vFade <= 0.0) discard;
+        vec4 tex = texture2D(uMap, gl_PointCoord);
+        /**
+         * NOT ADDITIVE, unlike every other particle in this file. Rain is not a
+         * light source — it is a lens, and what it mostly does is pick up the
+         * pale sky and carry it down across a dark forest. Additive blending
+         * makes a downpour glow, which reads as embers. Normal alpha over a
+         * slightly blue-white keeps it looking like water.
+         */
+        vec3 col = mix(vec3(0.52, 0.60, 0.70), vec3(0.80, 0.86, 0.94), uDaylight);
+        float a = tex.a * vFade * (0.13 + uRain * 0.17) * mix(0.30, 1.0, uDaylight);
+        if (a < 0.004) discard;
+        gl_FragColor = vec4(col, a);
+      }
+    `,
+  });
+
+  const points = new THREE.Points(geo, material);
+  points.frustumCulled = false;
+  points.renderOrder = 6;
+  points.visible = false;
+  scene.add(points);
+  return { points, material };
 }
 
 /**
@@ -1749,9 +3174,54 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
   const shafts = buildShafts(scene, seed);
   const mist = buildMist(scene);
   const motes = buildMotes(scene, seed);
+  const rain = buildRain(scene, seed);
+  /**
+   * The two phase offsets that make this world's weather its own.
+   *
+   * Drawn from the seed, once, so a lobby code carries its climate along with
+   * its forest — see `per-session-seeded-world`. Without them every world in
+   * existence would start raining at the same instant of its own clock, which
+   * is the kind of thing nobody notices alone and everybody notices the first
+   * time two people compare notes.
+   */
+  const rainRng = makeRng(`${seed}:weather`);
+  const rainPhaseA = rainRng() * TAU;
+  const rainPhaseB = rainRng() * TAU;
+
+  /**
+   * The weather at an arbitrary instant, in seconds of world clock.
+   *
+   * A FUNCTION OF TIME AND NOTHING ELSE, which is what lets the steam below
+   * ask what the weather was FOUR MINUTES AGO instead of having to remember.
+   * That is the same property that makes the rain joinable-late in a lobby;
+   * it turns out to buy the lag for free as well.
+   */
+  const rainAtTime = (sec) => {
+    if (typeof navigator !== 'undefined' && navigator.webdriver) return 0;
+    const wave = Math.sin(sec / 418 + rainPhaseA) * 0.5 + Math.sin(sec / 263 + rainPhaseB) * 0.5;
+    return clamp01((wave * 0.5 + 0.5 - 0.62) / 0.3);
+  };
+  /** How long after the rain the floor is still giving its water back. */
+  const STEAM_LAG = 240;
   const water = buildWater(scene);
 
   motes.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+  rain.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+
+  /**
+   * ==== THE TWO AIR KNOBS ===================================================
+   *
+   * These are what Ultra now buys over High, along with the mote count — see
+   * the block on `shadowMapSize` in quality.js for the 2.78 ms that paid for
+   * them. Both are pure fill levers with no allocation behind them, so the Auto
+   * governor may push either of them either way on any frame it likes.
+   *
+   * `register` applies the current value immediately, so there is no separate
+   * initialisation and no window in which the lattice is at its build-time
+   * default while the settings say otherwise.
+   */
+  quality.register('shaftDensity', (v) => shafts.setDensity(v));
+  quality.register('mistLayers', (n) => mist.world.setLayers(n));
 
   /** Base values, so the trip can lerp away from them and back. */
   const base = {
@@ -1849,7 +3319,102 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
      * already been overwritten by the thing it is lerping toward.
      */
     fog: scene.fog.color.clone(),
+    /**
+     * The hour's SUN colour and its cold sky, kept for the aerial perspective.
+     *
+     * They come off the same palette row as everything else — the scatter is
+     * not allowed a colour of its own, or dawn would warm toward a nine o'clock
+     * gold and midnight would warm toward anything at all.
+     */
+    glow: new THREE.Color(AUTHORED_KEY.skySun),
+    cold: new THREE.Color(AUTHORED_KEY.skyTop),
   };
+
+  /**
+   * ==== AERIAL PERSPECTIVE ==================================================
+   *
+   * The fog was one flat colour whichever way you faced, and a flat fog does
+   * only half of what fog is for. It carried DEPTH — the fifth rank of trunks
+   * paler than the fourth — and it carried no LIGHT, so distance in this world
+   * desaturated toward a dead grey-green instead of glowing.
+   *
+   * What actually happens is that haze is lit by the sun like anything else and
+   * scatters most of it forward. Look toward the sun and the air between you
+   * and the far trees is bright and warm and you can barely see them; turn
+   * around and the same air is dark, cold and clear. That difference is the
+   * single largest thing separating a photograph of a forest from a render of
+   * one, and it costs three colour lerps a frame.
+   *
+   * IT IS APPLIED IN `tick`, NOT IN `applyDay`, AND THAT SPLIT IS DELIBERATE.
+   *
+   * `applyDay` answers "what does this HOUR look like", and its answer must
+   * stay a pure function of the phase — `scripts/day-check.mjs --only=identity`
+   * calls it directly and compares the fog colour against a stored hex, and
+   * every other expectation in scripts/ is downstream of that check passing.
+   * A view-dependent term inside it would make the authored frame a function of
+   * where the camera happened to be pointing when the test ran.
+   *
+   * So the hour owns `base.fogColour` and writes it through `_recompose`, and
+   * the VIEW owns a tint on top of it which is applied afterwards, once, in the
+   * one place that knows where the camera is looking. `base.fogColour` stays
+   * the pure hour colour, which is also what the trip director reads.
+   *
+   * DETERMINISM: this is a function of the camera and the sun and nothing else.
+   * Both are pinned under automation already, so two runs of any script that
+   * seats the same camera get the same fog to the bit. It needs no webdriver
+   * guard of its own and deliberately does not have one — pinning it would mean
+   * every screenshot in this repo was taken with the feature switched off.
+   */
+  const SCATTER_WARM = 0.5;
+  const SCATTER_COOL = 0.34;
+  const _scatterTmp = new THREE.Color();
+  /** cos of the angle between where you are looking and where the sun is. */
+  let viewSun = 0;
+  /**
+   * How much sun there is at all, 0..1. `daylightAt`, cached from `applyDay`.
+   *
+   * NOT `dayDir`, which at midnight is 0.26 because that is the MOON — and the
+   * scatter is measured against the SUN's direction, which at midnight is under
+   * the ground. Gating on the wrong one made the whole world's fog go cold-side
+   * all night, which is a defensible look arrived at by an indefensible route.
+   */
+  let dayLit = 1;
+  function _applyScatter() {
+    scene.fog.color.copy(base.fogColour);
+    /**
+     * Underground there is no sun and no sky, so there is nothing to scatter —
+     * and the cave fog is a colour the whole cave was tuned against. Fading the
+     * term out with depth rather than switching it off at a threshold keeps the
+     * walk into a mouth continuous.
+     */
+    const gate = (1 - caveT) * dayLit;
+    if (gate <= 0.001) return;
+    /**
+     * Warm toward the sun, cold away from it, and NEITHER AT RIGHT ANGLES.
+     *
+     * Two one-sided ramps rather than one lerp across the whole range, because
+     * a single lerp puts the neutral point at 90 degrees off the sun and makes
+     * every other bearing some blend of the two extremes — so the fog would be
+     * visibly tinted almost everywhere. Real haze is neutral over most of the
+     * sky and does something only near the sun and directly away from it.
+     */
+    const warm = clamp01((viewSun - 0.15) / 0.8) * gate;
+    const cool = clamp01((-viewSun - 0.05) / 0.85) * gate;
+    if (warm > 0.001) {
+      // Toward the hour's own sun colour, and BRIGHTER: forward scatter adds
+      // light to the haze rather than merely recolouring it, and a warm tint at
+      // constant luminance reads as a gel over the lens instead of as glare.
+      _scatterTmp.copy(base.fogColour).lerp(dayLight.glow, 0.62).multiplyScalar(1.16);
+      scene.fog.color.lerp(_scatterTmp, warm * SCATTER_WARM);
+    }
+    if (cool > 0.001) {
+      // Away from it: less light reaches the eye through the same air, and what
+      // does is the sky's own blue rather than the sun's. Darker and colder is
+      // what makes the far wood READ as far rather than merely as pale.
+      _scatterTmp.copy(base.fogColour).lerp(dayLight.cold, 0.3).multiplyScalar(0.82);
+      scene.fog.color.lerp(_scatterTmp, cool * SCATTER_COOL);
+    }
+  }
 
   /**
    * Put the four intensities and the sun's colour back together.
@@ -2004,6 +3569,7 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
     shafts,
     mist,
     motes,
+    rain,
     water,
     skyUniforms,
     base,
@@ -2134,6 +3700,22 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       sky.sky.position.copy(camera.position);
 
       /**
+       * WHERE THE CAMERA IS LOOKING RELATIVE TO THE SUN, read here because this
+       * is the one function that is handed the camera on EVERY frame — the
+       * early-out below is about the anchor, and everything above it runs
+       * always. Four multiplies and two adds.
+       *
+       * Straight out of the world matrix rather than through
+       * `camera.getWorldDirection`, which calls `updateWorldMatrix` and would
+       * be doing that work a second time in a frame that has already done it.
+       * The third column of a camera's world matrix is its BACKWARD axis, so
+       * the view direction is its negation.
+       */
+      const e = camera.matrixWorld.elements;
+      const sun = skyUniforms.uSunDir.value;
+      viewSun = -(e[8] * sun.x + e[9] * sun.y + e[10] * sun.z);
+
+      /**
        * EVERYTHING THAT MAKES THE AIR LOOK LIKE AIR NOW FOLLOWS TOO.
        *
        * These used to be discs and rectangles centred on the origin — 22 shafts
@@ -2202,7 +3784,14 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       const bz = Math.sin(bearing);
       const along = bank.x * bx + bank.z * bz;
       const step = Math.round(along / MIST_STEP) * MIST_STEP - along;
-      mist.layers.position.set(bank.x + bx * step, 0, bank.z + bz * step);
+      mist.stream.position.set(bank.x + bx * step, 0, bank.z + bz * step);
+      /**
+       * The world mist has its own, much coarser lattice — see MIST_SNAP. It
+       * returns early on most anchor moves, so the 314 terrain lookups a
+       * re-seat costs land about once per 36 m of walking rather than once per
+       * six.
+       */
+      mist.world.follow(ax, az);
       shafts.follow(ax, az);
 
       renderer.shadowMap.needsUpdate = true;
@@ -2287,8 +3876,148 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
 
       // ---- the air and the water ------------------------------------------
       const lit = daylightAt(phase);
+      dayLit = lit;
+      dayLight.glow.copy(d.skySun);
+      dayLight.cold.copy(d.skyTop);
       shafts.material.uniforms.uDaylight.value = d.shafts;
       motes.material.uniforms.uDaylight.value = lit;
+      // The dust's forward-scatter lobe wants the sun the EYE sees, which is
+      // the continuous one the sky is already drawing — see uSunDir there.
+      motes.material.uniforms.uSunDir.value.set(_trueSun.x, _trueSun.y, _trueSun.z);
+
+      /**
+       * ==== THE WEATHER =====================================================
+       *
+       * IT IS A PURE FUNCTION OF THE WORLD CLOCK AND THE SEED, and that is the
+       * only design decision here that is load-bearing.
+       *
+       * Everything else in this world is derived rather than simulated — the
+       * terrain, the scatter, the species, the sun — so that two players in a
+       * seeded lobby are in the same place without anything being sent between
+       * them. Rain has to obey the same rule or it becomes the one part of the
+       * environment that needs a network message, and per
+       * `one-client-simulates-the-animals` that is a door this project has
+       * already decided not to open twice. A stateful weather machine — a
+       * Markov chain, an accumulator, anything with memory — cannot be joined
+       * late. `rainAt(t)` can be evaluated by anybody, at any time, including
+       * for a moment in the past, and everyone gets the same answer.
+       *
+       * THE SHAPE IS TWO SLOW WAVES AND A THRESHOLD. Two sines at
+       * incommensurate periods sum to a signal that never repeats within a
+       * session — 418 and 263 are the DENOMINATORS rather than the periods, so
+       * the waves come round every 44 and 28 minutes and they beat against each
+       * other about every 74. (This line used to say "roughly 7 and 11 minutes",
+       * which is 418 and 263 read as seconds; it is off by 2π and it is what
+       * made the units bug below look plausible for as long as it did.)
+       * Subtracting a threshold
+       * and clamping means it is DRY most of the time and rains in bursts,
+       * which is the right duty cycle. A rainforest is not permanently wet —
+       * what it does is rain hard, briefly, and then steam.
+       *
+       * The 0.62 threshold puts rain on roughly a fifth of the clock. That was
+       * chosen high deliberately: rain is an event, and an event that is
+       * happening half the time is a climate rather than an event.
+       */
+      /**
+       * PINNED DRY UNDER AUTOMATION, AND THIS IS NOT OPTIONAL.
+       *
+       * The weather is a function of the WALL clock, so without this every
+       * screenshot, every `perf:bench` batch and every `world-shots` run would
+       * photograph whatever the weather happened to be doing at the moment it
+       * ran — a different frame each time, with a different draw count, a
+       * different fog density and a different sun intensity. `world-shots.mjs`
+       * exists entirely because three unpinned things made two runs of
+       * identical code differ in 100% of pixels; this would have been a fourth,
+       * and the worst of them, because it changes the number of draw calls.
+       *
+       * It was caught by `perf:bench` reporting +14 draws in the clearing on a
+       * run that happened to land inside a shower.
+       *
+       * Same mechanism and same reasoning as `dayPhase`, which returns
+       * AUTHORED_PHASE under `navigator.webdriver` for exactly this reason —
+       * so the two clocks are pinned by the same signal and a harness cannot
+       * accidentally pin one and not the other. `world-shots --rain=` overrides
+       * the uniform directly AFTER this runs, which is how a shower is
+       * photographed deliberately rather than by luck.
+       */
+      /**
+       * SECONDS, AND IT USED TO BE `worldClock() / 1000`.
+       *
+       * `worldClock()` already returns seconds — `tickWorldClock` divides by a
+       * thousand and its own docstring says so, `director.js` hands it straight
+       * to a shader `uTime`, and the jukebox seeks with it. The extra divide
+       * made `wt` kiloseconds, which stretched both sines by 1000: the slower
+       * one's period went from about three quarters of an hour to A MONTH.
+       *
+       * SO THE WEATHER NEVER MOVED. Not "moved slowly" — for the whole of any
+       * session, `wt` is within a rounding error of zero, so `rainAtTime`
+       * returns `sin(phaseA) * 0.5 + sin(phaseB) * 0.5` put through the
+       * threshold, which is A CONSTANT PER SEED. Four fifths of all worlds were
+       * permanently dry and the rest were permanently, unendingly wet, and both
+       * halves read as "the weather does not work" from inside. Everything the
+       * block above claims — bursts, a fifth of the clock, rain as an event —
+       * was true of the arithmetic and false of the game.
+       *
+       * It hid for as long as it did because the two ways anybody looks at this
+       * are both blind to it: automation is pinned dry two lines down, and a
+       * player only ever sees one seed, where the answer is a constant and looks
+       * like a deliberate climate. `cave-seal.mjs` found it by sweeping the
+       * clock across six thousand seconds and getting the same number back.
+       *
+       * `STEAM_LAG` is the corroborating witness: 240 is four minutes of steam
+       * off the floor, and it is subtracted from this. Under the old units it
+       * was two and a half days.
+       */
+      const wt = worldClock();
+      const wet = rainAtTime(wt);
+      /**
+       * Published as `rainLevel`, NOT as `rain` — `rain` on this same object is
+       * the particle system, and assigning a float over it every frame turned
+       * `atmosphere.rain.material` into `undefined.material`. The two names
+       * differ because they are on one object by construction: `api` is what
+       * `Object.assign` folds the systems into and also what the update writes
+       * its published scalars to.
+       */
+      api.rainLevel = wet;
+      const ru = rain.material.uniforms;
+      ru.uRain.value = wet;
+      ru.uDaylight.value = lit;
+      /**
+       * BELOW THIS IT IS NOT DRAWN AT ALL. Not dimmed to nothing — genuinely
+       * not submitted, so the dry world pays literally zero for this feature.
+       * 0.02 rather than 0 because the alpha at 0.02 is already under the
+       * fragment stage's own discard threshold, so there is nothing on screen
+       * to pop when it switches.
+       */
+      /**
+       * …AND NOT AT ALL UNDER A MOUNTAIN, which is the other half of the same
+       * switch. The drops fall in a box centred on the eye with no idea where
+       * the rock is, so eighty metres inside a passage a shower was falling
+       * through the ceiling, through the player and into the floor — the one
+       * piece of weather the cave never took out, because everything else the
+       * sky does is hidden by the latch in main.js and this line is written
+       * every frame. See `CAVE_BURIED`: it is the same depth, deliberately.
+       */
+      rain.points.visible = wet > 0.02 && caveT <= CAVE_BURIED;
+      /**
+       * WHAT RAIN DOES TO THE REST OF THE FRAME, AND IT IS ALL FREE — three
+       * numbers that were already being written every frame, written slightly
+       * differently.
+       *
+       * These matter more than the drops do. A shot of rain particles over an
+       * unchanged sunny forest does not read as rain; it reads as a particle
+       * effect. What tells you it is raining is that the world went dark, flat
+       * and short-sighted. So: the fog thickens by up to two thirds, which
+       * closes the wood in; the sun loses nearly half its intensity, which
+       * kills the shafts and the shadows; and the hemisphere light comes UP,
+       * because an overcast sky is a huge soft source and the one thing that
+       * genuinely brightens under cloud is the shadow side of everything.
+       */
+      if (wet > 0.001) {
+        scene.fog.density = base.fogDensity * (1 + wet * 0.65);
+        sun.intensity = base.sunIntensity * (1 - wet * 0.45);
+        hemi.intensity = base.hemiIntensity * (1 + wet * 0.3);
+      }
       const w = water.material.uniforms;
       w.uDaylight.value = d.water;
       // The glints come from whichever body is up. Continuous, not quantised —
@@ -2311,9 +4040,62 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * lesson as the paragraph above, in the one place where the seam happens
        * to be a lazily-initialised cache rather than an explicit record.
        */
+      /**
+       * AND IT STEAMS AFTER RAIN, which is the other half of the weather and
+       * costs exactly one more multiply on three materials.
+       *
+       * THE LAG IS THE WHOLE POINT. Steam does not happen WHILE it rains — the
+       * rain is what is cooling the place — it happens in the twenty minutes
+       * AFTER, when the sun comes back onto a soaked floor and the water goes
+       * straight back up.
+       *
+       * IT ASKS WHAT THE WEATHER WAS FOUR MINUTES AGO rather than remembering.
+       * The first version of this integrated a trailing follower with a
+       * per-frame exponential — and `applyDay` has no `dt`, so it multiplied by
+       * `undefined` and wrote NaN into the opacity of all three mist cards. The
+       * fix is better than the bug: `rainAtTime` is a pure function of the
+       * clock, so a lagged value is simply that function evaluated at an
+       * earlier instant. No state, no dt, frame-rate independent, and it agrees
+       * exactly across two clients without anything being sent.
+       *
+       * `max(0, then - now)` fires on the FALLING edge only: during a shower
+       * the past and present are both wet and the difference is zero or
+       * negative, and the moment the rain stops the four-minutes-ago value is
+       * still high while the present one has collapsed.
+       */
+      const steam = clamp01(Math.max(0, rainAtTime(wt - STEAM_LAG) - wet) * 2.6);
+      api.steamLevel = steam;
+      const mistK = d.mist * (1 + steam * 1.9);
       for (const mat of mist.mats) {
         if (mat.userData.authored === undefined) mat.userData.authored = mat.opacity;
-        mat.userData.base = mat.userData.authored * d.mist;
+        mat.userData.base = mat.userData.authored * mistK;
+      }
+      /**
+       * The world sheets take the same hour and the same steam, through a
+       * uniform instead of through `opacity`.
+       *
+       * They are ShaderMaterials, so `opacity` on them is a property nothing
+       * reads — which also means the director's own per-frame multiply cannot
+       * reach them. That is why their shader reads uLevel directly and swells
+       * itself by the same 1.4 the director applies to the stream's cards: the
+       * trip has to thicken ALL the air, and a shader that is handed the trip
+       * level anyway is a cheaper place to say so than a loop in the director,
+       * which is not this pass's file to edit in any case.
+       */
+      /**
+       * AND THE HOUR IS CAPPED FOR THEM, WHICH IT IS NOT FOR THE STREAM.
+       *
+       * `d.mist` runs to 2.6 at sunrise, which is right for three small cards
+       * lying in a channel three metres below the clearing and wrong for five
+       * sheets that follow the player. Photographed at dawn without the cap,
+       * the whole middle distance went under one opaque bank and the wood
+       * behind it stopped existing — a wall, not weather. The stream's cards
+       * keep the full swing because their geometry bounds them; these are
+       * bounded by a number instead.
+       */
+      const worldK = Math.min(mistK, 1.9);
+      for (const mat of mist.world.mats) {
+        mat.uniforms.uOpacity.value = mat.uniforms.uAuthored.value * worldK;
       }
       return d;
     },
@@ -2382,6 +4164,15 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       const phase = dayPhase();
       this.applyDay(phase);
       this.stepSun(phase);
+      /**
+       * AFTER `applyDay`, ALWAYS. It reads `base.fogColour`, which `applyDay`
+       * has just rebuilt through `_recompose`, and it writes `scene.fog.color`,
+       * which `_recompose` has just reset to the neutral hour. Either order is
+       * a working program and only this one is the intended picture.
+       */
+      _applyScatter();
+      // The height the world mist fills to, damped. One terrain lookup.
+      mist.world.setLevel(tripUniforms.uEye.value.x, tripUniforms.uEye.value.z, dt);
       // A slice of the mote cloud's ground heights, every frame. See MOTE_SLICE.
       motes.refresh(tripUniforms.uEye.value.x, tripUniforms.uEye.value.z);
     },

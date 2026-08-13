@@ -233,10 +233,36 @@ class Quad {
     return this.mesh.material;
   }
 
+  /**
+   * A full-viewport quad with depthTest and depthWrite both off writes every
+   * texel it is going to write, so CLEARING FIRST IS DEAD BANDWIDTH — and it was
+   * being paid twice, because `renderer.autoClear` defaults to true and issues
+   * its own clear inside `render()` on top of the explicit one below it. Eleven
+   * quad passes a frame (bright, two downsamples, six blurs, the glow, the
+   * output) were therefore doing twenty-two clears of targets they then
+   * overwrite completely.
+   *
+   * `autoClear` is toggled around the draw rather than switched off once for the
+   * whole renderer, and the scene pass is deliberately left alone, because of a
+   * trap: three's auto-clear path force-enables the depth write mask before
+   * clearing ("buffers might not be writable", WebGLBackground.js) and a bare
+   * `renderer.clear()` does not. Every material down here sets depthWrite false,
+   * so a scene pass relying on its own explicit clear would inherit that mask
+   * from the last quad of the previous frame and silently stop clearing DEPTH —
+   * which is a whole-frame corruption that would show up as geometry punching
+   * through geometry, three passes away from the line that caused it.
+   *
+   * The viewport case is already right: `clear` obeys the scissor, `_applyScale`
+   * sets scissorTest whenever DRS shrinks the viewport, and the corner clamps in
+   * the output shader keep reads inside the rendered rectangle. So the texels
+   * outside the viewport were not being cleared before this change either.
+   */
   render(renderer, target) {
     renderer.setRenderTarget(target ?? null);
-    renderer.clear();
+    const auto = renderer.autoClear;
+    renderer.autoClear = false;
     renderer.render(this.scene, this.camera);
+    renderer.autoClear = auto;
   }
 }
 
@@ -571,6 +597,132 @@ export class Pipeline {
         uBloom: { value: 0.42 },
         uExposure: { value: 1.05 },
         uVignette: { value: 0.34 },
+        /**
+         * ==== THE GRADE ======================================================
+         *
+         * The one stage this pipeline never had. Everything up to here is
+         * physical — HDR, bloom, ACES — and physical is exactly what makes the
+         * output read as a technically correct photograph of a green place
+         * rather than as a place. Every film that ever made a jungle look
+         * enchanted did it here.
+         *
+         * THE RULE THIS OBEYS, AND IT WAS ARRIVED AT THE HARD WAY: every
+         * operator in here must INCREASE THE SPREAD of the frame and none of
+         * them may move its mean. The first version did the opposite — a global
+         * push toward emerald with the saturation gain weighted onto the greens
+         * — and it collapsed trunks, litter, ferns, bushes and distance onto
+         * one hue at one value. Foreground ferns at the wood station stopped
+         * being visible against the ground behind them: not culled, not unlit,
+         * simply the same colour as what they stood in front of. That is a
+         * sheet of coloured glass in front of the world, which is the thing
+         * this project has a standing rule against, and a forest full of small
+         * different things is the subject with the most to lose to one.
+         *
+         * So: split the two ENDS apart and leave the middle alone, and put the
+         * saturation where saturation is missing rather than where it already
+         * is. Measured with `scripts/grade-check.mjs` at four stations, grade
+         * off against grade on.
+         *
+         * ONE MASTER AMOUNT, ON A UNIFORM BRANCH. uGrade = 0 gives back the
+         * exact frame that existed before this block, bit for bit, and every
+         * pixel takes the same side of the branch so there is no divergence.
+         */
+        uGrade: { value: 1 },
+        /**
+         * Multiplied into the SHADOWS ONLY, and it is cool rather than green.
+         *
+         * What a forest actually does is SPLIT. The shade is lit by sky, which
+         * is blue; the highlights are lit by sun through leaves, which is gold.
+         * Tinting the two ends and not the middle widens the distance between
+         * lit and unlit instead of moving every pixel the same way. More blue
+         * in it than green, so it can never read as a green cast, and small.
+         *
+         * A MULTIPLY AND NOT AN ADD. An add lifts the blacks, and lifted blacks
+         * are a loss of contrast in the part of the frame with the least to
+         * spare. A multiply cannot tint a true black — but a true black is not
+         * the interesting part. What wants to be cool is the shade between 0.05
+         * and 0.2, and there a multiply tints it and deepens it at once.
+         */
+        uGradeShadow: { value: new THREE.Vector3(0.94, 1.0, 1.07) },
+        /**
+         * Multiplied into the highlights. Gold, and it works by taking blue OUT
+         * rather than by adding red — the highlights here are already near the
+         * ceiling, so anything that adds clips and goes white, whereas removing
+         * a channel has room to move and reads as warmth.
+         */
+        uGradeHighlight: { value: new THREE.Vector3(1.03, 1.0, 0.93) },
+        /**
+         * Saturation gain, and it is applied WHERE SATURATION IS LOW.
+         *
+         * A flat multiply is the wrong shape. Most of this frame is already
+         * strongly coloured, so a flat gain does almost nothing for the parts
+         * that need it — grey bark, brown litter, the dead haze in the distance
+         * — and everything to the parts that do not: a scarlet bromeliad or an
+         * iridescent wing goes past the gamut edge and becomes a flat blob,
+         * which deletes the accent it was put there to be. Those accents exist
+         * because they are DIFFERENT from the wood around them, and a gain that
+         * saturates the wood as hard as the accent narrows that difference from
+         * both ends at once.
+         *
+         * So the gain falls off with the saturation already present. Bark,
+         * litter and haze get all of it, a leaf gets some, a flower gets none.
+         */
+        uGradeSat: { value: 0.17 },
+        /** Where the saturation gain has fallen to nothing, in HSV saturation. */
+        uGradeSatRange: { value: new THREE.Vector2(0.3, 0.7) },
+        /**
+         * How much of the S-curve. 0 is linear, 1 is a full smoothstep.
+         *
+         * ==== AND THE WHOLE GRADE MOVED BECAUSE OF THIS ONE OPERATOR =========
+         *
+         * It was tried twice in LINEAR light and failed twice, in opposite
+         * directions, for the same underlying reason. An S pinned at 0 and 1
+         * has slope below 1 outside 0.21..0.79, and a forest's mean LINEAR luma
+         * is 0.13 to 0.24 — so nearly every pixel sat on the toe, where an S
+         * compresses. Measured: mean absolute difference between pixels ten
+         * apart fell 22% at the clearing, 27% in the wood and 31% on the floor.
+         * The operator sold as "widens lit against unlit" was the single
+         * largest thing flattening the frame. Replacing it with a linear gain
+         * about a 0.18 pivot fixed the spread and broke the tone instead: in
+         * linear light a gain about a pivot drives everything below the pivot
+         * toward zero, and the floor station lost 52% of its mean brightness
+         * with channels clamping at 0 as it went.
+         *
+         * Neither was a tuning problem. Contrast and saturation are DISPLAY-
+         * REFERRED operators — 0.5 means the middle of the range — and the
+         * domain on which that is true is the gamma-encoded one. 0.18 linear IS
+         * mid grey, which is exactly the point: a curve written about 0.5 and
+         * applied to a signal whose middle is 0.18 is a curve applied to the
+         * wrong third of the image.
+         *
+         * So the grade runs AFTER the linear-to-sRGB encode, which is also
+         * where a LUT would be applied in any real pipeline and is why a LUT
+         * would have had none of this trouble. In that domain these frames
+         * average 0.40 to 0.46, the S expands the middle sixty per cent of the
+         * range where all of the forest is, and its flat ends stop being a bug
+         * and become the feature: nothing can be crushed to black or blown to
+         * white however hard it is pushed, and it needs no clamp.
+         */
+        uGradeCurve: { value: 0.14 },
+        /**
+         * A flat gain that gives back exactly what the S-curve takes.
+         *
+         * An S about 0.5 applied to a frame whose mean is 0.13 to 0.24 pulls
+         * the mean DOWN — measured, 3 to 5% at these four stations at the
+         * shipping curve amount. That is not flattening, but it shows up as
+         * flattening in any absolute measure: `local`, the mean difference
+         * between pixels ten apart, is in 0-255 units, so a frame that is 4%
+         * darker has 4% smaller differences even when every RATIO in it has
+         * improved. Normalised by the mean, local contrast was already up 0.7
+         * to 2.1% at every station.
+         *
+         * Rather than argue with the instrument, hold the mean. 1.05 puts the
+         * four stations back within a per cent of where they started, which
+         * makes every other number in the table a like-for-like comparison and
+         * satisfies the standing rule for this stage — increase the spread,
+         * leave the mean alone — as an arithmetic fact rather than as a claim.
+         */
+        uGradeGain: { value: 1.05 },
         uLevel: tripUniforms.uLevel,
         uDissolve: tripUniforms.uDissolve,
         /**
@@ -611,6 +763,13 @@ export class Pipeline {
         uniform float uBloom;
         uniform float uExposure;
         uniform float uVignette;
+        uniform float uGrade;
+        uniform vec3 uGradeShadow;
+        uniform vec3 uGradeHighlight;
+        uniform float uGradeSat;
+        uniform vec2 uGradeSatRange;
+        uniform float uGradeCurve;
+        uniform float uGradeGain;
         uniform float uLevel;
         uniform float uDissolve;
         uniform float uTime;
@@ -813,6 +972,59 @@ export class Pipeline {
           return m > 1e-5 ? off * (rrBend(m, 1.0) / m) : off;
         }
 
+        /**
+         * The grade. DISPLAY-REFERRED in, display-referred out — this runs
+         * after the sRGB encode, and the block on uGradeCurve is the argument
+         * for why it has to.
+         *
+         * THREE OPERATORS, IN THIS ORDER, AND THE ORDER IS THE RECIPE.
+         *
+         *   1 CONTRAST first, because it is the only one that moves LUMINANCE,
+         *     and the split tone below decides what is a shadow and what is a
+         *     highlight by luminance. Grade the tone, then read it — the other
+         *     way round and the tint lands on the ungraded image while the
+         *     curve then moves the boundary out from under it.
+         *
+         *   2 SPLIT TONE, ON THE TWO ENDS ONLY, MULTIPLICATIVELY AT BOTH. The
+         *     windows are narrow and they do not meet: below 0.42 luma and
+         *     above 0.58, with a band in the middle that neither touches. That
+         *     gap is what keeps this a split rather than a tint — most of a
+         *     forest's surfaces live in the mid-tones, and leaving them alone
+         *     is the difference between grading the light and painting the
+         *     picture. The shadow window also starts at 0.06 rather than 0,
+         *     so the very darkest pixels, which carry no hue anybody can see,
+         *     are left out of it entirely.
+         *
+         *   3 SATURATION, INVERSELY WEIGHTED BY THE SATURATION ALREADY THERE.
+         *     See uGradeSat. The luma it mixes toward is recomputed after the
+         *     tint, so a tinted shadow desaturates toward its own tinted grey
+         *     rather than toward the untinted one; skipping that recompute is
+         *     what makes a split tone fight its own saturation stage.
+         *
+         * HSV saturation, (max - min) / max, rather than a distance from grey:
+         * it is the measure that is scale-free in brightness, so a dark berry
+         * in shade counts as exactly as saturated as a bright one in sun and is
+         * protected exactly as hard. A luminance-weighted measure would call
+         * everything in the understorey unsaturated and hand it the full gain,
+         * and the understorey is where the accents live.
+         */
+        const vec3 RR_LUMA = vec3(0.2126, 0.7152, 0.0722);
+        vec3 grade(vec3 c) {
+          c = mix(c, c * c * (3.0 - 2.0 * c), uGradeCurve) * uGradeGain;
+
+          float l = dot(c, RR_LUMA);
+          float sh = 1.0 - smoothstep(0.06, 0.42, l);
+          float hi = smoothstep(0.58, 1.0, l);
+          c *= mix(vec3(1.0), uGradeShadow, sh);
+          c *= mix(vec3(1.0), uGradeHighlight, hi);
+
+          float mx = max(c.r, max(c.g, c.b));
+          float mn = min(c.r, min(c.g, c.b));
+          float have = mx > 1e-4 ? (mx - mn) / mx : 0.0;
+          float gain = 1.0 + uGradeSat * (1.0 - smoothstep(uGradeSatRange.x, uGradeSatRange.y, have));
+          return clamp(mix(vec3(dot(c, RR_LUMA)), c, gain), 0.0, 1.0);
+        }
+
         /** ACES, fitted. Rolls highlights off instead of clipping them flat. */
         vec3 aces(vec3 x) {
           const float a = 2.51;
@@ -867,14 +1079,34 @@ export class Pipeline {
            * copy of the world is the double vision this project has rejected
            * from the start.
            */
-          vec3 bloom = texture2D(tBloom0, min(suv * uSrcBloom0.xy, uSrcBloom0.zw)).rgb * 0.5
-                     + texture2D(tBloom1, min(suv * uSrcBloom1.xy, uSrcBloom1.zw)).rgb * 0.32
-                     + texture2D(tBloom2, min(suv * uSrcBloom2.xy, uSrcBloom2.zw)).rgb * 0.18;
-          // Bloom rises during a trip. It is the one screen-space term that is
-          // allowed to, because glare genuinely IS a property of the eye rather
-          // than of the world — light bleeding around bright edges is what an
-          // over-dilated pupil actually does, so it belongs on the glass.
-          col += bloom * (uBloom + uLevel * 0.34);
+          /**
+           * Bloom rises during a trip. It is the one screen-space term that is
+           * allowed to, because glare genuinely IS a property of the eye rather
+           * than of the world — light bleeding around bright edges is what an
+           * over-dilated pupil actually does, so it belongs on the glass.
+           *
+           * A UNIFORM BRANCH, on the same rule as uViewWarp above: uBloom is
+           * 0.42 when the bloom chain ran this frame and exactly 0 when it did
+           * not, so testing uBloom above zero IS "bloom is enabled" and every
+           * pixel takes the same side. Three RGBA16F bilinear fetches over the
+           * full output pass is not a rounding error on the preset that can
+           * least afford it.
+           *
+           * THE GATE IS ALSO A CORRECTNESS FIX, and that is the reason the trip
+           * term moved inside it rather than staying on the outside. The weight
+           * used to be uBloom + uLevel * 0.34, which is NOT zero when bloom is
+           * off — so a trip on the Low preset added uLevel * 0.34 of the bloom
+           * mips, and on Low the chain never runs, so those mips hold whichever
+           * frame was last written into them. That is a frozen ghost of an old
+           * picture, fading up over the come-up, on the one preset whose machine
+           * is least able to shrug it off. Off means off on both counts now.
+           */
+          if (uBloom > 0.0) {
+            vec3 bloom = texture2D(tBloom0, min(suv * uSrcBloom0.xy, uSrcBloom0.zw)).rgb * 0.5
+                       + texture2D(tBloom1, min(suv * uSrcBloom1.xy, uSrcBloom1.zw)).rgb * 0.32
+                       + texture2D(tBloom2, min(suv * uSrcBloom2.xy, uSrcBloom2.zw)).rgb * 0.18;
+            col += bloom * (uBloom + uLevel * 0.34);
+          }
 
           /**
            * THE LUMINOUS WAKE.
@@ -885,7 +1117,9 @@ export class Pipeline {
            * outline, because the buffer is an eighth-resolution blur of a blur.
            * This is what replaced the image-space trail.
            */
-          col += texture2D(tGlow, min(suv * uSrcGlow.xy, uSrcGlow.zw)).rgb * uGlowAmount * 1.5;
+          if (uGlowAmount > 0.0) {
+            col += texture2D(tGlow, min(suv * uSrcGlow.xy, uSrcGlow.zw)).rgb * uGlowAmount * 1.5;
+          }
 
           /**
            * Exposure closes as the trip deepens, but only just.
@@ -916,6 +1150,31 @@ export class Pipeline {
           // Linear to sRGB.
           col = mix(col * 12.92, 1.055 * pow(max(col, 1e-5), vec3(1.0 / 2.4)) - 0.055,
                     step(0.0031308, col));
+
+          /**
+           * The grade, LAST, on a uniform branch.
+           *
+           * After the encode and not before it, for the reason set out at
+           * length on uGradeCurve: every operator in there is display-referred
+           * and means something else applied to linear light. It is also where
+           * a LUT would go, and this is a LUT written as arithmetic — five
+           * uniforms and about twenty instructions, against a 32-cubed texture
+           * fetch per pixel and an asset to author and ship.
+           *
+           * After the vignette too, and that one is deliberate the other way
+           * round: the vignette is a LENS, so it belongs with the physical part
+           * of the pipeline, and a colourist would be handed its falloff along
+           * with everything else rather than working underneath it.
+           *
+           * At uGrade = 1 the result is assigned rather than mixed, because
+           * mix(a, b, 1.0) is a + (b - a) * 1.0, which is b plus two roundings
+           * and not b. At 0 the branch is not taken and the frame is bit-
+           * identical to the one before this existed.
+           */
+          if (uGrade > 0.0) {
+            vec3 g = grade(col);
+            col = uGrade >= 1.0 ? g : mix(col, g, uGrade);
+          }
 
           gl_FragColor = vec4(col, 1.0);
         }
@@ -1167,17 +1426,25 @@ export class Pipeline {
       this._dtSamples.push(dt);
       if (this._dtSamples.length > 150) this._dtSamples.shift();
     }
-    if (this._dtSamples.length >= 24) {
-      const sorted = this._dtSamples.slice().sort((a, b) => a - b);
-      d.period = Math.min(
-        SLOWEST_BELIEVABLE_PERIOD,
-        Math.max(FASTEST_USEFUL_PERIOD, sorted[Math.floor(sorted.length * 0.1)])
-      );
-    }
-
     this._drsClock += dt;
     if (this._drsClock >= DRS_EVAL) {
       this._drsClock = 0;
+      /**
+       * The cadence estimate is computed HERE, next to its only reader, rather
+       * than on every frame. `d.period` is consumed by `_decide()` below and by
+       * `drsReport()`, both of which run at most once per DRS_EVAL — so sorting
+       * per frame did the work about thirty-five times for each time anybody
+       * looked at the answer, and allocated a 150-element copy each time to do
+       * it. The window is the same 150 samples either way; only the moment the
+       * percentile is taken from it moved.
+       */
+      if (this._dtSamples.length >= 24) {
+        const sorted = this._dtSamples.slice().sort((a, b) => a - b);
+        d.period = Math.min(
+          SLOWEST_BELIEVABLE_PERIOD,
+          Math.max(FASTEST_USEFUL_PERIOD, sorted[Math.floor(sorted.length * 0.1)])
+        );
+      }
       // Four is enough to have a p75 that means anything; fewer than that and
       // the window is still filling after a disturbance.
       if (this._gpuSamples.length >= 4) this._decide();
@@ -1286,7 +1553,8 @@ export class Pipeline {
 
     // ---- 1. the world ------------------------------------------------------
     renderer.setRenderTarget(this.sceneTarget);
-    renderer.clear();
+    // No explicit clear: `autoClear` is true here and three's own clear is the
+    // one that force-enables the depth write mask first. See Quad.render.
     renderer.render(this.scene, camera);
     /**
      * WHAT THE WORLD COST, CAPTURED HERE BECAUSE NOWHERE ELSE CAN.
@@ -1352,27 +1620,49 @@ export class Pipeline {
      * The decay is expressed as a time constant so the wake lasts the same
      * fraction of a second regardless of frame rate.
      */
-    const glowSource = this.bloomMips[this.bloomMips.length - 1].a;
-    const tau = 0.55;
-    this.glowMaterial.uniforms.uDecay.value = Math.exp(-Math.max(dt, 1e-4) / tau);
-    this.glowMaterial.uniforms.tCurrent.value = glowSource.texture;
-    this.glowMaterial.uniforms.uSrc.value.copy(rect(glowSource));
-    if (!this._glowPrimed) {
-      // Prime from the current frame, so switching on does not flash.
-      this.glowMaterial.uniforms.tPrev.value = glowSource.texture;
-      this.glowMaterial.uniforms.uPrev.value.copy(rect(glowSource));
-      this._glowPrimed = true;
+    /**
+     * SKIPPED ENTIRELY WHEN NOTHING WILL READ IT, which is every sober frame and
+     * every frame at all on the Low preset.
+     *
+     * The accumulator used to run unconditionally, and the output shader then
+     * multiplied its result by `uGlowAmount`, which is zero unless the melt
+     * switch is up. That is a target bind, a program bind, a quad draw and a
+     * full `renderer.render()` — render-list build, `info.reset()`, the lot —
+     * to produce a texture the next pass throws away. Worse, with bloom off the
+     * pass read `bloomMips[last]`, which pass 2 had not written this frame, so
+     * it was accumulating a stale picture into a buffer nobody would sample.
+     *
+     * Dropping `_glowPrimed` on the way out is what makes the skip free: the
+     * prime path below already exists to start the wake from the current frame
+     * rather than from whatever was in the buffer, so switching the trip on
+     * after a skip re-primes on its first frame and cannot flash.
+     */
+    const glowWanted = this.bloomEnabled && (this.glowAmount ?? 0) > 0;
+    if (!glowWanted) {
+      this._glowPrimed = false;
     } else {
-      this.glowMaterial.uniforms.tPrev.value = this.glowA.texture;
-      this.glowMaterial.uniforms.uPrev.value.copy(this._glowRect);
+      const glowSource = this.bloomMips[this.bloomMips.length - 1].a;
+      const tau = 0.55;
+      this.glowMaterial.uniforms.uDecay.value = Math.exp(-Math.max(dt, 1e-4) / tau);
+      this.glowMaterial.uniforms.tCurrent.value = glowSource.texture;
+      this.glowMaterial.uniforms.uSrc.value.copy(rect(glowSource));
+      if (!this._glowPrimed) {
+        // Prime from the current frame, so switching on does not flash.
+        this.glowMaterial.uniforms.tPrev.value = glowSource.texture;
+        this.glowMaterial.uniforms.uPrev.value.copy(rect(glowSource));
+        this._glowPrimed = true;
+      } else {
+        this.glowMaterial.uniforms.tPrev.value = this.glowA.texture;
+        this.glowMaterial.uniforms.uPrev.value.copy(this._glowRect);
+      }
+      this.quad.material = this.glowMaterial;
+      this.quad.render(renderer, this.glowB);
+      // What glowB was just written at, for the next frame to read it back with.
+      this._glowRect.copy(rect(this.glowB));
+      const spentGlow = this.glowA;
+      this.glowA = this.glowB;
+      this.glowB = spentGlow;
     }
-    this.quad.material = this.glowMaterial;
-    this.quad.render(renderer, this.glowB);
-    // What glowB was just written at, for the next frame to read it back with.
-    this._glowRect.copy(rect(this.glowB));
-    const spentGlow = this.glowA;
-    this.glowA = this.glowB;
-    this.glowB = spentGlow;
 
     // ---- 3. out ------------------------------------------------------------
     const out = this.outputMaterial.uniforms;
@@ -1391,9 +1681,7 @@ export class Pipeline {
     out.uGlowAmount.value = this.bloomEnabled ? (this.glowAmount ?? 0) : 0;
     out.uBloom.value = this.bloomEnabled ? 0.42 : 0;
     this.quad.material = this.outputMaterial;
-    renderer.setRenderTarget(null);
-    renderer.clear();
-    renderer.render(this.quad.scene, this.quad.camera);
+    this.quad.render(renderer, null);
 
     this._gpuEnd();
   }

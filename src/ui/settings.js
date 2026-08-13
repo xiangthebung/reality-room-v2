@@ -109,7 +109,17 @@ const PAGES = [
   { id: 'accessibility', title: 'Accessibility' },
 ];
 
-const LEVEL_LABELS = { low: 'Low', medium: 'Medium', high: 'High', ultra: 'Ultra' };
+// "Potato" rather than "Lowest" or "Performance", because it is the word people
+// already use for this and it sets the expectation the rung needs: it does not
+// look like the game, and choosing it is not a compromise you should feel bad
+// about. Every other label here is a degree; this one is a different thing.
+const LEVEL_LABELS = {
+  potato: 'Potato',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  ultra: 'Ultra',
+};
 
 export class SettingsMenu {
   constructor(settings = quality) {

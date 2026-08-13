@@ -109,14 +109,33 @@ export function pinkBuffer(ctx, seconds = 4) {
  * it is the most targeted cut available: it removes energy from exactly the
  * band that was over budget and from nowhere else.
  */
+/**
+ * THE RATIOS ARE WHOLE NUMBERS NOW, and that is the second half of the same
+ * fix `wildlife.js` got.
+ *
+ * 2.02 and 3.01 were not harmless detunes. A modulator a hundredth off an
+ * integer ratio puts its sidebands a few hertz off the harmonics they are
+ * supposed to reinforce, so they beat — and a slow beat between high partials
+ * is the single most recognisable cue for STRUCK METAL there is. Together with
+ * a modulation index that collapsed to nothing over the note (see `_chirp`),
+ * these five rows were a small tuned percussion instrument, which is exactly
+ * what was reported. Integer ratios, and the character moves into `arc`.
+ *
+ * `arc` is the pitch contour within one note, in semitones, spread across its
+ * length — the same field and the same reasoning as the species table in
+ * `wildlife.js`, which is where the long version of the argument lives.
+ */
 const BIRDS = [
-  // ratio, index, decay, notes (midi), gaps between them
-  { ratio: 1.0, index: 1.4, decay: 0.09, notes: [88, 92, 88], gap: 0.1 },
-  { ratio: 2.02, index: 1.8, decay: 0.07, notes: [95, 91], gap: 0.14 },
-  { ratio: 1.0, index: 0.9, decay: 0.22, notes: [79, 83, 86, 83], gap: 0.13 },
-  { ratio: 3.01, index: 1.1, decay: 0.05, notes: [98, 98, 98], gap: 0.07 },
-  { ratio: 1.5, index: 1.6, decay: 0.16, notes: [84, 89], gap: 0.22 },
+  // ratio, index, decay, notes (midi), gaps between them, contour
+  { ratio: 1.0, index: 1.2, decay: 0.09, notes: [88, 92, 88], gap: 0.1, arc: [0.6, -1.1] },
+  { ratio: 2.0, index: 1.4, decay: 0.07, notes: [95, 91], gap: 0.14, arc: [0.4, -1.5] },
+  { ratio: 1.0, index: 0.8, decay: 0.22, notes: [79, 83, 86, 83], gap: 0.13, arc: [1.2, 0.4] },
+  { ratio: 3.0, index: 0.9, decay: 0.05, notes: [98, 98, 98], gap: 0.07, arc: [0.9] },
+  { ratio: 1.5, index: 1.3, decay: 0.16, notes: [84, 89], gap: 0.22, arc: [0.5, -0.8] },
 ];
+
+/** One semitone as a frequency ratio. Contours are written in semitones. */
+const SEMI = 2 ** (1 / 12);
 
 /** The most one-shot sources this file may have alive at once. */
 const VOICE_CEILING = 34;
@@ -153,6 +172,13 @@ export class Ambience {
 
     this._nextFrog = 4;
     this._nextPlop = 12;
+    /**
+     * First howl comes early — 40 s rather than a full interval — so a player
+     * who arrives at dawn hears one inside the first minute. The sound is the
+     * strongest single statement this world makes about where it is, and
+     * making somebody wait four minutes for it is a waste of it.
+     */
+    this._nextHowl = 40;
     /**
      * Armed/fired hysteresis for the gust surge, not a threshold.
      *
@@ -298,6 +324,234 @@ export class Ambience {
     this.streamLfo.connect(streamDepth).connect(streamLp.frequency);
     this.streamLfo.start();
 
+    /**
+     * ==== THE INSECT WALL ====================================================
+     *
+     * THE SINGLE BIGGEST THING THIS SOUNDSCAPE WAS MISSING, and it costs no GPU
+     * at all. A temperate wood is quiet between bird calls. A rainforest is
+     * never quiet: there is a continuous, enveloping, unlocatable wall of
+     * insects, and the birds punch THROUGH it rather than sitting in silence.
+     * Before this, the gaps between `wildlife.js` calls were genuine silence,
+     * and silence is most of what made this forest read as empty however many
+     * animals were put in it.
+     *
+     * IT IS TWO BEDS AND THEY CROSSFADE ON THE CLOCK, because the day wall and
+     * the night wall are different animals and swapping between them is one of
+     * the strongest cues that time is passing:
+     *
+     *   CICADAS by day. Loud, steady, a hard sawing note that the ear reads as
+     *   a pitch rather than as noise.
+     *   KATYDIDS and crickets by night. Higher, thinner, and pulsed rather than
+     *   continuous.
+     *
+     * WHY THEY ARE RESONANT BANDS AND NOT JUST FILTERED HISS, which is the one
+     * design decision here that matters. The wind bed above uses a Q of 0.55 —
+     * barely a filter — and the long block on `windTop` explains what that cost:
+     * two octaves of inaudible hiss that dominated the spectral centroid and
+     * failed `audio-probe`. An insect is the opposite kind of signal. A cicada
+     * is a mechanical resonator with a strong fundamental and very little
+     * either side of it, so a HIGH Q is both what the animal actually is and
+     * what keeps this bed's energy in one narrow place instead of smeared
+     * across the top of the spectrum.
+     *
+     * AND THE CENTRE FREQUENCIES ARE FAR LOWER THAN THE ANIMALS ACTUALLY ARE.
+     * THIS IS THE NUMBER THAT WAS FOUGHT OVER AND IT WAS SETTLED BY THE GATE.
+     *
+     * Real Amazonian cicadas run to 5-8 kHz, and the first three attempts here
+     * sat at 2550 and then 2100. `audio-probe` fails any stage with `rms > 0.03
+     * && harsh > 0.3`, where `harsh` is the share of energy between 2 and 6
+     * kHz — and `sober + music` was ALREADY at 0.286 before this bed existed,
+     * i.e. there was almost no headroom in that band at all. A bed centred at
+     * 2100 took it to 0.372 and failed eight stages at once, including every
+     * jukebox track, because a continuous layer adds to all of them.
+     *
+     * So both beds were moved out of the window entirely: 1500 Hz by day,
+     * 1950 by night, at Q 3.2 and 9 — bandwidths of about 470 and 215 Hz, so
+     * the day bed spans roughly 1265-1735 and only its skirt reaches 2 kHz.
+     *
+     * THE RESULT IS BETTER THAN THE COMPROMISE IT LOOKS LIKE, and that is worth
+     * writing down because the obvious reading of the paragraph above is "the
+     * insects had to be detuned to please a linter". Measured: `harsh` on
+     * `sober + music` went 0.286 -> 0.258 and on ambience alone 0.293 -> 0.248,
+     * i.e. adding this layer made the whole app LESS harsh, because a warm
+     * mid-band bed is now carrying energy that the bright thin spectrum
+     * previously had to. And it is the right sound anyway. A wall of insects
+     * heard across a hundred metres of humid forest has had its top end
+     * absorbed by the air and the leaves; what reaches you is a mid-band drone.
+     * The 5 kHz saw is what a cicada sounds like at two metres, and there is
+     * never only one at two metres.
+     *
+     * Measured contribution: ambience-only rms 0.0143 -> 0.0181, a 27% lift on
+     * a layer that is audible one hundred per cent of the time. See
+     * `probes-that-cannot-hear-the-real-thing`: the first version of this bed
+     * moved the probe by 0.0003 and I nearly shipped it believing it worked.
+     *
+     * THE TREMOLO IS THE OTHER HALF OF "ALIVE". A steady filtered noise is an
+     * air conditioner. What makes a cicada wall read as thousands of animals is
+     * that it BREATHES — it surges and drops on a period of a few seconds, and
+     * different parts of it are out of phase. Two oscillators at incommensurate
+     * rates (0.21 and 0.34 Hz) modulating the two beds gives that for four
+     * nodes and no per-frame work at all: it is wired once here and runs in the
+     * audio thread forever.
+     */
+    this.cicadaSource = ctx.createBufferSource();
+    this.cicadaSource.buffer = buffer;
+    this.cicadaSource.loop = true;
+    // Slower than unity: it pushes the pink noise's own energy down, which
+    // means the band-pass below is amplifying a region that already has body
+    // in it rather than lifting the buffer's own top end.
+    this.cicadaSource.playbackRate.value = 0.72;
+
+    this.cicadaBand = ctx.createBiquadFilter();
+    this.cicadaBand.type = 'bandpass';
+    this.cicadaBand.frequency.value = 1500;
+    // Narrow. This is the number that turns hiss into a note; see above.
+    this.cicadaBand.Q.value = 3.2;
+    // A second pass through the same corner. One biquad at Q 5.5 still leaks
+    // a broad skirt either side, and the skirt is exactly the part that reads
+    // as hiss and moves the centroid. Two in series is 12 dB/octave of
+    // rejection for one extra node.
+    this.cicadaBand2 = ctx.createBiquadFilter();
+    this.cicadaBand2.type = 'bandpass';
+    this.cicadaBand2.frequency.value = 1500;
+    this.cicadaBand2.Q.value = 3.2;
+
+    this.cicadaGain = ctx.createGain();
+    this.cicadaGain.gain.value = 0;
+    // The breath. `cicadaGain` is set by `update` on the clock; this one is
+    // multiplied on top of it at audio rate and never touched again.
+    this.cicadaBreath = ctx.createGain();
+    this.cicadaBreath.gain.value = 0.72;
+    this.cicadaLfo = ctx.createOscillator();
+    this.cicadaLfo.frequency.value = 0.21;
+    const cicadaDepth = ctx.createGain();
+    cicadaDepth.gain.value = 0.28;
+    this.cicadaLfo.connect(cicadaDepth).connect(this.cicadaBreath.gain);
+    this.cicadaLfo.start();
+
+    this.cicadaSource
+      .connect(this.cicadaBand)
+      .connect(this.cicadaBand2)
+      .connect(this.cicadaBreath)
+      .connect(this.cicadaGain)
+      .connect(this.engine.worldBus);
+    this.cicadaSource.start();
+
+    // ---- night: katydids -------------------------------------------------
+    this.katydidSource = ctx.createBufferSource();
+    this.katydidSource.buffer = buffer;
+    this.katydidSource.loop = true;
+    this.katydidSource.playbackRate.value = 1.15;
+
+    this.katydidBand = ctx.createBiquadFilter();
+    this.katydidBand.type = 'bandpass';
+    this.katydidBand.frequency.value = 1950;
+    // Tighter still — a bandwidth of about 215 Hz. A katydid is a nearly pure
+    // whistle, and this bed is deliberately thinner and more deeply pulsed
+    // than the day one: at night the wall breaks up and individual callers
+    // start to separate, which is what the modulation below is for. It sits at
+    // 1950 rather than up where the animal is for the reason given at length
+    // in the block above — the 2-6 kHz window is spoken for.
+    this.katydidBand.Q.value = 9;
+    this.katydidBand2 = ctx.createBiquadFilter();
+    this.katydidBand2.type = 'bandpass';
+    this.katydidBand2.frequency.value = 1950;
+    this.katydidBand2.Q.value = 9;
+
+    this.katydidGain = ctx.createGain();
+    this.katydidGain.gain.value = 0;
+    this.katydidPulse = ctx.createGain();
+    this.katydidPulse.gain.value = 0.5;
+    this.katydidLfo = ctx.createOscillator();
+    // Faster and deeper than the cicadas', and incommensurate with it, so the
+    // two beds never line up into one throb during the dawn and dusk crossover
+    // when both are audible at once.
+    this.katydidLfo.frequency.value = 0.34;
+    const katydidDepth = ctx.createGain();
+    katydidDepth.gain.value = 0.45;
+    this.katydidLfo.connect(katydidDepth).connect(this.katydidPulse.gain);
+    this.katydidLfo.start();
+
+    this.katydidSource
+      .connect(this.katydidBand)
+      .connect(this.katydidBand2)
+      .connect(this.katydidPulse)
+      .connect(this.katydidGain)
+      .connect(this.engine.worldBus);
+    this.katydidSource.start();
+
+    /**
+     * ==== RAIN, IN TWO LAYERS THAT ARRIVE AT DIFFERENT TIMES =================
+     *
+     * A single noise bed is what rain sounds like on a microphone in a field.
+     * Under a canopy it is two distinct sounds and they are separated in both
+     * frequency AND time, which is the detail worth having:
+     *
+     *   CANOPY. Rain hitting forty metres of leaves above you. Broad, soft,
+     *   diffuse, and it starts FIRST — you hear the roof being hit several
+     *   seconds before a drop reaches you. It is the sound people mean when
+     *   they say they can hear rain coming.
+     *
+     *   DRIP. What gets through, landing on the litter and the big understory
+     *   leaves around you. Lower, closer, sparser, and it LAGS — it fades in
+     *   later and, more importantly, it keeps going after the rain has stopped,
+     *   because a canopy holds water and lets it down for minutes afterwards.
+     *
+     * THE LAG IS THE WHOLE FEATURE and it is implemented as nothing more than
+     * two different `setTargetAtTime` constants in `update` — 2.5 s for the
+     * canopy, 11 s for the drip. Rising, the canopy leads. Falling, the drip
+     * trails. No scheduling, no state machine, no per-frame work: two
+     * exponentials with different time constants chasing the same target
+     * produce the entire behaviour for free.
+     *
+     * BOTH ARE LIDDED HARD. `audio-probe` fails on energy between 2 and 6 kHz
+     * and rain is the single broadest-spectrum thing that could be added to
+     * this file — untreated it is pure white noise and it would fail every
+     * stage at once. The canopy layer is low-passed at 1800 and the drip at
+     * 900, which is also simply what rain heard through a wet forest sounds
+     * like: the leaves absorb the top end. See the insect wall above for the
+     * same argument made about the same 2-6 kHz window.
+     */
+    this.rainCanopySource = ctx.createBufferSource();
+    this.rainCanopySource.buffer = buffer;
+    this.rainCanopySource.loop = true;
+    // Faster than unity, which shifts pink noise's energy up: rain has far more
+    // top in it than wind does, and this is the cheap way to get some without
+    // a second buffer.
+    this.rainCanopySource.playbackRate.value = 1.7;
+    this.rainCanopyTop = ctx.createBiquadFilter();
+    this.rainCanopyTop.type = 'lowpass';
+    this.rainCanopyTop.frequency.value = 1800;
+    this.rainCanopyTop.Q.value = 0.3;
+    this.rainCanopyLow = ctx.createBiquadFilter();
+    this.rainCanopyLow.type = 'highpass';
+    this.rainCanopyLow.frequency.value = 260;
+    this.rainCanopyLow.Q.value = 0.3;
+    this.rainCanopyGain = ctx.createGain();
+    this.rainCanopyGain.gain.value = 0;
+    this.rainCanopySource
+      .connect(this.rainCanopyLow)
+      .connect(this.rainCanopyTop)
+      .connect(this.rainCanopyGain)
+      .connect(this.engine.worldBus);
+    this.rainCanopySource.start();
+
+    this.rainDripSource = ctx.createBufferSource();
+    this.rainDripSource.buffer = buffer;
+    this.rainDripSource.loop = true;
+    this.rainDripSource.playbackRate.value = 0.9;
+    this.rainDripTop = ctx.createBiquadFilter();
+    this.rainDripTop.type = 'lowpass';
+    this.rainDripTop.frequency.value = 900;
+    this.rainDripTop.Q.value = 0.4;
+    this.rainDripGain = ctx.createGain();
+    this.rainDripGain.gain.value = 0;
+    this.rainDripSource
+      .connect(this.rainDripTop)
+      .connect(this.rainDripGain)
+      .connect(this.engine.worldBus);
+    this.rainDripSource.start();
+
     this.birdBus = ctx.createGain();
     /**
      * 0.34, up from 0.22.
@@ -347,21 +601,55 @@ export class Ambience {
     kind.notes.forEach((note, i) => {
       const t = when + i * kind.gap * rngRange(rng, 0.85, 1.2);
       const f = 440 * 2 ** ((note + transpose - 69) / 12);
+      /**
+       * A whistle, not a struck bar. The long argument is in `wildlife.js`'s
+       * `_note`; the short version is that a spectral flash decaying to a pure
+       * tone over a bare exponential envelope IS a mallet, and all three of the
+       * lines that did that here have been replaced:
+       *
+       *   the pitch walks a CONTOUR instead of sliding once, and the modulator
+       *   walks the same one so the ratio holds and the spectrum stays
+       *   harmonic while the note moves;
+       *
+       *   the index TAPERS instead of collapsing, so it is a timbre rather
+       *   than a strike;
+       *
+       *   and the envelope has a PLATEAU, which is the thing a whistle does
+       *   and a struck bar physically cannot.
+       */
+      const base = f * rngRange(rng, 0.94, 1.06);
+      const bend = rngRange(rng, 0.8, 1.25);
+      const arc = kind.arc ?? [0];
+      const lead = 1.5;
+      const walk = (param, from) => {
+        const leadT = Math.min(0.012, kind.decay * 0.12, kind.decay / (arc.length + 1));
+        param.setValueAtTime(Math.max(40, from * SEMI ** -lead), t);
+        param.exponentialRampToValueAtTime(Math.max(40, from), t + leadT);
+        for (let s = 0; s < arc.length; s++) {
+          const k = (s + 1) / arc.length;
+          param.exponentialRampToValueAtTime(
+            Math.max(40, from * SEMI ** (arc[s] * bend)),
+            t + kind.decay * k
+          );
+        }
+      };
       const carrier = ctx.createOscillator();
       carrier.type = 'sine';
-      carrier.frequency.setValueAtTime(f * rngRange(rng, 0.94, 1.06), t);
-      // The glide is what makes it a bird rather than a beep.
-      carrier.frequency.exponentialRampToValueAtTime(f * rngRange(rng, 0.86, 1.22), t + kind.decay);
+      walk(carrier.frequency, base);
       const mod = ctx.createOscillator();
       mod.type = 'sine';
-      mod.frequency.value = f * kind.ratio;
+      walk(mod.frequency, base * kind.ratio);
       const modGain = ctx.createGain();
       modGain.gain.setValueAtTime(f * kind.index, t);
-      modGain.gain.exponentialRampToValueAtTime(f * 0.02, t + kind.decay);
+      modGain.gain.linearRampToValueAtTime(f * kind.index * 0.6, t + kind.decay);
       mod.connect(modGain).connect(carrier.frequency);
+      const peak = 0.16 * (0.35 + distance * 0.65);
+      const atk = Math.min(0.03, Math.max(0.005, kind.decay * 0.2));
+      const hold = Math.max(atk + 0.001, kind.decay * 0.5);
       const env = ctx.createGain();
       env.gain.setValueAtTime(0.0001, t);
-      env.gain.exponentialRampToValueAtTime(0.16 * (0.35 + distance * 0.65), t + 0.012);
+      env.gain.exponentialRampToValueAtTime(peak, t + atk);
+      env.gain.setValueAtTime(peak, t + hold);
       env.gain.exponentialRampToValueAtTime(0.0001, t + kind.decay);
       carrier.connect(env).connect(dull);
       carrier.start(t);
@@ -502,6 +790,97 @@ export class Ambience {
     _at.y = this.streamPos.y + rngRange(rng, 0.2, 0.7);
     _at.z = this.streamPos.z + rngRange(rng, -7, 7);
     return _at;
+  }
+
+  /**
+   * ==== A HOWLER TROOP ======================================================
+   *
+   * The loudest land animal alive, audible over three miles of forest, and the
+   * single most identifiable sound the Amazon has. It is also, structurally,
+   * unlike anything else in this file: everything here is an EVENT lasting a
+   * fraction of a second — a croak, a plop, a chirp — and this runs for the
+   * better part of fifteen seconds and builds while it does.
+   *
+   * WHAT A HOWL ACTUALLY IS. Not a scream and not a bark: a deep, hoarse,
+   * continuous ROAR, closer to wind in a tunnel or a distant football crowd
+   * than to a monkey. It is produced by a hollow hyoid bone acting as a
+   * resonating chamber, which is why it is so low for an animal that size and
+   * why it carries so far — low frequencies survive a forest and high ones do
+   * not. So it is built from long low noise grains rather than from tones, and
+   * it lives between 110 and 520 Hz, comfortably under the 2 kHz the probe
+   * cares about. It cannot fail the harsh gate; it is the least harsh thing
+   * here.
+   *
+   * THE SHAPE IS A SLOW SWELL AND A LONG DECAY, and the swell is what makes it
+   * frightening. A troop does not start at full volume — one animal begins, the
+   * others join over several seconds, it peaks, and then it falls away raggedly
+   * as they drop out one by one. `sin(PI * k^0.7)` is that curve: quick to
+   * build, slow to die.
+   *
+   * IT IS ALWAYS FAR AWAY. 90-170 m, which is well past `maxDistance` on most
+   * things in this file — deliberately, because the whole point of the sound is
+   * that it comes from somewhere you are not and cannot get to. A howler troop
+   * you could walk up to would be a monkey; one you can only hear is a place
+   * that is bigger than you can see. That also makes it cheap: the distance
+   * low-pass takes the top off it and what is left is the part that carries.
+   */
+  _howl(position) {
+    if (!this.built || this.voices > VOICE_CEILING * 0.5) return;
+    const rng = this.rng;
+    const t0 = this.ctx.currentTime + 0.05;
+    const spatial = this.engine.createSpatial(position, {
+      // A long reach and a very shallow rolloff. This is the one sound in the
+      // world that is supposed to arrive from outside the world.
+      refDistance: 30,
+      rolloff: 0.85,
+      maxDistance: 320,
+    });
+    const ears = this._ears();
+    spatial.setDistance(
+      Math.hypot(position.x - ears.x, position.y - ears.y, position.z - ears.z)
+    );
+    /**
+     * How many animals, which is also how long it lasts. A lone male is a
+     * short hoarse series; a full troop rolls on for fifteen seconds. Both
+     * happen, and the short one is far commoner, which is what keeps the long
+     * one worth hearing.
+     */
+    const roars = 26 + Math.floor(rng() * 30);
+    const step = rngRange(rng, 0.19, 0.29);
+    let t = t0;
+    for (let i = 0; i < roars; i++) {
+      const k = i / roars;
+      const swell = Math.sin(Math.PI * Math.pow(k, 0.7));
+      /**
+       * TWO GRAINS PER STEP, AN OCTAVE APART, and that pairing is the voice.
+       * A single band gives a hum. The low one is the hyoid chamber and the
+       * upper one is the rasp on top of it; without the rasp it is a foghorn,
+       * and without the fundamental it is a cough.
+       */
+      this._grain(spatial.input, t, {
+        freq: rngRange(rng, 112, 178),
+        q: 1.6,
+        decay: rngRange(rng, 0.3, 0.5),
+        gain: 0.17 * (0.25 + swell),
+        rate: 0.34,
+      });
+      this._grain(spatial.input, t + rngRange(rng, 0.01, 0.05), {
+        freq: rngRange(rng, 300, 520),
+        q: 2.4,
+        decay: rngRange(rng, 0.16, 0.28),
+        gain: 0.075 * (0.2 + swell),
+        rate: 0.5,
+      });
+      t += step * rngRange(rng, 0.78, 1.28);
+    }
+    const life = (t - t0 + 2.2) * 1000;
+    setTimeout(() => {
+      try {
+        spatial.dispose();
+      } catch {
+        /* already gone */
+      }
+    }, life);
   }
 
   /**
@@ -1097,7 +1476,7 @@ export class Ambience {
    * @param {number} [p.dark]     0..1, how far into the evening it is. Optional
    *                              — see below.
    */
-  update(dt, { gust = 0, canopy = 0.5, tripLevel = 0, dark = null } = {}) {
+  update(dt, { gust = 0, canopy = 0.5, tripLevel = 0, dark = null, rain = 0 } = {}) {
     if (!this.built) return;
     const ctx = this.ctx;
     const rng = this.rng;
@@ -1142,6 +1521,70 @@ export class Ambience {
     // stops taking two octaves of hiss with it. See windTop.
     this.windTop.frequency.setTargetAtTime(2600 + g * 2800 * leafy, now, 0.7);
     this.windLowGain.gain.setTargetAtTime(0.014 + g * 0.032, now, 0.9);
+
+    /**
+     * THE INSECT WALL, CROSSFADED ON THE HOUR. See the build block for what the
+     * two beds are and why they sit where they do in the spectrum.
+     *
+     * NOT A STRAIGHT CROSSFADE, and the overlap is the interesting part. Both
+     * beds are audible together through dusk and dawn — the cicadas are still
+     * going as the katydids start — because that overlap is precisely what the
+     * transition sounds like in the real place, and because a hard swap between
+     * two continuous beds is audible as a swap however slow it is.
+     *
+     * `night` is already `max(the hour, the trip)`, so a trip brings the night
+     * wall up under a midday sun. That is inherited from the frogs above and it
+     * is correct for the same reason: everything in this file that responds to
+     * darkness should respond to the trip's darkness identically, or the layers
+     * disagree with each other about what time it is.
+     *
+     * THE TIME CONSTANTS ARE LONG — 6 and 8 seconds. These are the two slowest
+     * moving values in the file by a wide margin. A bed that is on all the time
+     * must never be caught changing; anything under a second or two reads as
+     * somebody turning a knob.
+     */
+    const day = 1 - night;
+    // Squared, so the cicadas hold up through most of the daylight and then
+    // drop away quickly at the end of it rather than fading linearly all
+    // afternoon. Real ones do exactly this: they stop almost together.
+    this.cicadaGain.gain.setTargetAtTime(0.55 * day * day * (1 - clamp01(rain) * 0.8), now, 6);
+    // The wall gets brighter as it gets louder — an insect chorus at full cry
+    // is genuinely higher in pitch than a few stragglers, because the loudest
+    // species are the highest.
+    this.cicadaBand.frequency.setTargetAtTime(1380 + day * 300, now, 8);
+    this.cicadaBand2.frequency.setTargetAtTime(1380 + day * 300, now, 8);
+    /**
+     * Below the day bed once the filter losses are accounted for — a Q of 9 in
+     * two stages throws away far more of the noise than the day bed's 3.2 does,
+     * so the raw numbers here are not comparable and 0.4 against 0.55 is a
+     * wider gap than it looks. Night in a rainforest is not louder
+     * than day, whatever the recordings suggest — it is EMPTIER and more
+     * separated, which is what the deeper pulse modulation is doing rather than
+     * the gain. A katydid bed as loud as the cicada one is a wall of whistles
+     * and it is unbearable within about ninety seconds.
+     */
+    this.katydidGain.gain.setTargetAtTime(0.4 * night * night, now, 8);
+
+    /**
+     * THE RAIN, AND THE TWO TIME CONSTANTS ARE THE FEATURE. See the build block.
+     *
+     * 2.5 s on the canopy and 11 s on the drip means the roof layer leads the
+     * shower in and the floor layer trails it out — you hear it coming several
+     * seconds early, and it is still dripping around you long after the drops
+     * have stopped falling. Nothing schedules that; it falls out of two
+     * exponentials with different constants chasing one target.
+     *
+     * The insect wall ducks under heavy rain, which is the only cross-coupling
+     * in this file and it is worth the line: cicadas genuinely stop when it
+     * rains hard, and leaving a full-cry chorus running underneath a downpour
+     * is the single most obviously wrong thing this layer could do.
+     */
+    const wetness = clamp01(rain);
+    this.rainCanopyGain.gain.setTargetAtTime(0.075 * wetness, now, 2.5);
+    this.rainDripGain.gain.setTargetAtTime(0.055 * wetness, now, 11);
+    // Brighter as it gets heavier: light rain on leaves is a hiss, a downpour
+    // is a roar with edge on it.
+    this.rainCanopyTop.frequency.setTargetAtTime(1300 + wetness * 900, now, 3);
 
     /**
      * Birds, and they are THINNER than they were.
@@ -1199,6 +1642,36 @@ export class Ambience {
      * are competing with a stream. Below about one every ten seconds the bank
      * stops reading as inhabited and becomes a place where a frog happened once.
      */
+    /**
+     * THE HOWLER TROOP, WEIGHTED TO DAWN AND DUSK AND TO AFTER THE RAIN.
+     *
+     * Howlers call most at first light and last light, and they call again
+     * when it starts or stops raining — nobody is quite sure why, but they do,
+     * reliably, and it is one of those details that makes a soundscape feel
+     * observed rather than designed.
+     *
+     * `twilight` peaks at 1 where `night` is 0.5, i.e. exactly through the
+     * transition, and falls to 0 at full day and full dark. It is never zero
+     * in practice because of the 0.12 floor: a troop can go off at any hour,
+     * just rarely. The interval is then divided by that weight, so a call is
+     * roughly every two minutes at dusk and every quarter of an hour at
+     * midnight.
+     */
+    this._nextHowl -= dt;
+    if (this._nextHowl <= 0) {
+      const twilight = Math.max(0.12, 1 - Math.abs(night * 2 - 1)) + clamp01(rain) * 0.5;
+      const ears = this._ears();
+      const bearing = rng() * Math.PI * 2;
+      const far = rngRange(rng, 90, 170);
+      _at.x = ears.x + Math.cos(bearing) * far;
+      // Up in the canopy, where they are. A howler troop is never at ground
+      // level and the elevation is audible on a panner with a Y term.
+      _at.y = ears.y + rngRange(rng, 8, 22);
+      _at.z = ears.z + Math.sin(bearing) * far;
+      this._howl(_at);
+      this._nextHowl = rngRange(rng, 95, 260) / twilight;
+    }
+
     if (this.streamDistance < FROG_RANGE) {
       this._nextFrog -= dt;
       if (this._nextFrog <= 0) {

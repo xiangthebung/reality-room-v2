@@ -45,7 +45,42 @@
  * still reproducible. A fresh browser profile with nothing in localStorage and
  * `navigator.webdriver` set renders exactly the frame it rendered yesterday.
  */
-export const LEVELS = ['low', 'medium', 'high', 'ultra'];
+/**
+ * `potato` IS A DIFFERENT PICTURE, NOT A DIMMER ONE, AND THAT IS THE WHOLE
+ * POINT OF IT.
+ *
+ * The four rungs above it were, for their entire history, a RESOLUTION ladder
+ * wearing a quality ladder's clothes. Measured at the deep station
+ * (`.perf/presets.json`): low submits 16.08 M triangles and ultra submits
+ * 16.21 M — the triangle count moves by ONE PER CENT across the whole ladder,
+ * and every millisecond of its 44% of travel is bought with pixels, MSAA and
+ * shadow texels. Fitting frame time against resolution at low gives
+ * `1.53 ms + 0.319 ms/Mpixel`, so three quarters of that frame does not care
+ * how many pixels you ask for. Deleting 71% of every fragment in the picture
+ * buys 0.37 ms; hiding the canopy alone buys 1.10 ms.
+ *
+ * So a machine at the bottom of the old ladder had already spent every lever
+ * the menu owned and was still drawing the same wood. That is why the last rung
+ * was worth the least — medium to low is 0.27 ms, the smallest step there is —
+ * and why "turn the resolution down", the advice a struggling machine will
+ * inevitably be given, is worth 0.22 ms.
+ *
+ * `potato` exists to remove GEOMETRY, which is the only thing left that costs
+ * anything. It is allowed to look like a different game: the brief it was built
+ * to is "for people with bad PCs that just need to talk", and a wood you can
+ * stand in and hear at 200 fps beats a wood you cannot enter. Measured at deep,
+ * it takes the frame from 2.01 ms to 0.72 ms — 78% of the triangles gone.
+ *
+ * AUTO IS ALLOWED TO REACH IT, deliberately, and this was argued both ways.
+ * The case against is that a level change rebuilds ~22 shader programs and this
+ * project has already shipped that hitch once from a different cause. The case
+ * for is decisive: the people this rung exists for are exactly the people who
+ * will never open a settings menu to find it. Potato introduces no recompile
+ * class that `low` does not already trigger, so it costs one more of a hitch
+ * that already exists, once, on a machine that is drowning. Revisit this if the
+ * impostor canopy lands and brings a material swap with it.
+ */
+export const LEVELS = ['potato', 'low', 'medium', 'high', 'ultra'];
 export const DEFAULT_LEVEL = 'high';
 
 /**
@@ -83,7 +118,15 @@ export const KNOBS = [
     advanced: true,
     label: 'Render scale',
     kind: 'range',
-    min: 0.5,
+    /**
+     * 0.35 rather than 0.5, because 0.5 was the floor of a ladder that had no
+     * rung below `low`. Measured at low against a fixed scene, the fit is
+     * `1.53 ms + 0.319 ms/Mpixel` — so the travel from 0.5 to 0.35 is worth
+     * about 0.15 ms on its own, which is not much and is not nothing on a
+     * machine that needs all of it. It is genuinely ugly and it is meant to be
+     * available anyway; see the potato note on LEVELS.
+     */
+    min: 0.35,
     max: 1,
     step: 0.05,
     /**
@@ -108,7 +151,7 @@ export const KNOBS = [
      * purpose — the cap lives in main.js, and a copy of it here would be a
      * second source of truth that nothing would ever check.
      */
-    presets: [0.65, 0.8, 1, 1],
+    presets: [0.45, 0.65, 0.8, 1, 1],
     format: (v) => (v >= 1 ? 'Max' : `${v.toFixed(2)}×`),
     hint:
       'Internal resolution, as a fraction of the ceiling rather than of your display — ' +
@@ -136,7 +179,7 @@ export const KNOBS = [
      * few graphics knobs that changes the frame's cost without changing what
      * the frame is a picture of.
      */
-    presets: [0, 0, 2, 4],
+    presets: [0, 0, 0, 2, 4],
     hint: 'Multisampling on the scene buffer. Off makes the canopy fizz.',
   },
   {
@@ -145,7 +188,7 @@ export const KNOBS = [
     advanced: true,
     label: 'Shadows',
     kind: 'toggle',
-    presets: [false, true, true, true],
+    presets: [false, false, true, true, true],
     hint: 'Sun shadows. Already only redrawn when the sun anchor steps.',
   },
   {
@@ -159,9 +202,87 @@ export const KNOBS = [
       { value: 2048, label: 'Medium' },
       { value: 4096, label: 'High' },
     ],
-    presets: [1024, 1024, 2048, 4096],
+    /**
+     * ULTRA DROPPED FROM 4096 TO 2048 AND THE 2.78 ms WENT INTO THE AIR.
+     *
+     * Measured at the wood station, 2560x1440, paired A-B-B-A: the shadow pass
+     * is 4.77 ms of an 8.28 ms armed frame, and 4.01 ms of that 4.77 is ALPHA-
+     * TESTED LEAF CARDS being rasterised into the depth map. It is a fill cost
+     * over the map's texels and nothing else — tightening the ortho box saves
+     * 0.00, and the savings from halving the edge track the texel counts
+     * (16.8M to 4.2M) almost exactly. So 4096 was charging 2.78 ms, more than
+     * half of the whole frame's deficit against the 5 ms budget, for shadow
+     * crispness in a rainforest.
+     *
+     * It was also one of only TWO knobs Ultra had — the other being MSAA — so
+     * the top of the ladder was "the same picture, with sharper shadow edges
+     * and less crawl". That is not a tier anybody can see. The 2.78 ms bought
+     * god rays, five layers of mist and half again as many motes instead, and
+     * Ultra now differs from High by things that are visible from across the
+     * room. See `shaftDensity`, `mistLayers` and `particleDensity` below.
+     *
+     * LOW AND MEDIUM ARE UNCHANGED AND DELIBERATELY SO: they are already at
+     * 1024, they are cheap, and they are the machines with the least light in
+     * the frame to begin with, which is exactly where a shadow is doing the
+     * most work.
+     *
+     * The long-term answer is two 2048 cascades, near and far — roughly double
+     * today's near crispness for about half today's cost — and it is a bigger
+     * change than this pass should carry.
+     */
+    presets: [1024, 1024, 1024, 2048, 2048],
     dependsOn: 'shadows',
     hint: 'Shadow map resolution across a 116 m box.',
+  },
+  {
+    /**
+     * How much of the sun-shaft lattice is drawn.
+     *
+     * The shafts are one InstancedMesh over a 9x9 lattice of 19 m cells, seated
+     * NEAREST-FIRST, and this is a fraction of that prefix — so turning it down
+     * removes the furthest shafts, which are the ones the reach fade had nearly
+     * removed already, and never opens a hole around the player. See
+     * `setDensity` in atmosphere.js.
+     *
+     * Cost is fill: an additive shell costs what it covers, and covering scales
+     * with the count. It is a real Ultra lever, which is the point of it.
+     */
+    id: 'shaftDensity',
+    group: 'graphics',
+    advanced: true,
+    label: 'Sun shafts',
+    kind: 'range',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    presets: [0, 0.3, 0.55, 0.75, 1],
+    format: (v) => `${Math.round(v * 100)}%`,
+    hint: 'Light in the air where the canopy has a hole in it. Fill-bound.',
+  },
+  {
+    /**
+     * How many world-mist sheets are drawn, out of five.
+     *
+     * The list is ordered by what each layer is worth — the first hollow sheet
+     * and the first canopy band before any of the thickening layers — so a low
+     * count is a thinner version of the same effect rather than half of it
+     * missing. One draw call per layer, and the fill is bounded by the pooling
+     * term, which is zero over flat ground.
+     */
+    id: 'mistLayers',
+    group: 'graphics',
+    advanced: true,
+    label: 'Mist layers',
+    kind: 'enum',
+    options: [
+      { value: 0, label: 'Off' },
+      { value: 1, label: 'One' },
+      { value: 2, label: 'Two' },
+      { value: 3, label: 'Three' },
+      { value: 5, label: 'Five' },
+    ],
+    presets: [0, 1, 2, 3, 5],
+    hint: 'Mist pooling in hollows and hanging under the canopy.',
   },
   {
     id: 'bloom',
@@ -169,7 +290,7 @@ export const KNOBS = [
     advanced: true,
     label: 'Bloom',
     kind: 'toggle',
-    presets: [false, true, true, true],
+    presets: [false, false, true, true, true],
     hint: 'Glare. Also carries the luminous wake — off here turns both off.',
   },
   {
@@ -178,7 +299,7 @@ export const KNOBS = [
     advanced: true,
     label: 'Luminous wake',
     kind: 'toggle',
-    presets: [false, true, true, true],
+    presets: [false, false, true, true, true],
     dependsOn: 'bloom',
     hint: 'Persistence on the blurriest bloom mip. Cheap; listed for taste.',
   },
@@ -187,7 +308,10 @@ export const KNOBS = [
     group: 'graphics',
     label: 'View distance',
     kind: 'range',
-    min: 0.7,
+    // 0.45 rather than 0.7, because `treeReach` now needs a density the old
+    // floor could not express: hiding a 120 m reach wants ρ ≈ 0.0196 against a
+    // sober ~0.0092, i.e. a multiplier near 0.47. See the treeReach block.
+    min: 0.45,
     max: 1.3,
     step: 0.05,
     /**
@@ -199,7 +323,19 @@ export const KNOBS = [
      * the far plane in to 0.7 × 900 = 630 m clips the sky and you get a black
      * hole over your head. Fog is the real draw distance in a forest anyway.
      *
-     * THE PRESETS ARE FLAT NOW, AND THAT IS THE POINT.
+     * THEY ARE FLAT FROM `low` UP, AND THE ONE EXCEPTION PROVES THE RULE.
+     *
+     * `potato` sets 0.47 and it is the only rung that moves this, because it is
+     * the only rung that cuts `treeReach`. The argument below — that spreading
+     * fog across the ladder is a straight loss, because nothing culls on fog
+     * and so it repaints the depth of the wood for no frame time at all —
+     * is still exactly right for every level that draws the wood to 384 m.
+     * What changed is that one level no longer does. Fog is not buying time
+     * here either; it is paying for the reach cut that buys the time, by making
+     * a shortened wood end in haze instead of ending in an edge. The moment
+     * something culls on distance, the density that hides that distance stops
+     * being cosmetic.
+     *
      *
      * They used to be [0.8, 0.9, 1, 1.15] — Low a quarter hazier than High,
      * Ultra an eighth clearer — and that was a straight loss. NOTHING IN THIS
@@ -221,9 +357,66 @@ export const KNOBS = [
      * the wood to close in. It is just no longer something the quality ladder
      * has an opinion about.
      */
-    presets: [1, 1, 1, 1],
+    presets: [0.47, 1, 1, 1, 1],
     format: (v) => `${v.toFixed(2)}×`,
     hint: 'Haze depth. Fog is what actually bounds the view here, not the far plane.',
+  },
+  {
+    /**
+     * How far the wood is DRAWN. The first knob in this list that removes
+     * geometry, and therefore the first one with real range.
+     *
+     * THE VALUE IS THE OUTER REACH, and the other two distances are derived
+     * from it by the table in main.js rather than exposed separately. They are
+     * not independent: a tree is two packers over one payload whose bands must
+     * meet exactly, so `lod` is where the near trunk hands over to the far
+     * sweep and `leafReach` is where the canopy stops, and offering three
+     * sliders would be offering three ways to produce a wood that draws every
+     * distant trunk twice. See `forest.setReach`.
+     *
+     * MEASURED, at the deep station, preset low, render scale held at 0.65
+     * (`.perf/presets-reach.json`):
+     *
+     *     170/384 (today)    2.01 ms   16.08 M tri
+     *     120/250 leaf 150   1.23 ms    6.73 M tri   58% fewer
+     *      90/180 leaf 110   1.03 ms    5.14 M tri   68%
+     *      60/120 leaf  90   0.72 ms    3.59 M tri   78%
+     *      60/120 leaf  60   0.75 ms    3.44 M tri   79%
+     *
+     * `ms = 0.44 + 0.103 × Mtri`, rms residual 0.078. 120 is the KNEE and the
+     * last row is why: taking the canopy in to 60 buys 0.03 ms and costs the
+     * silhouette of every tree you can see. Below about 4 M triangles this
+     * lever is spent, and what is left is the 0.44–0.88 ms intercept — terrain,
+     * sky, post, and the vertex cost of the trees still standing. None of that
+     * is fill, so render scale will not touch it either.
+     *
+     * WHERE IT PAYS LEAST IS WORTH KNOWING: looking straight up into the
+     * canopy, the leaves filling the screen are the ones directly overhead,
+     * which no reach setting removes. At that station a leafReach of 150 m
+     * deletes 44% of the triangles and buys nothing measurable. Reach cuts pay
+     * where the frame is vertex-bound and not where it is fill-bound, which is
+     * the exact opposite of every other knob on this page.
+     *
+     * IT IS USELESS WITHOUT THE FOG, and that pairing is the reason
+     * `fogDistance` stopped being flat. Fog transmits `exp(-(d·ρ)²)`, so hiding
+     * a reach of `d` needs `ρ >= sqrt(ln 255)/d = 2.354/d` — 0.0061 at 384 m,
+     * which sober density clears easily, and 0.0196 at 120 m, which is 2.1×
+     * sober. Cut the reach without thickening the haze and you do not get a
+     * fade, you get a hard-edged circular hole that follows the player.
+     */
+    id: 'treeReach',
+    group: 'graphics',
+    advanced: true,
+    label: 'Tree distance',
+    kind: 'enum',
+    options: [
+      { value: 120, label: 'Near' },
+      { value: 180, label: 'Short' },
+      { value: 250, label: 'Medium' },
+      { value: 384, label: 'Full' },
+    ],
+    presets: [120, 384, 384, 384, 384],
+    hint: 'How deep the wood is drawn. The only setting here that removes geometry rather than pixels.',
   },
   {
     id: 'particleDensity',
@@ -234,7 +427,20 @@ export const KNOBS = [
     min: 0,
     max: 1,
     step: 0.05,
-    presets: [0.3, 0.6, 1, 1],
+    /**
+     * THE CLOUD GOT BIGGER AND HIGH KEPT THE SAME NUMBER OF MOTES.
+     *
+     * The buffer went from 2600 to 3800 points, and the presets were re-fitted
+     * against the new total so that High still draws 2660 — within 2% of what
+     * it drew before, i.e. the frame High is defined as is unchanged — while
+     * Ultra draws all 3800 and Low and Medium land close to where they were.
+     * Anything else would have been a silent free upgrade for every tier, which
+     * is not a thing a quality ladder is allowed to do to a measured baseline.
+     *
+     * A draw range, not a rebuild: see the note in main.js. Motes are one draw
+     * call whatever this says, and the cost is the point sprites' fill.
+     */
+    presets: [0, 0.22, 0.42, 0.7, 1],
     format: (v) => `${Math.round(v * 100)}%`,
     hint: 'Airborne motes. They are what make still air look like air.',
   },
@@ -247,7 +453,7 @@ export const KNOBS = [
     min: 0.25,
     max: 1,
     step: 0.05,
-    presets: [0.5, 0.75, 1, 1],
+    presets: [0.35, 0.5, 0.75, 1, 1],
     format: (v) => `${Math.round(v * 100)}%`,
     hint: 'Grass and fern instances drawn per bucket.',
   },
@@ -332,7 +538,7 @@ export const KNOBS = [
      * true when it was written and had since become the exact bug it was
      * written to avoid: a control whose label misdescribes it. `sfxBus` now
      * carries the fish surfacing and the jetty creaking (ambience.js), and the
-     * pheasant's flush, the deer's bolt and bark, hooves and the squirrel's
+     * guan's wing drum, the deer's bolt and bark, hooves and the squirrel's
      * scold (wildlife.js) — all of them routed here by the explicit "would a
      * player point at it and say *that*" test in wildlife.js's header. Every
      * one of those goes through `createSpatial({ bus: engine.sfxBus })` and

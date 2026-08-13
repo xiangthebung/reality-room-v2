@@ -176,6 +176,7 @@ export function cardClump({
   segments = 3,
   flexBase = 0,
   bulge = 0,
+  lift = 1.4,
   scale,
 }) {
   const parts = [];
@@ -217,7 +218,7 @@ export function cardClump({
       // Same lift the sward uses, and for the same reason: a card lit from the
       // side has a horizontal normal and goes black, and undergrowth that goes
       // black reads as a hole in the floor rather than as a plant.
-      n.y += 1.4;
+      n.y += lift;
       if (bulge) {
         n.x += Math.cos(yaw + Math.PI / 2) * bulge;
         n.z += Math.sin(yaw + Math.PI / 2) * bulge;
@@ -293,6 +294,126 @@ export function saplingGeometry(rng, { height = 1.9, scale }) {
   });
   crown.deleteAttribute('aScale');
   crown.translate(0, stemH * 0.82, 0);
+  return setPlantScale(BufferGeometryUtils.mergeGeometries([stem, crown], false), scale);
+}
+
+/**
+ * ==== THE BAND NOBODY LIVED IN: 8-12 m ====================================
+ *
+ * A bare stem with a crown on top of it, and both halves of that sentence are
+ * cost decisions before they are drawing ones.
+ *
+ * WHAT THE MEASUREMENT ACTUALLY SAID. `sightlines.mjs` classifies what stopped
+ * each ray, and after the tree pass the wood's problem was no longer
+ * composition — bare-trunk hits had fallen from ~27% of the 2-12 m band to
+ * 2-6%, so rays were being stopped by things with leaves on them. What was left
+ * was a HOLE with a specific altitude: the median sight line at 8 m had gone
+ * from 23.6 m to 27.5 and at 12 m from 30.2 to 40.1, i.e. those two bands
+ * OPENED as the trees got shorter and their crowns clumped downward, and the
+ * escape rate at 12 m — rays that fly 120 m and hit nothing at all — went from
+ * 4% to 17%. The wood had grown a floor and a roof and lost its middle.
+ *
+ * SO THE SHAPE IS DICTATED BY WHERE THE HOLE IS, NOT BY TASTE. Filling 8-12 m
+ * with anything that also fills 1-4 m is the expensive way to do it: near-field
+ * cards are the ones that cover the screen, and the 0.6-4 m bands were already
+ * the best-filled part of the wood. A 7 m pole with 3.5 m fronds on the end of
+ * it puts every alpha-tested fragment exactly in the empty band and nothing
+ * anywhere else — and the pole itself is a six-sided open tube, which is the
+ * cheapest geometry in this project by the measured factor of 21 between solid
+ * triangles and alpha-tested ones. Sixty triangles of stem to carry forty-two
+ * of foliage into the right band is the whole trade.
+ *
+ * ONE LAYER FOR BOTH THE PALMS AND THE TREE FERNS, which is the same argument
+ * the ferns-became-heliconia block in scatter.js makes and for the same reason:
+ * a new streamed layer is a new InstancedMesh, a draw call, a slab and a packer
+ * repacked on every camera move. At the distance this band is READ from — 15 to
+ * 60 m, through fog — an Astrocaryum and a Cyathea are the same silhouette,
+ * which is a slim stem and a radial crown of pinnate fronds. The instance scale
+ * carries the difference: 0.58 is a 5 m tree fern under the canopy and 1.42 is
+ * a 12 m palm with its crown just under it, off one geometry and one draw.
+ *
+ * THE STEM TAKES THE FROND'S ALPHA-TESTED MATERIAL, and unlike the sapling —
+ * whose two-centimetre stem could get away with sampling whatever the shrub
+ * texture happened to have at its UVs — a six-metre pole cannot. Wherever the
+ * texture's alpha falls under 0.4 the stem is DISCARDED, so a stem mapped
+ * carelessly comes out with holes punched through it. `palmFrondTexture`
+ * therefore draws a deliberately opaque petiole across the bottom of the card
+ * and the stem's UVs are remapped into that strip — see `STEM_UV` below. It is
+ * the same colour a palm's stem is, because on the plant it is the same tissue.
+ */
+const STEM_U0 = 0.46;
+const STEM_U1 = 0.54;
+/**
+ * The top of this window is well clear of where the blade starts. The rachis
+ * is stroked with a round cap at its root, which paints a couple of pixels
+ * BELOW the base of the blade, and anything of the rachis's colour inside this
+ * window becomes a bright band right round the stem at whatever height it maps
+ * to.
+ */
+const STEM_V0 = 0.04;
+const STEM_V1 = 0.13;
+
+export function palmGeometry(rng, { height = 9, fronds = 7, scale }) {
+  const stemH = height * rngRange(rng, 0.66, 0.74);
+  const rBase = height * 0.019;
+  const stem = new THREE.CylinderGeometry(rBase * 0.62, rBase, stemH, 6, 6, true);
+  stem.translate(0, stemH / 2, 0);
+  {
+    const pos = stem.attributes.position;
+    const uv = stem.attributes.uv;
+    const flex = new Float32Array(pos.count);
+    const phase = new Float32Array(pos.count);
+    const ph = rng();
+    // A stem that is dead straight reads as scaffolding. This is a lean of
+    // about half a metre over nine, which is what a palm reaching for a gap in
+    // the canopy does, and the instance yaw points it in every direction.
+    const leanX = rngRange(rng, -0.06, 0.06);
+    const leanZ = rngRange(rng, -0.05, 0.05);
+    for (let v = 0; v < pos.count; v++) {
+      const t = clamp01(pos.getY(v) / stemH);
+      pos.setX(v, pos.getX(v) + t * t * height * leanX);
+      pos.setZ(v, pos.getZ(v) + t * t * height * leanZ);
+      /**
+       * BARELY ANY FLEX ON THE STEM, AND THE CROWN PICKS UP EXACTLY WHERE IT
+       * STOPS. A palm's trunk is a column that hardly moves and its crown
+       * thrashes; getting that the wrong way round gives you a rubber pole. The
+       * 0.28 at the top is the same number `flexBase` gets below, so the two
+       * halves of the plant do not tear apart at the join.
+       */
+      flex[v] = t * t * 0.28;
+      phase[v] = ph;
+      uv.setXY(v, STEM_U0 + (STEM_U1 - STEM_U0) * uv.getX(v), STEM_V0 + (STEM_V1 - STEM_V0) * t);
+    }
+    stem.setAttribute('aFlex', new THREE.BufferAttribute(flex, 1));
+    stem.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+    stem.computeVertexNormals();
+  }
+
+  /**
+   * `tilt: 1.0` is what makes this a crown rather than a shuttlecock.
+   *
+   * `cardClump` jitters the pitch by 0.55-1.25x, so the seven fronds come out
+   * between 31 and 72 degrees off vertical: two or three standing up out of the
+   * heart of the crown, the rest laid out and arching over. That spread is
+   * worth more than any amount of detail in the texture, because it is what
+   * gives the crown two and a half metres of VERTICAL extent — a flat rosette
+   * blocks one height and this blocks a band.
+   */
+  const crown = cardClump({
+    width: height * 0.18,
+    height: height * 0.36,
+    cards: fronds,
+    rng,
+    lean: 0.3,
+    tilt: 1.0,
+    spread: height * 0.016,
+    segments: 3,
+    flexBase: 0.3,
+    bulge: 0.55,
+    scale,
+  });
+  crown.deleteAttribute('aScale');
+  crown.translate(0, stemH * 0.985, 0);
   return setPlantScale(BufferGeometryUtils.mergeGeometries([stem, crown], false), scale);
 }
 
@@ -443,56 +564,80 @@ export function litterPatch(rng, size, scale) {
 // ---------------------------------------------------------------------------
 
 /**
- * Long meadow grass: the single most valuable thing added.
+ * The tall growth in a light gap: the single most valuable thing added.
  *
- * A taller, denser cousin of `grassBlade` in textures.js and it obeys the same
+ * A taller, denser cousin of `herbTuft` in textures.js and it obeys the same
  * two hard rules. THE BLADES MUST NOT MEET AT THE BOTTOM — each is a spindle
  * with a point at the root, or the bottom strip of the card becomes a solid
  * dark bar sitting under every tuft in the forest. And the tips must land
  * inside the card, or every clump gets the same dead straight vertical cut.
  *
  * Drawn on a 128×256 canvas rather than a square one because the card it goes
- * on is 0.9 m by 1.95 m; a square texture stretched onto that makes every blade
- * two and a half times too wide, which is not grass, it is a leek.
+ * on is 0.66 m by 1.95 m; a square texture stretched onto that makes every leaf
+ * three times too wide.
  *
- * NINETEEN BLADES AND HALF AGAIN AS WIDE, up from thirteen thin ones, because
- * the card under it grew from 0.62 × 1.15 m to 0.9 × 1.95 m. The blade width is
- * a fraction of the CANVAS, so the same fraction on a card 1.45× wider is a
- * blade 1.45× wider in the world — which is right, since this is now a plant
- * you stand in rather than one you look down at, and a 5 mm blade at arm's
- * length is a hair. Six more of them keeps the fill up, and the fill is what
- * makes this cheap: see the note at the head of this section.
+ *
+ * ==== IT WAS A HAY MEADOW AND A RAINFOREST DOES NOT HAVE ONE ==============
+ *
+ * This layer peaks at seventeen thousand instances and is what a glade in this
+ * wood IS, so it was half the answer to "some parts of the forest don't
+ * resemble a rainforest" — the other half being the sward, see `herbTuft`. It
+ * drew nineteen narrow spindles, bleached to straw at the tip, one in four
+ * carrying a nodding grass seed head. That is a July hay meadow in England,
+ * drawn to be one, and it was the most convincing thing in the frame.
+ *
+ * WHAT ACTUALLY FILLS A TROPICAL LIGHT GAP is Heliconia and its relatives: a
+ * clump of enormous paddle leaves on stiff stalks, two to four metres, all
+ * radiating from one crown at the ground. It is the plant every photograph of
+ * the inside of a jungle has in the foreground, and it is the same four control
+ * points as a grass blade with two of them moved.
+ *
+ *   NINE LEAVES, NOT NINETEEN, and each two and a half times as wide. Fill per
+ *   card is roughly held — nine blades at 0.2 of the canvas against nineteen at
+ *   0.072 — which matters, because fill is the cheap direction and thinning
+ *   this card would have cost more than the change is worth. See the note at
+ *   the head of this section.
+ *
+ *   THE BELLY MOVED FROM 0.42 TO 0.7. That single number is the difference
+ *   between a blade and a paddle: it is where the leaf is widest, and grass is
+ *   widest low and tapers for the rest of its length while a Heliconia holds
+ *   its full width almost to the tip and then rounds off.
+ *
+ *   NO SEED HEADS AND NO STRAW. The tip gradient now runs slightly DARKER than
+ *   the middle instead of 1.85× lighter. A pale tip on a tall plant is the read
+ *   "dry" and there is nothing dry here.
+ *
+ *   A MIDRIB AND TWO SPLITS. The splits are the detail worth the most per
+ *   stroke: a banana-family leaf tears along its veins in the wind, so a mature
+ *   clump is a set of ragged combs rather than clean paddles, and three
+ *   transparent slashes across a leaf turn a flat green shape into something
+ *   with a structure. They are drawn with `destination-out`, i.e. they cut the
+ *   alpha, so they cost nothing and read at any distance the card does.
  */
-export function tallGrassTexture({ key = 'meadow', seed = 'meadow', hue = 78, sat = 38, light = 40 } = {}) {
-  return memo(`tallgrass:${key}`, () => {
+export function heliconiaTexture({ key = 'meadow', seed = 'meadow', hue = 126, sat = 40, light = 36 } = {}) {
+  return memo(`heliconia:${key}`, () => {
     const w = 128;
     const h = 256;
     const c = canvas(w, h);
     const g = c.getContext('2d');
     const rng = makeRng(seed);
     const EDGE = w * 0.08;
-    for (let i = 0; i < 19; i++) {
-      const root = w * rngRange(rng, 0.14, 0.86);
-      const bw = w * rngRange(rng, 0.05, 0.095);
-      const reach = w * 0.4;
+    for (let i = 0; i < 9; i++) {
+      const root = w * rngRange(rng, 0.2, 0.8);
+      const bw = w * rngRange(rng, 0.15, 0.25);
+      const reach = w * 0.34;
       const bend = Math.max(
         EDGE + bw - root,
         Math.min(w - EDGE - bw - root, rngRange(rng, -reach, reach))
       );
-      // Tall grass is tall: most blades reach the top third of the card, and
-      // the few short ones are what give the tuft a base rather than a fringe.
-      // 0.78 rather than 0.72 now that the card is a 1.95 m plant — a short
-      // blade on this card is 0.8 m of grass, which is a whole tuft's worth of
-      // the OLD plant and does not need to be one blade in three.
-      const top = h * (rng() < 0.78 ? rngRange(rng, 0.02, 0.2) : rngRange(rng, 0.32, 0.58));
-      const belly = h - (h - top) * 0.42;
+      // Most leaves reach the top third of the card, and the few short ones are
+      // what give the clump a base rather than a fringe.
+      const top = h * (rng() < 0.7 ? rngRange(rng, 0.03, 0.22) : rngRange(rng, 0.34, 0.6));
+      const belly = h - (h - top) * 0.7;
       const grad = g.createLinearGradient(0, h, 0, top);
-      grad.addColorStop(0, `hsl(${hue - 10} ${sat}% ${light * 0.7}%)`);
-      grad.addColorStop(0.45, `hsl(${hue} ${sat + 5}% ${light * 1.2}%)`);
-      // Bleached at the tip. Long grass in summer is straw at the top and green
-      // at the bottom, and that vertical gradient is most of what distinguishes
-      // a hay meadow from a lawn.
-      grad.addColorStop(1, `hsl(${hue + 16} ${sat + 10}% ${light * 1.85}%)`);
+      grad.addColorStop(0, `hsl(${hue - 8} ${sat}% ${light * 0.62}%)`);
+      grad.addColorStop(0.45, `hsl(${hue} ${sat + 5}% ${light * 1.18}%)`);
+      grad.addColorStop(1, `hsl(${hue + 8} ${sat + 8}% ${light * 0.98}%)`);
       g.fillStyle = grad;
       g.beginPath();
       g.moveTo(root, h);
@@ -501,21 +646,39 @@ export function tallGrassTexture({ key = 'meadow', seed = 'meadow', hue = 78, sa
       g.closePath();
       g.fill();
 
-      // A seed head on one blade in four: a nodding spike of small marks. It is
-      // the detail that says "this is not mown", and it is six strokes.
-      if (rng() < 0.26) {
-        g.strokeStyle = `hsl(${hue + 22} ${sat - 8}% ${light * 1.6}%)`;
-        g.lineWidth = 2.2;
-        g.lineCap = 'round';
-        for (let k = 0; k < 7; k++) {
-          const t = k / 7;
-          const px = root + bend * (1 + t * 0.12);
-          const py = top - t * h * 0.055;
+      /**
+       * The midrib. On a leaf this wide it is a stalk, not a hair — but it is
+       * kept to a third of a stop above the lamina rather than the half stop the
+       * sward's uses, because there are nine of them on this card and a bright
+       * line down every one turns a clump of leaves back into a clump of
+       * grass. The mark has to say "there is a vein here", not draw it.
+       */
+      g.strokeStyle = `hsl(${hue - 6} ${sat - 14}% ${Math.min(52, light * 1.28)}%)`;
+      g.lineWidth = 2.6;
+      g.beginPath();
+      g.moveTo(root, h);
+      g.quadraticCurveTo(root + bend * 0.4, belly, root + bend, top);
+      g.stroke();
+
+      // Wind splits, on two leaves in three. `destination-out` cuts the alpha
+      // rather than painting over it, so a slash shows whatever is behind the
+      // card — which is what a torn leaf does.
+      if (rng() < 0.66) {
+        g.save();
+        g.globalCompositeOperation = 'destination-out';
+        g.lineCap = 'butt';
+        g.lineWidth = rngRange(rng, 1.6, 3.4);
+        for (let s = 0; s < 3; s++) {
+          const t = rngRange(rng, 0.25, 0.92);
+          const y = h + (top - h) * t;
+          const cx = root + bend * t;
+          const side = rng() < 0.5 ? -1 : 1;
           g.beginPath();
-          g.moveTo(px, py);
-          g.lineTo(px + (k % 2 ? 3.4 : -3.4), py - 4.5);
+          g.moveTo(cx, y);
+          g.lineTo(cx + side * bw * rngRange(rng, 0.7, 1.05), y + rngRange(rng, 4, 16));
           g.stroke();
         }
+        g.restore();
       }
     }
     featherEdges(g, w, h, w * 0.055, { keepBottom: true });
@@ -634,7 +797,7 @@ export function brambleTexture({ key = 'bramble', seed = 'bramble', hue = 116, s
  * instead of 0.42 puts noticeably more of the mass in the heart of the card,
  * which is where the depth writes come from.
  */
-export function shrubTexture({ key = 'shrub', seed = 'shrub', hue = 96, sat = 36, light = 42 } = {}) {
+export function shrubTexture({ key = 'shrub', seed = 'shrub', hue = 118, sat = 36, light = 42 } = {}) {
   return memo(`shrub:${key}`, () => {
     const size = 256;
     const c = canvas(size);
@@ -674,17 +837,32 @@ export function shrubTexture({ key = 'shrub', seed = 'shrub', hue = 96, sat = 36
 }
 
 /**
- * Wildflowers: slender stems with small blossoms on top.
+ * Understorey flowers: slender stems with small blossoms on them.
  *
  * DRAWN NEARLY WHITE, and that is what makes one layer into six kinds of
  * flower. The blossoms carry only lightness variation, so the per-instance
- * colour multiplied over them decides whether a patch is buttercup yellow,
- * campion pink, harebell blue or cow-parsley white — and a patch is one colour
- * because the instances in a patch share a hue, which is how flowers actually
- * grow. A hue baked into the texture would have needed a layer each.
+ * colour multiplied over them decides what colour a patch is — and a patch is
+ * one colour because the instances in a patch share a hue, which is how flowers
+ * actually grow. A hue baked into the texture would have needed a layer each.
  *
  * The foliage at the base stays green, so the tint has something to be a flower
  * against.
+ *
+ *
+ * THE HEAD IS A SPIKE NOW, NOT A DAISY, and that is a biome fix rather than a
+ * drawing preference. A radial rosette of five or six broad petals round a
+ * yellow boss is the flower of a temperate meadow herb — buttercup, daisy,
+ * campion — and it is what the eye has been trained on by every lawn it has
+ * ever seen. Almost nothing on a rainforest floor is shaped like that. What
+ * grows down there flowers in SPIKES and dangling clusters: Costus, Calathea,
+ * ginger, Psychotria, small bromeliads. So the same nine heads are drawn as a
+ * short vertical raceme of four to six blobs down the top of the stem, which is
+ * both cheaper (five arcs, no ellipse rotation) and unmistakably a different
+ * kind of plant.
+ *
+ * THE MECHANISM IS UNTOUCHED. The blobs are still drawn near-white with
+ * lightness variation only, so everything the per-patch tint could say before it
+ * can still say — this changes the SHAPE the colour arrives in and nothing else.
  */
 export function flowerTexture({ key = 'flower', seed = 'flower' } = {}) {
   return memo(`flower:${key}`, () => {
@@ -702,7 +880,7 @@ export function flowerTexture({ key = 'flower', seed = 'flower' } = {}) {
       g.save();
       g.translate(x, size);
       g.rotate(a);
-      g.fillStyle = `hsl(${100 + rngRange(rng, -10, 10)} 34% ${rngRange(rng, 22, 40)}%)`;
+      g.fillStyle = `hsl(${114 + rngRange(rng, -10, 10)} 34% ${rngRange(rng, 22, 40)}%)`;
       g.beginPath();
       g.moveTo(0, 0);
       g.quadraticCurveTo(-len * 0.3, -len * 0.6, 0, -len);
@@ -729,17 +907,27 @@ export function flowerTexture({ key = 'flower', seed = 'flower' } = {}) {
     }
 
     for (const [hx, hy, r] of heads) {
-      const petals = 5 + Math.floor(rng() * 2);
-      for (let p = 0; p < petals; p++) {
-        const a = (p / petals) * TAU + rng() * 0.3;
-        g.fillStyle = `hsl(45 12% ${rngRange(rng, 80, 100)}%)`;
+      /**
+       * Down the stem, not around a point. `hy` is the TOP of the stem, so the
+       * spike is built downward from it — a raceme opens from the bottom up and
+       * the unopened buds are the ones at the tip, which is why the blobs get
+       * smaller and dimmer as they go up.
+       */
+      const florets = 4 + Math.floor(rng() * 3);
+      for (let p = 0; p < florets; p++) {
+        const t = p / (florets - 1);
+        const bx = hx + Math.sin(p * 2.1) * r * 0.34;
+        const by = hy + (1 - t) * r * 1.5;
+        g.fillStyle = `hsl(45 12% ${rngRange(rng, 78, 100)}%)`;
         g.beginPath();
-        g.ellipse(hx + Math.cos(a) * r * 0.62, hy + Math.sin(a) * r * 0.62, r * 0.5, r * 0.36, a, 0, TAU);
+        g.arc(bx, by, r * (0.44 - t * 0.16), 0, TAU);
         g.fill();
       }
-      g.fillStyle = 'hsl(48 45% 62%)';
+      // A green bract at the foot of the spike. It is one arc and it is what
+      // stops a raceme reading as a string of beads on a wire.
+      g.fillStyle = 'hsl(104 32% 34%)';
       g.beginPath();
-      g.arc(hx, hy, r * 0.28, 0, TAU);
+      g.ellipse(hx, hy + r * 1.7, r * 0.5, r * 0.34, 0, 0, TAU);
       g.fill();
     }
     featherEdges(g, size, size, size * 0.05, { keepBottom: true });
@@ -815,16 +1003,42 @@ export function litterTexture({ key = 'litter', seed = 'litter' } = {}) {
 }
 
 /**
- * Reeds at the water's edge: tall, straight, and almost without taper.
+ * The bank of the stream: tall, straight, and almost without taper.
  *
- * The opposite drawing problem from grass. A blade of grass is a spindle that
- * bends; a reed is a strap that goes straight up for two metres and then nods,
- * and getting that stiffness right is what makes the bank of the stream look
- * like a bank rather than like the rest of the wood with its feet wet. Two of
- * them get a cattail — a dark brown sausage near the top — which is the single
- * most recognisable thing in this entire file.
+ * The opposite drawing problem from a leaf tuft. A blade is a spindle that
+ * bends; these are straps that go straight up for two metres and then nod, and
+ * getting that stiffness right is what makes the bank of the stream look like a
+ * bank rather than like the rest of the wood with its feet wet.
+ *
+ *
+ * ==== THE CATTAILS HAD TO GO ==============================================
+ *
+ * Two of the straps used to carry one — a dark brown sausage near the top — and
+ * the old comment called it "the single most recognisable thing in this entire
+ * file". It was, and that was the problem: Typha latifolia is a temperate marsh
+ * plant and a bulrush is the universal shorthand for a northern pond. Two of
+ * them on a card instanced twelve hundred times along every watercourse in the
+ * world put an English millpond in the middle of the Amazon, and it was the
+ * clearest single object anywhere in the report that parts of this forest do
+ * not look like a rainforest — precisely BECAUSE it was the most recognisable
+ * thing here. A cue that strong is worth as much pointing the wrong way as the
+ * right one.
+ *
+ * WHAT REPLACES IT is the same silhouette without the head: a stand of stiff
+ * straps, which on a tropical bank is Cyperus, wild cane or the strap leaves of
+ * a young Heliconia, and none of those has a mark on it that says a latitude.
+ * The head's strokes were not simply deleted — they were spent on making the
+ * straps read, since the sausage was carrying the whole card. Two changes:
+ *
+ *   A DARK MARGIN DOWN EACH EDGE. A strap leaf seen against the sky is a pale
+ *   blade with two dark lines on it, and that is what stops a stand of them
+ *   reading as a flat green rectangle at ten metres.
+ *
+ *   A THIRD OF THEM NOD HARDER. `top` used to be uniform, so the tops of all
+ *   twelve landed in the same 4% of the card and the stand had a dead flat
+ *   ceiling that reads as a hedge trimmed with shears.
  */
-export function reedTexture({ key = 'reed', seed = 'reed', hue = 84, sat = 30, light = 38 } = {}) {
+export function reedTexture({ key = 'reed', seed = 'reed', hue = 108, sat = 32, light = 38 } = {}) {
   return memo(`reed:${key}`, () => {
     const w = 128;
     const h = 256;
@@ -832,9 +1046,8 @@ export function reedTexture({ key = 'reed', seed = 'reed', hue = 84, sat = 30, l
     const g = c.getContext('2d');
     const rng = makeRng(seed);
     const EDGE = w * 0.1;
-    const heads = [];
     // Twelve straps rather than nine, on a card that grew from 0.5 × 1.7 m to
-    // 0.72 × 2.3 m. Reeds grow in stands so thick you cannot see the water
+    // 0.72 × 2.3 m. They grow in stands so thick you cannot see the water
     // through them, which is the one thing a bank has that the wood does not.
     for (let i = 0; i < 12; i++) {
       const root = w * rngRange(rng, 0.2, 0.8);
@@ -850,33 +1063,461 @@ export function reedTexture({ key = 'reed', seed = 'reed', hue = 84, sat = 30, l
        */
       const bw = w * rngRange(rng, 0.055, 0.09);
       const bend = Math.max(EDGE + bw - root, Math.min(w - EDGE - bw - root, rngRange(rng, -w * 0.22, w * 0.22)));
-      const top = h * rngRange(rng, 0.02, 0.2);
+      // One in three nods well short of the top, so the stand has a broken
+      // ceiling rather than a trimmed one.
+      const top = h * (rng() < 0.66 ? rngRange(rng, 0.02, 0.16) : rngRange(rng, 0.26, 0.5));
       const grad = g.createLinearGradient(0, h, 0, top);
       grad.addColorStop(0, `hsl(${hue - 12} ${sat}% ${light * 0.62}%)`);
       grad.addColorStop(0.5, `hsl(${hue} ${sat}% ${light * 1.15}%)`);
-      grad.addColorStop(1, `hsl(${hue + 14} ${sat + 6}% ${light * 1.5}%)`);
+      grad.addColorStop(1, `hsl(${hue + 10} ${sat + 6}% ${light * 1.35}%)`);
       g.fillStyle = grad;
       g.beginPath();
       g.moveTo(root, h);
-      // The belly is near the TOP, not a third of the way up: a reed holds its
+      // The belly is near the TOP, not a third of the way up: a strap holds its
       // width all the way and only narrows in the last few centimetres.
       g.quadraticCurveTo(root - bw, top + (h - top) * 0.12, root + bend, top);
       g.quadraticCurveTo(root + bw, top + (h - top) * 0.12, root, h);
       g.closePath();
       g.fill();
-      if (i < 2) heads.push([root + bend, top + h * 0.03, bw]);
-    }
-    for (const [hx, hy, bw] of heads) {
-      const grad = g.createLinearGradient(hx - bw, 0, hx + bw, 0);
-      grad.addColorStop(0, 'hsl(26 30% 16%)');
-      grad.addColorStop(0.45, 'hsl(28 34% 30%)');
-      grad.addColorStop(1, 'hsl(26 30% 18%)');
-      g.fillStyle = grad;
-      g.beginPath();
-      g.ellipse(hx, hy + h * 0.075, bw * 1.5, h * 0.075, 0, 0, TAU);
-      g.fill();
+
+      /**
+       * The two dark margins. Stroked as the SAME path the fill just used, at a
+       * line width the blade can carry, so they follow the leaf's own curve
+       * exactly — an edge drawn as two separate lines drifts off the silhouette
+       * wherever `bend` is large and reads as a stripe rather than as a rim.
+       */
+      g.strokeStyle = `hsl(${hue - 16} ${sat + 8}% ${light * 0.5}%)`;
+      g.lineWidth = 2;
+      g.stroke();
     }
     featherEdges(g, w, h, w * 0.06, { keepBottom: true });
+    return finish(c);
+  });
+}
+
+/**
+ * ONE PINNATE FROND, AND A STRIP OF STEM ALONG THE BOTTOM OF THE CARD.
+ *
+ * The card is the whole leaf: petiole at the bottom edge, rachis up the middle,
+ * twenty-six pairs of leaflets sweeping forward off it. Seven of these in a
+ * rosette is a palm crown, and the same seven at half the instance scale with a
+ * darker tint is a tree fern.
+ *
+ * THE PETIOLE IS LOAD-BEARING IN TWO DIFFERENT WAYS. On the plant it is the
+ * stalk, and drawing it fat is what stops a crown reading as leaves floating
+ * over a pole. In the geometry it is the only region of this canvas guaranteed
+ * to be fully opaque, and `palmGeometry` maps the whole six-metre stem into a
+ * narrow vertical strip of it — see `STEM_UV` there. An alpha-tested material
+ * DISCARDS wherever the texture is transparent, so a stem mapped anywhere else
+ * on this card would come out with holes punched down its length. The vertical
+ * streaking in it is therefore not decoration either: a vertical line on this
+ * canvas is a line of constant u, which wraps to a LENGTHWISE fibre up the
+ * stem, which is what the trunk of a palm and the trunk of a tree fern both
+ * actually look like. The horizontal gradient across it is the cylinder's own
+ * shading, dark-bright-dark around the circumference.
+ *
+ * DRAWN DENSE, like everything else in this file and for the measured reason at
+ * the head of the section: the leaflets overlap their neighbours rather than
+ * leaving daylight between them, because every gap is a discarded fragment that
+ * writes no depth, and this layer's whole job is to stop rays at 8-12 m.
+ */
+export function palmFrondTexture({ key = 'frond', seed = 'frond', hue = 116, sat = 42, light = 40 } = {}) {
+  return memo(`frond:${key}`, () => {
+    const w = 128;
+    const h = 256;
+    const c = canvas(w, h);
+    const g = c.getContext('2d');
+    const rng = makeRng(seed);
+    const mid = w / 2;
+    const baseY = h * 0.845;
+    const tipY = h * 0.045;
+
+    // ---- the petiole, and therefore the stem ------------------------------
+    const stalk = g.createLinearGradient(mid - 9, 0, mid + 9, 0);
+    stalk.addColorStop(0, 'hsl(66 13% 20%)');
+    stalk.addColorStop(0.44, 'hsl(58 16% 41%)');
+    stalk.addColorStop(1, 'hsl(66 11% 23%)');
+    g.fillStyle = stalk;
+    g.fillRect(mid - 9, baseY - 6, 18, h - baseY + 6);
+    g.lineCap = 'butt';
+    for (let i = 0; i < 7; i++) {
+      const fx = mid - 8 + rngRange(rng, 0.4, 16.2);
+      g.strokeStyle = `hsl(${rngRange(rng, 48, 74).toFixed(0)} ${rngRange(rng, 8, 20).toFixed(0)}% ${rngRange(rng, 16, 52).toFixed(0)}% / 0.55)`;
+      g.lineWidth = rngRange(rng, 0.9, 2.2);
+      g.beginPath();
+      g.moveTo(fx, h);
+      g.lineTo(fx + rngRange(rng, -1.2, 1.2), baseY - 6);
+      g.stroke();
+    }
+
+    // ---- the blade --------------------------------------------------------
+    const bend = rngRange(rng, -9, 9);
+    const rachisX = (t) => {
+      // One quadratic, evaluated rather than stroked, so a leaflet and the rib
+      // it grows off cannot disagree about where the rib is.
+      const u = 1 - t;
+      return u * u * mid + 2 * u * t * (mid + bend * 0.35) + t * t * (mid + bend);
+    };
+
+    const leaflet = (cx, cy, len, bw, ang, shade) => {
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(ang);
+      const grad = g.createLinearGradient(0, 0, 0, -len);
+      grad.addColorStop(0, `hsl(${hue - 12} ${sat}% ${Math.round(light * shade * 0.66)}%)`);
+      grad.addColorStop(0.55, `hsl(${hue} ${sat + 4}% ${Math.round(Math.min(66, light * shade * 1.16))}%)`);
+      grad.addColorStop(1, `hsl(${hue + 10} ${sat + 8}% ${Math.round(light * shade * 0.92)}%)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(0, 0);
+      // Holds its width most of the way and then points — a pinna, not a blade
+      // of grass. The same profile decision the reed straps record.
+      g.quadraticCurveTo(-bw, -len * 0.58, 0, -len);
+      g.quadraticCurveTo(bw, -len * 0.58, 0, 0);
+      g.fill();
+      g.restore();
+    };
+
+    const N = 30;
+    const maxLen = w * 0.4;
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1);
+      // A frond is widest a third of the way up and comes to a point; the
+      // exponent keeps the base pinnae substantial rather than vestigial.
+      const prof = Math.pow(Math.max(0, Math.sin(Math.PI * (0.13 + t * 0.87))), 0.55);
+      const len = maxLen * prof * rngRange(rng, 0.9, 1.08);
+      if (len < 3) continue;
+      const y = baseY + (tipY - baseY) * t;
+      const x0 = rachisX(t);
+      // Sweeping forward as they go up: 60 degrees off the rib at the base,
+      // 40 near the tip, which is what makes a frond look like it is reaching
+      // rather than like a feather duster.
+      const a = 1.05 - 0.33 * t;
+      const bw = 4.2 + 4.0 * prof;
+      for (const side of [-1, 1]) {
+        // One pinna in fourteen is missing. A frond that has been in the wind
+        // for a season has gaps in it, and a comb with no teeth missing is the
+        // single most synthetic thing a leaf can be.
+        if (rng() < 0.07) continue;
+        leaflet(
+          x0,
+          y,
+          len,
+          bw,
+          side * (a + rngRange(rng, -0.12, 0.12)),
+          rngRange(rng, 0.82, 1.28)
+        );
+      }
+    }
+
+    // The rachis last, over the leaflets, so it reads as the thing they are
+    // attached to. Tapering, and never brighter than the lamina by much — see
+    // the midrib note on the heliconia.
+    g.lineCap = 'round';
+    for (let i = 0; i < 5; i++) {
+      const t0 = i / 5;
+      const t1 = (i + 1) / 5;
+      g.strokeStyle = `hsl(${hue - 8} ${sat - 16}% ${Math.round(Math.min(54, light * (1.18 - t0 * 0.2)))}%)`;
+      g.lineWidth = 4.6 * (1 - t0 * 0.82);
+      g.beginPath();
+      g.moveTo(rachisX(t0), baseY + (tipY - baseY) * t0);
+      g.lineTo(rachisX(t1), baseY + (tipY - baseY) * t1);
+      g.stroke();
+    }
+
+    featherEdges(g, w, h, w * 0.05, { keepBottom: true });
+    return finish(c);
+  });
+}
+
+/**
+ * A BROMELIAD ROSETTE, AND THE ONE PLACE IN THE FILE WHERE COLOUR IS THE POINT.
+ *
+ * WHY THE TINT IS NEARLY WHITE HERE AND NOWHERE ELSE. Every other card layer
+ * draws a green texture and multiplies a green instance tint over a green
+ * material colour, which is fine for green and arrives at mud for anything
+ * else: scarlet at sRGB (0.90, 0.12, 0.08) under this file's usual 0x62825a
+ * material comes out #560A06, a dark maroon. Three multiplied factors is the
+ * trap the bramble block records. So the colour is baked into the CANVAS, the
+ * material colour is 0xffffff and the instance tint carries lightness and a few
+ * degrees of hue and nothing else. The texture is the only thing deciding what
+ * colour a bromeliad is, which is the only arrangement in which it can be red.
+ *
+ * CHECKED IN LUMA, not by eye — the rule this project keeps relearning is that
+ * moving a colour by eye makes it darker and darker down here reads as a hole.
+ * The scarlet heart is hsl(6 86% 52%), Rec.709 luma 101; the green straps run
+ * 28-44% lightness, luma 88-125. The red is INSIDE the range of the leaves it
+ * sits among, so it reads as a flower and not as a puncture.
+ *
+ * The cross-banding is four grey-green strokes and it is the cheapest thing on
+ * this canvas: Aechmea and Billbergia are banded, nothing temperate is, and a
+ * band survives being three pixels wide at thirty metres in a way that a shape
+ * does not.
+ */
+export function bromeliadTexture({ key = 'bromeliad', seed = 'bromeliad' } = {}) {
+  return memo(`bromeliad:${key}`, () => {
+    const size = 256;
+    const c = canvas(size);
+    const g = c.getContext('2d');
+    const rng = makeRng(seed);
+    const rootX = size / 2;
+    const rootY = size * 0.98;
+
+    const strap = (ang, len, bw, hue, sat, light, flush) => {
+      g.save();
+      g.translate(rootX, rootY);
+      g.rotate(ang);
+      const grad = g.createLinearGradient(0, 0, 0, -len);
+      // Wine at the throat, green up the blade, a hint of bronze at the tip.
+      grad.addColorStop(0, `hsl(${flush ? 8 : hue - 14} ${flush ? 62 : sat}% ${flush ? 30 : light * 0.62}%)`);
+      grad.addColorStop(0.34, `hsl(${hue} ${sat}% ${light}%)`);
+      grad.addColorStop(0.82, `hsl(${hue + 6} ${sat + 6}% ${light * 1.12}%)`);
+      grad.addColorStop(1, `hsl(${hue - 26} ${sat + 10}% ${light * 0.78}%)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      /**
+       * A BLUNT TIP, NOT A POINT, and it is the difference between a bromeliad
+       * and an agave. The first build drew each strap as a spindle coming to a
+       * point and the rosette read as a spiky desert succulent — a green
+       * starburst — which is a plant from the wrong continent AND the wrong
+       * biome. A Neoregelia leaf is a strap that holds its width to within a
+       * couple of centimetres of the end and then rounds off, so the last 12%
+       * of the path is a flat cap rather than a vertex. It also fills more of
+       * the card, which is the cheap direction.
+       */
+      g.moveTo(-bw * 0.34, 0);
+      g.quadraticCurveTo(-bw, -len * 0.7, -bw * 0.34, -len * 0.94);
+      g.quadraticCurveTo(0, -len * 1.02, bw * 0.34, -len * 0.94);
+      g.quadraticCurveTo(bw, -len * 0.7, bw * 0.34, 0);
+      g.closePath();
+      g.fill();
+      // The bands.
+      g.strokeStyle = `hsl(${hue + 14} 12% ${Math.round(light * 1.7)}% / 0.5)`;
+      g.lineWidth = 2.4;
+      for (let b = 0; b < 4; b++) {
+        const ly = -len * (0.24 + b * 0.19);
+        g.beginPath();
+        g.moveTo(-bw * 0.72, ly);
+        g.lineTo(bw * 0.72, ly - 1.5);
+        g.stroke();
+      }
+      g.restore();
+    };
+
+    // The outer rosette. Laid down almost flat at the edges, which is what
+    // makes a bank of these read as a mat rather than as a row of tufts.
+    for (let i = 0; i < 18; i++) {
+      const ang = rngRange(rng, -1.5, 1.5);
+      const lay = Math.abs(ang) / 1.5;
+      strap(
+        ang,
+        size * rngRange(rng, 0.31, 0.54) * (1 - lay * 0.2),
+        size * rngRange(rng, 0.052, 0.085),
+        112 + rngRange(rng, -8, 10),
+        Math.round(rngRange(rng, 32, 48)),
+        Math.round(rngRange(rng, 29, 39) + (1 - lay) * 4),
+        lay < 0.34 && rng() < 0.8
+      );
+    }
+
+    /**
+     * The scarlet heart. Five short upright bracts rather than one blob,
+     * because the thing that reads at thirty metres is a bright shape with
+     * structure in it — a solid disc of red reads as a berry or as a bug.
+     *
+     * SHORTER THAN THE STRAPS AND HELD INSIDE THEM, which was the correction.
+     * At 0.16-0.30 of the card they stood proud of the rosette and every plant
+     * read as a green starburst with a flame coming out of it — the red was
+     * competing with the leaves for the silhouette rather than sitting in the
+     * middle of them. A bromeliad's inflorescence is DOWN IN the cup, which is
+     * the whole point of the cup; keeping it there also stops a hundred and
+     * eighty of these reading as scattered warning lights.
+     */
+    for (let i = 0; i < 5; i++) {
+      const ang = rngRange(rng, -0.55, 0.55);
+      const len = size * rngRange(rng, 0.12, 0.23);
+      const bw = size * rngRange(rng, 0.028, 0.046);
+      g.save();
+      g.translate(rootX + rngRange(rng, -8, 8), rootY - size * 0.06);
+      g.rotate(ang);
+      const grad = g.createLinearGradient(0, 0, 0, -len);
+      grad.addColorStop(0, 'hsl(0 72% 34%)');
+      grad.addColorStop(0.5, 'hsl(6 86% 52%)');
+      grad.addColorStop(1, `hsl(${rngRange(rng, 18, 44).toFixed(0)} 90% 60%)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.quadraticCurveTo(-bw, -len * 0.5, 0, -len);
+      g.quadraticCurveTo(bw, -len * 0.5, 0, 0);
+      g.fill();
+      g.restore();
+    }
+
+    featherEdges(g, size, size, size * 0.05, { keepBottom: true });
+    return finish(c);
+  });
+}
+
+/**
+ * ONE ENORMOUS LEAF ON A STALK, WITH A HELICONIA BRACT BESIDE IT.
+ *
+ * The strongest "this is a jungle and not a wood" cue available per unit of
+ * cost, and the reason is the measured one that governs this whole file: a big
+ * solid card is CHEAPER per square metre of coverage than several small wispy
+ * ones, because the fragments in the middle of it write depth and occlude what
+ * is behind them while a discard defeats early-Z. So this is three cards, each
+ * more than a metre and a half across, at eleven-metre spacing — the fewest and
+ * largest things in the understorey.
+ *
+ * THE PERFORATIONS ARE THE WHOLE READ AND THEY ARE THE ONE PLACE FILL IS SPENT.
+ * A cordate leaf with holes in it is a Monstera and nothing else on earth; the
+ * same leaf without them is a lily pad on a stick. They are cut with
+ * `destination-out`, so they cost four ellipses of drawing and some discarded
+ * fragments, and there are four of them rather than a dozen for exactly that
+ * reason.
+ *
+ * The bract carries colour on the same terms the bromeliad does — baked into
+ * the canvas, white material, near-neutral instance tint — because a scarlet
+ * multiplied through a green material and a green tint is a dark maroon.
+ */
+export function giantLeafTexture({ key = 'bigleaf', seed = 'bigleaf', hue = 110, sat = 50, light = 34 } = {}) {
+  return memo(`bigleaf:${key}`, () => {
+    const size = 256;
+    const c = canvas(size);
+    const g = c.getContext('2d');
+    const rng = makeRng(seed);
+    const bx = size * 0.48;
+    /**
+     * THE BLADE STARTS AT 0.76 OF THE CARD, NOT 0.6, AND THAT IS THE WHOLE
+     * SILHOUETTE FIX.
+     *
+     * At 0.6 the petiole was forty per cent of the card — a long dark wire with
+     * a leaf on the end — and three of those in a rosette read as a lollipop
+     * stand rather than as a plant. The real proportion on a Philodendron or a
+     * Xanthosoma is a stalk about a quarter of the whole and a blade that is
+     * most of it, which is also the cheap way round: the blade is the part that
+     * fills solid and writes depth, and the stalk is the part that is nearly
+     * all discarded fragments around a two-pixel line.
+     */
+    const by = size * 0.76;
+    const tx = size * 0.53;
+    const ty = size * 0.06;
+
+    // The petiole. Long and visible: an aroid holds its leaf out on a stalk
+    // half the length of the blade, and that gap is most of the silhouette.
+    g.lineCap = 'round';
+    g.strokeStyle = `hsl(${hue - 18} 26% 26%)`;
+    g.lineWidth = 7;
+    g.beginPath();
+    g.moveTo(size * 0.5, size);
+    g.quadraticCurveTo(size * 0.46, size * 0.8, bx, by);
+    g.stroke();
+
+    // The blade.
+    const spread = size * 0.43;
+    const grad = g.createLinearGradient(0, by, 0, ty);
+    grad.addColorStop(0, `hsl(${hue - 10} ${sat}% ${light * 0.7}%)`);
+    grad.addColorStop(0.45, `hsl(${hue} ${sat + 4}% ${light * 1.24}%)`);
+    grad.addColorStop(1, `hsl(${hue + 8} ${sat + 8}% ${light * 1.02}%)`);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(bx, by);
+    g.bezierCurveTo(bx - spread, by - size * 0.04, bx - spread * 0.94, ty + size * 0.24, tx, ty);
+    g.bezierCurveTo(bx + spread * 0.94, ty + size * 0.24, bx + spread, by - size * 0.04, bx, by);
+    g.fill();
+
+    // Midrib and laterals. Half a stop above the lamina, no more — see the
+    // heliconia's midrib note, which is the same trap at a different scale.
+    g.strokeStyle = `hsl(${hue - 6} ${sat - 18}% ${Math.min(58, light * 1.5)}%)`;
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(bx, by);
+    g.quadraticCurveTo(bx + (tx - bx) * 0.4, (by + ty) * 0.5, tx, ty);
+    g.stroke();
+    g.lineWidth = 1.6;
+    for (let i = 1; i < 8; i++) {
+      const t = i / 8;
+      const mxp = bx + (tx - bx) * t;
+      const myp = by + (ty - by) * t;
+      const reach = spread * Math.sin(Math.PI * (0.16 + t * 0.78)) * 0.86;
+      for (const side of [-1, 1]) {
+        g.beginPath();
+        g.moveTo(mxp, myp);
+        g.quadraticCurveTo(mxp + side * reach * 0.55, myp - size * 0.02, mxp + side * reach, myp - size * 0.07);
+        g.stroke();
+      }
+    }
+
+    // Four holes and two marginal splits, cut rather than painted.
+    g.save();
+    g.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 4; i++) {
+      const t = rngRange(rng, 0.22, 0.72);
+      const side = i % 2 ? 1 : -1;
+      const mxp = bx + (tx - bx) * t;
+      const myp = by + (ty - by) * t;
+      const reach = spread * Math.sin(Math.PI * (0.16 + t * 0.78)) * 0.86;
+      g.beginPath();
+      g.ellipse(
+        mxp + side * reach * rngRange(rng, 0.34, 0.62),
+        myp - size * rngRange(rng, 0.01, 0.05),
+        size * rngRange(rng, 0.035, 0.058),
+        size * rngRange(rng, 0.018, 0.03),
+        side * 0.4,
+        0,
+        TAU
+      );
+      g.fill();
+    }
+    g.lineCap = 'butt';
+    g.lineWidth = size * 0.028;
+    for (let i = 0; i < 2; i++) {
+      const t = rngRange(rng, 0.3, 0.66);
+      const side = i ? 1 : -1;
+      const mxp = bx + (tx - bx) * t;
+      const myp = by + (ty - by) * t;
+      const reach = spread * Math.sin(Math.PI * (0.16 + t * 0.78)) * 0.86;
+      g.beginPath();
+      g.moveTo(mxp + side * reach * 1.05, myp - size * 0.05);
+      g.lineTo(mxp + side * reach * 0.32, myp - size * 0.02);
+      g.stroke();
+    }
+    g.restore();
+
+    /**
+     * The Heliconia. A short stem with five alternating bracts down it, which
+     * is the exact silhouette of a lobster claw and is the one flower shape
+     * that could not be mistaken for anything in a temperate wood.
+     */
+    const hx = size * 0.72;
+    const hy = size * 0.96;
+    g.lineCap = 'round';
+    g.strokeStyle = `hsl(${hue - 12} 30% 26%)`;
+    g.lineWidth = 4;
+    g.beginPath();
+    g.moveTo(hx + 6, size);
+    g.quadraticCurveTo(hx, size * 0.9, hx - 3, size * 0.74);
+    g.stroke();
+    for (let i = 0; i < 5; i++) {
+      const t = i / 4;
+      const px = hx + 6 - t * 9;
+      const py = hy - t * size * 0.22;
+      const side = i % 2 ? 1 : -1;
+      const len = size * (0.095 - t * 0.026);
+      const grd = g.createLinearGradient(px, py, px + side * len, py - len * 0.4);
+      grd.addColorStop(0, 'hsl(2 74% 36%)');
+      grd.addColorStop(0.55, 'hsl(6 88% 51%)');
+      grd.addColorStop(1, 'hsl(40 92% 58%)');
+      g.fillStyle = grd;
+      g.beginPath();
+      g.moveTo(px, py);
+      g.quadraticCurveTo(px + side * len * 0.7, py - len * 0.62, px + side * len, py - len * 0.28);
+      g.quadraticCurveTo(px + side * len * 0.55, py + len * 0.16, px, py + len * 0.2);
+      g.closePath();
+      g.fill();
+    }
+
+    featherEdges(g, size, size, size * 0.05, { keepBottom: true });
     return finish(c);
   });
 }

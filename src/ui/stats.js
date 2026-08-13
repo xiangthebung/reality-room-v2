@@ -44,11 +44,46 @@
  * interval to be thrown away entirely — not plotted, not folded into any
  * average — the same fix as the Auto governor's own PerfWindow in quality.js,
  * for the same reason ("every one of those intervals looks like a
- * catastrophic frame"). A generous MAX_PLOTTABLE_MS backstops the cases that
- * do not fire that event at all (a debugger pause, the dev perf console
- * holding the renderer via `RR.perf`) — this engine's own worst measured
- * stalls top out in the hundreds of milliseconds, so 2 seconds is headroom,
- * not a threshold anything real should ever cross.
+ * catastrophic frame"). Callers who know something this cannot see say so
+ * explicitly through `discard()`: the gate lifting, and the dev perf console
+ * releasing the renderer it was holding via `RR.perf`.
+ *
+ * AN EXCLUSION BY DURATION IS THE THIRD TIME THIS FILE HID A STALL.
+ *
+ * The rule above used to have a fourth clause — `realMs > MAX_PLOTTABLE_MS`,
+ * 2 seconds — defended in this header as "headroom, not a threshold anything
+ * real should ever cross". It was crossed. Driving the live panel with a
+ * 2500 ms freeze produced an unbroken 60 fps line, an unmoved `max ms`, and a
+ * `0.1% low` that never heard about it: the sample was not clamped or
+ * flattened, it was dropped, so the panel reported a perfectly healthy machine
+ * across a two-and-a-half second stop. That is the SAME failure as the
+ * `dt > 250 ms` guard the paragraph above records — a duration filter deciding
+ * on its own that the worst frame of the session cannot have been a frame —
+ * and this engine had already been measured stalling 1.7 s during its own load,
+ * so the number was never the headroom it claimed to be either.
+ *
+ * There is now no duration above which a frame is quietly assumed not to have
+ * happened. NOT_A_FRAME_MS survives only as a sanity backstop for the one case
+ * no signal covers — a debugger sitting on a breakpoint, an OS suspend that
+ * fires no visibility event — and it sits an order of magnitude clear of
+ * anything this engine has ever produced, because everything below it is now
+ * plotted, counted, and named. What a very long frame no longer gets to do is
+ * scroll the whole window away: one frame may commit at most
+ * MAX_FREEZE_COLUMNS of them, so half the graph always survives to show what
+ * the framerate was before the stop.
+ *
+ * AND A FREEZE IS NOT LEFT TO A TWO-PIXEL NOTCH.
+ *
+ * The graph scrolls at PX_PER_SECOND, so a 100 ms freeze — the shortest hitch
+ * a player actually feels as one — owes barely two columns. Drawn as nothing
+ * but a dip in a 40 px line it is real, honest, and still missable at a glance,
+ * which is the same complaint as a hidden stall with a different mechanism. So
+ * a frame at or over FREEZE_MS is marked rather than merely plotted: every
+ * column it owes gets a full-height red band behind the trace, the trace over
+ * it is drawn in alarm red at double width, and the panel prints the freeze in
+ * words under the graph — `FROZE 247 ms` while the dip is still inside the
+ * visible window, then a running session tally after it scrolls off. Nothing
+ * about a stall now depends on the eye catching two pixels.
  *
  * THE GRAPH SCROLLS BY WALL-CLOCK TIME, NOT BY FRAME.
  *
@@ -118,14 +153,34 @@ const READOUT_SECONDS = 0.5;
  */
 const RING_CAPACITY = 16384;
 /**
- * An interval this long was not a frame — a tab switch that `visibilitychange`
- * missed, a debugger pause, the dev perf console holding the renderer. This
- * engine's own worst measured stalls (a cold shader compile) top out in the
- * hundreds of milliseconds, so this is headroom, not a threshold a real frame
- * should ever reach.
+ * The last resort, and NOT a freeze filter — see the header. Nothing this
+ * engine can do to a frame comes near it: its worst measured stall is 1.7 s
+ * during load, and the 2 s version of this constant silently swallowed real
+ * multi-second freezes for as long as it existed. What is left above this line
+ * is a debugger parked on a breakpoint or a machine coming back from suspend
+ * without a visibility event, where the interval is not a frame in any sense
+ * and would poison the 0.1% low for minutes.
  */
-const MAX_PLOTTABLE_MS = 2000;
+const NOT_A_FRAME_MS = 30000;
+/**
+ * A frame at or over this is a FREEZE: banded, coloured and named rather than
+ * left as a dip. 100 ms is roughly where a hitch stops being a dropped frame
+ * and becomes something a player would describe as the game stopping.
+ */
+const FREEZE_MS = 100;
+/**
+ * Most columns one frame may scroll the graph by. Without it a single
+ * multi-second stall scrolls every healthy sample off the canvas and the panel
+ * shows nothing but the freeze — the "before" is the half of the picture that
+ * makes a freeze legible. Half the width is 4 s at PX_PER_SECOND, so every
+ * freeze short of that still has width tracking duration exactly; past it the
+ * band saturates and the readout under the graph carries the real number.
+ */
+const MAX_FREEZE_COLUMNS = Math.floor(GRAPH_W / 2);
 const BG = '#0c0f0e';
+/** The trace over a freeze, and the band behind it. Nothing else in the panel is this colour. */
+const FREEZE_INK = '#ff4438';
+const FREEZE_BAND = 'rgba(255, 68, 56, 0.45)';
 
 function colorFor(fps) {
   if (fps >= 55) return '#7fd8a0';
@@ -166,6 +221,20 @@ export class StatsPanel {
     this._low1Fps = 0;
     this._low01Fps = 0;
 
+    /**
+     * The freeze tally, kept for the session rather than for the graph's
+     * window: "it froze three times since I turned this on" is the sentence a
+     * player is trying to arrive at, and the graph can only hold the last
+     * SECONDS_VISIBLE seconds of it. Deliberately NOT reset by `_clearGraph`.
+     */
+    this._freezeCount = 0;
+    this._lastFreezeMs = 0;
+    this._worstFreezeMs = 0;
+    /** performance.now() of the last freeze, so the badge knows when its dip has scrolled off. */
+    this._lastFreezeAt = -Infinity;
+    /** Last string written to the badge, so the common case touches no DOM. */
+    this._freezeText = '';
+
     const el = document.createElement('div');
     el.id = 'stats';
     el.hidden = true;
@@ -183,6 +252,7 @@ export class StatsPanel {
         <b id="stats-low01">–</b><span>0.1% low</span>
       </div>
       <canvas id="stats-graph"></canvas>
+      <div id="stats-freeze" hidden></div>
     `;
     document.body.appendChild(el);
     this.el = el;
@@ -192,6 +262,7 @@ export class StatsPanel {
     this._maxEl = el.querySelector('#stats-max');
     this._low1El = el.querySelector('#stats-low1');
     this._low01El = el.querySelector('#stats-low01');
+    this._freezeEl = el.querySelector('#stats-freeze');
 
     const canvas = el.querySelector('#stats-graph');
     canvas.width = GRAPH_W * this._dpr;
@@ -224,7 +295,13 @@ export class StatsPanel {
      * below — because unlike the graph's timeline they are a trailing summary
      * by construction, and RING_CAPACITY already bounds how stale they can be.
      */
-    if (on && !this.visible) this._clearGraph();
+    if (on && !this.visible) {
+      this._clearGraph();
+      // The percentiles are only recomputed while visible (see `update`), so
+      // catch them up once here rather than showing the reader whatever was
+      // last computed the previous time the panel was open.
+      this._recomputeStats();
+    }
     this.visible = on;
     this.el.hidden = !on;
   }
@@ -261,11 +338,17 @@ export class StatsPanel {
     const realMs = now - this._lastReal;
     this._lastReal = now;
 
-    if (this._discardNext || document.hidden || realMs > MAX_PLOTTABLE_MS) {
+    if (this._discardNext || document.hidden) {
       this._discardNext = false;
       return;
     }
-    if (realMs <= 0) return;
+    /**
+     * The only two intervals thrown away are the ones nobody claims were
+     * frames. A long one is not among them — see the header: the clause that
+     * used to drop everything over 2 s is what made a 2500 ms freeze read as a
+     * flawless 60 fps.
+     */
+    if (realMs <= 0 || realMs > NOT_A_FRAME_MS) return;
 
     this._frames += 1;
     this._accum += realMs / 1000;
@@ -278,7 +361,37 @@ export class StatsPanel {
       this._fps = this._frames / this._accum;
       this._frames = 0;
       this._accum = 0;
-      this._recomputeStats();
+      /**
+       * ONLY WHEN SOMEBODY IS LOOKING.
+       *
+       * The accumulators above must keep running with the panel hidden — that
+       * is the header's argument and it is right, a freeze during the ten
+       * minutes the overlay was off still happened. `_recomputeStats` is not
+       * one of them. It copies the 16 384-entry ring into a scratch buffer and
+       * SORTS it, to produce percentiles that are read by nothing until the
+       * panel is drawn, and it was running twice a second in every session
+       * forever because it sat above the `visible` guard.
+       *
+       * That is a periodic 64 KB copy and an n log n sort landing on the frame
+       * thread — which on a 240 Hz panel is more than a whole frame, twice a
+       * second, manufactured by the instrument that exists to report the 1%
+       * low. `setVisible` recomputes on the way in, so the first painted frame
+       * is still correct rather than showing the previous half-second.
+       */
+      if (this.visible) this._recomputeStats();
+    }
+
+    /**
+     * Counted here rather than in the drawing code below, so the tally is the
+     * session's and not the overlay's: a freeze during the ten minutes somebody
+     * had the panel switched off still happened, and `FROZE` appearing the
+     * moment they switch it on is the honest reading.
+     */
+    if (realMs >= FREEZE_MS) {
+      this._freezeCount += 1;
+      this._lastFreezeMs = realMs;
+      this._lastFreezeAt = now;
+      if (realMs > this._worstFreezeMs) this._worstFreezeMs = realMs;
     }
 
     if (!this.visible) return;
@@ -293,6 +406,7 @@ export class StatsPanel {
     this._maxEl.style.color = colorFor(1000 / this._maxMs);
     this._low1El.style.color = colorFor(this._low1Fps);
     this._low01El.style.color = colorFor(this._low01Fps);
+    this._paintFreezeBadge(now);
 
     const fps = 1000 / realMs;
     if (fps < this._bucketWorst) this._bucketWorst = fps;
@@ -329,12 +443,46 @@ export class StatsPanel {
      */
     if (this._scrollAccum >= 1) {
       const worst = this._bucketWorst;
-      while (this._scrollAccum >= 1) {
-        this._plot(worst);
-        this._scrollAccum -= 1;
-      }
+      const owed = Math.floor(this._scrollAccum);
+      this._scrollAccum -= owed;
+      /**
+       * The debt is paid down in full above and only DRAWN up to the cap, which
+       * is the whole difference between "the graph stopped scrolling for a
+       * while" and "the graph is a solid red wall with no history left in it".
+       * See MAX_FREEZE_COLUMNS.
+       */
+      const columns = Math.min(owed, MAX_FREEZE_COLUMNS);
+      for (let i = 0; i < columns; i++) this._plot(worst);
       this._bucketWorst = Infinity;
     }
+  }
+
+  /**
+   * The freeze called out in words, under the graph.
+   *
+   * Two states, because they answer two different questions. While the dip is
+   * still inside the graph's own window the badge names the frame the player
+   * just felt — `FROZE 247 ms`, lit, sitting directly beneath the band that
+   * drew it. Once that has scrolled off it becomes the session's tally, dimmed:
+   * how many times, and how bad the worst one was. Hidden entirely until the
+   * first freeze, so a clean session carries no alarm furniture at all.
+   */
+  _paintFreezeBadge(now) {
+    const el = this._freezeEl;
+    if (!this._freezeCount) return;
+    const hot = now - this._lastFreezeAt < SECONDS_VISIBLE * 1000;
+    const text = hot
+      ? `FROZE ${this._lastFreezeMs.toFixed(0)} ms`
+      : `${this._freezeCount} freeze${this._freezeCount === 1 ? '' : 's'} · worst ${this._worstFreezeMs.toFixed(0)} ms`;
+    if (text !== this._freezeText) {
+      this._freezeText = text;
+      el.textContent = text;
+    }
+    if (el.hidden) el.hidden = false;
+    // `hot` also drives the panel's own border — a freeze should be visible in
+    // peripheral vision, not only to somebody already reading the numbers.
+    el.classList.toggle('hot', hot);
+    this.el.classList.toggle('froze', hot);
   }
 
   /**
@@ -384,18 +532,47 @@ export class StatsPanel {
     ctx.fillStyle = BG;
     ctx.fillRect(w - step, 0, step, h);
 
+    /**
+     * A freeze gets the whole column, not just its own end of it. At
+     * PX_PER_SECOND a 100 ms frame is two pixels wide, and two pixels of dip at
+     * the bottom of a dark box is exactly the kind of thing an eye slides over
+     * — a full-height band in a colour used for nothing else does not slide,
+     * and it scrolls left with the trace as one object because the shift above
+     * carries it. Drawn before the reference tick and the line so both still
+     * read on top of it.
+     */
+    const freeze = 1000 / fps >= FREEZE_MS;
+    if (freeze) {
+      ctx.fillStyle = FREEZE_BAND;
+      ctx.fillRect(w - step, 0, step, h);
+    }
+
     const refY = h - (REFERENCE_FPS / MAX_FPS) * h;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
     ctx.fillRect(w - step, refY, step, Math.max(1, step * 0.6));
 
     const y = h - Math.min(1, fps / MAX_FPS) * h;
     const fromY = this._lastY === null ? y : this._lastY;
-    ctx.strokeStyle = colorFor(fps);
-    ctx.lineWidth = Math.max(1, step);
+    ctx.strokeStyle = freeze ? FREEZE_INK : colorFor(fps);
+    ctx.lineWidth = Math.max(1, step * (freeze ? 2 : 1));
+    /**
+     * The doubled width is emphasis, and emphasis must not spill. A stroke that
+     * wide reaches a device pixel past each end of its path, so it would paint
+     * the column to its left — which belongs to an earlier frame that may have
+     * been perfectly healthy — in the one colour this panel reserves for a
+     * freeze. Clipped to the strip this call owns.
+     */
+    if (freeze) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(w - step, 0, step, h);
+      ctx.clip();
+    }
     ctx.beginPath();
     ctx.moveTo(w - step, fromY);
     ctx.lineTo(w, y);
     ctx.stroke();
+    if (freeze) ctx.restore();
     this._lastY = y;
   }
 }

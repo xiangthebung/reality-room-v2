@@ -151,6 +151,10 @@ function flameMaterial() {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     side: THREE.DoubleSide,
+    // Additive blending is commutative, so three's BackSide/FrontSide split
+    // buys nothing here but a second draw call and a uniform re-upload every
+    // frame. See the shaft material in atmosphere.js for the full reasoning.
+    forceSinglePass: true,
     toneMapped: false,
   });
 }

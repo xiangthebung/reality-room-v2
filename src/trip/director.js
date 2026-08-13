@@ -489,8 +489,10 @@ export class Director {
      */
     this.ego = { ...EGO_DEFAULT };
 
-    this._fogColour = new THREE.Color();
-    this._tmp = new THREE.Color();
+    // `_fogColour` and `_tmp` lived here to serve the fog hue offset in
+    // `_applyColour`, which computed a colour every frame and assigned it to
+    // nothing. Both went with it; see the note there for why the tint was
+    // deleted rather than wired up.
   }
 
   get level() {
@@ -944,11 +946,29 @@ export class Director {
      * far wood went through violet, and the far wood is where fog IS the image.
      */
     const hue = Math.sin(clock * 0.021) * 0.5 + Math.sin(clock * 0.0083 + 2.1) * 0.5;
-    this._fogColour.copy(base.fogColour);
-    if (colour > 0.001) {
-      this._tmp.copy(base.fogColour).offsetHSL(hue * 0.075 * colour, 0.15 * colour, 0.06 * colour);
-      this._fogColour.lerp(this._tmp, 1);
-    }
+    /**
+     * THE FOG'S OWN HUE OFFSET IS GONE, AND IT WAS NEVER ON.
+     *
+     * Three lines here used to compute `this._fogColour` from `base.fogColour`
+     * and a hue offset, every frame, and then assign it to nothing at all. The
+     * trip's fog TINT has therefore never once reached the screen — only its
+     * density ever did, a little further down. Nobody noticed because the fog
+     * does visibly change during a trip, so the feature looked like it worked.
+     *
+     * It is deleted rather than wired up, and that is deliberate, because the
+     * thing it would have written to now has an owner. `atmosphere.tick()`
+     * writes `scene.fog.color` every frame for aerial perspective — the haze
+     * warms and brightens toward the sun and cools away from it, which is the
+     * single strongest depth cue in the wood. It runs AFTER this function. So
+     * reviving these lines as-is would either do nothing (overwritten a moment
+     * later) or, if someone moved them later to "fix" that, silently delete
+     * aerial perspective and be very hard to attribute.
+     *
+     * If the trip should tint the fog, the tint belongs in atmosphere.js
+     * COMPOSED WITH the sun-facing scatter, not written over it from here.
+     * `base.fogColour` stays what it is: the pure colour of the hour, which is
+     * the correct thing for both of them to read.
+     */
     atmos.hemi.color.copy(base.hemiSky);
     atmos.sun.color.copy(base.sunColour);
     if (colour > 0.001) {

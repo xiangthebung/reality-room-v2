@@ -146,8 +146,46 @@ for (const c of near.slice(0, 3)) {
          * Scaling the lookahead by the local half-width is what a person does
          * without thinking: you read further ahead in a hall than in a slot.
          */
-        const half = path.r[bi] * path.w[bi];
-        const j = Math.min(n - 1, bi + Math.max(3, Math.min(12, Math.round(half * 2))));
+        /**
+         * AS FAR AS YOU CAN SEE, WHICH IS NOT AS FAR AS THE PASSAGE IS WIDE.
+         *
+         * Scaling the lookahead by the local half-width was the previous
+         * version's answer, and it fixed the canyon and left the CORNER. These
+         * passages are cut on joints: they run straight for thirty metres and
+         * then take something close to a right angle (see the joint block in
+         * caves.js), and eight rings ahead of a corner is a point on the far
+         * side of the rock. The body then walks into the wall beside the corner
+         * at full speed, for ever — one mouth of three, pinned at 12.5 m with
+         * three metres of clear passage to its left, and no stall to show for it
+         * because it was sliding along the face the whole time.
+         *
+         * So the target is the furthest ring whose straight line from HERE stays
+         * inside the passage: exactly the test `blindAlong` runs, from the body
+         * instead of from ring zero. It is also what a person does — you steer
+         * at the last thing you can see down the passage, and at a corner that
+         * is the corner.
+         */
+        const fits = (j) => {
+          const dx = path.x[j] - px;
+          const dz = path.z[j] - pz;
+          const len2 = dx * dx + dz * dz;
+          if (len2 < 1e-6) return false;
+          for (let m = bi + 1; m < j; m++) {
+            const ex = path.x[m] - px;
+            const ez = path.z[m] - pz;
+            const t = Math.max(0, Math.min(1, (ex * dx + ez * dz) / len2));
+            const ox = ex - dx * t;
+            const oz = ez - dz * t;
+            const fit = path.r[m] * Math.min(path.w[m], path.t[m]) * 0.62;
+            if (ox * ox + oz * oz > fit * fit) return false;
+          }
+          return true;
+        };
+        let j = Math.min(n - 1, bi + 3);
+        for (let c = j + 1; c <= Math.min(n - 1, bi + 14); c++) {
+          if (!fits(c)) break;
+          j = c;
+        }
         return { x: path.x[j], z: path.z[j], ring: bi };
       };
       const samples = [];

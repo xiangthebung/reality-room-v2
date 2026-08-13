@@ -353,10 +353,16 @@ export function character(x, z, out = _ch) {
  * The five hues a wildflower patch can be.
  *
  * Named rather than inlined because the flower texture is drawn almost white so
- * that the instance colour decides whether a patch is buttercup, campion,
- * harebell, poppy or bluebell — the palette is the layer's whole identity and
- * it should be findable from the top of the file rather than buried in the
- * middle of a scatter rule.
+ * that the instance colour decides what colour a patch is — the palette is the
+ * layer's whole identity and it should be findable from the top of the file
+ * rather than buried in the middle of a scatter rule.
+ *
+ * THE FIVE VALUES ARE UNCHANGED FROM THE TEMPERATE ROSTER AND DID NOT NEED TO
+ * MOVE. They used to be named for buttercup, campion, harebell, poppy and
+ * bluebell; the same five hues are gold Calathea, pink Costus, blue Dichorisandra,
+ * scarlet Psychotria and violet Tradescantia, all of which are understorey
+ * plants of this forest. A hue is not a latitude — what said "meadow" was the
+ * SHAPE the colour arrived in, and that is fixed in `flowerTexture`.
  */
 export const FLOWER_HUES = [0.14, 0.92, 0.62, 0.1, 0.78];
 
@@ -475,13 +481,37 @@ export function submerged(x, z) {
  * That is the distribution the species should have and it is also the one that
  * makes the blossom worth having: a flowering tree everywhere is wallpaper.
  */
+/**
+ * THE THRESHOLDS BELOW ARE UNCHANGED FROM THE TEMPERATE ROSTER, DELIBERATELY.
+ *
+ * `trees.js` swapped pine/birch/oak/willow/rowan for palm/cecropia/kapok/fig/
+ * brownea by reshaping the five entries in place rather than adding to them —
+ * see the roster block at the top of that file. This function is the reason
+ * that was free: it still returns five labels off ONE roll against the same
+ * ladder of numbers, so the draw stream is untouched, every trunk in the world
+ * is bit-for-bit where it was, and the per-layer instance counts do not move.
+ * Only the labels changed, and each new label was chosen for the old one whose
+ * shape and habitat it already had:
+ *
+ *   wet ground        -> fig, where the willow stood. A strangler on a bank.
+ *   high ground       -> palm, where the pine stood. It is 38% of the wood,
+ *                        which is close to the real share of palm stems in
+ *                        Amazonia and was not tuned to get there.
+ *   the common tree   -> cecropia, where the birch stood. Pale trunk, pioneer.
+ *   broken canopy     -> brownea, where the rowan stood. Small, in flower, in
+ *                        a light gap — the whole of that block below still
+ *                        applies word for word, including why it is keyed to
+ *                        `density` and why the share had to be counted rather
+ *                        than guessed.
+ *   everything else   -> kapok, where the oak stood. The emergent.
+ */
 export function speciesAt(y, wet, roll, density = 1) {
   const alt = clamp01((y + 6) / 40);
-  if (wet > 0.32 && roll < 0.75) return 'willow';
-  if (alt > 0.5 && roll < 0.78) return 'pine';
-  if (roll < 0.42) return 'birch';
-  if (density < 0.7 && roll < 0.62) return 'rowan';
-  return roll < 0.78 ? 'oak' : 'pine';
+  if (wet > 0.32 && roll < 0.75) return 'fig';
+  if (alt > 0.5 && roll < 0.78) return 'palm';
+  if (roll < 0.42) return 'cecropia';
+  if (density < 0.7 && roll < 0.62) return 'brownea';
+  return roll < 0.78 ? 'kapok' : 'palm';
 }
 
 /**
@@ -800,8 +830,38 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
   };
 
   // ---- grass --------------------------------------------------------------
+  /**
+   * THE RAINFOREST FLOOR IS BARE, AND THAT IS BOTH THE LOOK AND THE SAVING.
+   *
+   * This is the most expensive layer in the world — `.perf/baseline.json` had
+   * it at 24 191 submitted instances against the next-biggest layer's 7 188 —
+   * and under the temperate roster it grew a bright meadow sward everywhere the
+   * canopy was not completely shut. That is exactly wrong for this biome. Under
+   * a closed tropical canopy something like 1-2% of the light reaches the
+   * ground; there is no turf down there, there is leaf litter, roots, seedlings
+   * and bare mud. The open colonnade under a high canopy is the single most
+   * characteristic thing about the inside of a rainforest and a lawn destroys
+   * it.
+   *
+   * SO THE TWO CHANGES PULL THE SAME WAY, which is the whole reason this was
+   * the first thing touched after the trees:
+   *
+   *   `spacing` 0.6 -> 0.82 is 1.87x fewer candidates before any acceptance
+   *   runs, i.e. a 47% cut to the layer, applied uniformly.
+   *
+   *   The acceptance below went from `1 - litter * 0.8` to a full `1 - litter`,
+   *   so a closed canopy now takes the sward to ZERO instead of to a fifth. The
+   *   comment on `out.litter` in `character` says raising that weight is how a
+   *   region gets emptied; this is the layer taking it at its word. Deep wood
+   *   goes properly bald, glades and the stream bank keep their grass, and the
+   *   contrast between the two is far stronger than the flat cover it replaces.
+   *
+   * Measured effect is in the layer census: see the note in `underSector`'s
+   * caller. Nothing else reads `bounds.grass`, and the tint below is the only
+   * other thing in this block that moved.
+   */
   {
-    const spacing = 0.6;
+    const spacing = 0.82;
     const steps = Math.round(size / spacing);
     const bound = bounds.grass;
     const l = layer('grass');
@@ -835,16 +895,42 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
          * this factor existed, short grass grew there anyway and no biome could
          * ever go properly bald. Emptiness is variety, and it renders free.
          */
-        if (rng() > patch * (1 - character(x, z).litter * 0.8)) continue;
+        if (rng() > patch * (1 - character(x, z).litter)) continue;
+        /**
+         * AND THE SWARD HAS TO KNOW ABOUT CAVES, WHICH IT DID NOT.
+         *
+         * Every other layer in this file is gated by `forestDensity`, which
+         * carries `caveClearance` — so the trees, the bushes, the stumps and the
+         * cover all stayed out of a gully, and the grass, which is sampled
+         * directly and has its own acceptance, walked straight into it. It is
+         * 0.6 m spacing and half a metre tall, so the last twenty metres of the
+         * approach came out as a wall of it, and `.shots/crag/a4-mouth.png` was
+         * a photograph of a cave mouth with no cave mouth visible in it. The
+         * OTHER half of "the entrance is blocked" — the terrain half is the
+         * portal, over in terrain.js.
+         *
+         * Last, after the acceptance, so the lookup runs on the candidates that
+         * survived rather than on all 180 000 of them.
+         */
+        if (caveClearance(x, z) > 0.35) continue;
         const y = heightAt(x, z);
         const gx = rngRange(rng, 0.7, 1.5);
         const gy = rngRange(rng, 0.6, 1.7);
         const gz = rngRange(rng, 0.7, 1.5);
         yawMatrix(_mat, x, y - 0.04, z, rng() * TAU, gx, gy, gz);
+        /**
+         * DARKER AND GREENER BY A LARGE MARGIN. 0.22 is a yellow-green at 79
+         * degrees and the old lightness ran up to 0.72, which is a hay meadow
+         * in July — it was the brightest thing in every frame and it read as
+         * lawn. 0.27 centres the hue at 97 degrees, and 0.20-0.44 lightness
+         * puts the sward BELOW the leaf litter it grows out of rather than
+         * above it, which is what ground cover in deep shade actually does.
+         * Costs nothing: this is an instance colour either way.
+         */
         _tint.setHSL(
-          0.22 + rngRange(rng, -0.035, 0.045),
-          rngRange(rng, 0.26, 0.48),
-          rngRange(rng, 0.46, 0.72)
+          0.27 + rngRange(rng, -0.03, 0.04),
+          rngRange(rng, 0.3, 0.52),
+          rngRange(rng, 0.2, 0.44)
         );
         _col[0] = _tint.r;
         _col[1] = _tint.g;
@@ -856,6 +942,33 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
   }
 
   // ---- ferns --------------------------------------------------------------
+  /**
+   * THIS LAYER GREW INTO THE UNDERSTORY GIANTS, RATHER THAN A LAYER BEING ADDED
+   * FOR THEM.
+   *
+   * The brief wanted heliconia and philodendron — the big paddle leaves at head
+   * height that are most of what "jungle" means at eye level. A new scatter
+   * layer is a new streamed InstancedMesh in every resident sector and a draw
+   * call per sector, which is the one cost this project does not pay casually.
+   * It is also unnecessary: a fern here is already a shade-and-damp-loving
+   * frond card that grows exactly where a heliconia grows, so the giants are
+   * the SAME LAYER with its size range opened up. Zero new meshes, zero new
+   * draws, zero new geometry.
+   *
+   * `grow` 0.62-1.5 became 0.7-2.6, and the distribution is deliberately
+   * skewed rather than uniform: `pow(rng(), 1.7)` keeps most plants near the
+   * bottom of the range and lets a few reach the top, so what comes out is an
+   * understory of ordinary ferns with occasional two-metre paddles standing
+   * over them. A uniform range gives every plant a middling size and reads as
+   * one shrub repeated, which is what the layer looked like before.
+   *
+   * IT IS NOT FREE AND IT WAS PAID FOR IN THE SAME COMMIT. A 2.6x card is 2.6x
+   * the rasterised area, and this is a NEAR-CAMERA layer, which is the worst
+   * place to spend fill. The grass block above gave back far more than this
+   * takes — 47% of the single biggest layer in the world — and the two changes
+   * were made together for that reason. Spacing is untouched at 2.2 m, so the
+   * instance COUNT does not move; only the size distribution does.
+   */
   {
     const spacing = 2.2;
     const steps = Math.round(size / spacing);
@@ -873,12 +986,19 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
         // shade and damp, at 20 m and at 20 km, and nowhere else.
         if (rng() > shade * 0.7 + damp * 0.35) continue;
         const y = heightAt(x, z);
-        const grow = rngRange(rng, 0.62, 1.5);
+        const grow = 0.7 + Math.pow(rng(), 1.7) * 1.9;
         yawMatrix(_mat, x, y - 0.06, z, rng() * TAU, grow, grow, grow);
+        /**
+         * Deeper and much less bright, for the same reason the sward moved: at
+         * a lightness of 0.74 these were pale mint cards glowing in the darkest
+         * part of the frame. A heliconia leaf is a heavy saturated green with a
+         * wax sheen, so saturation goes UP as lightness comes down — which is
+         * the pairing that reads as glossy rather than as dusty.
+         */
         _tint.setHSL(
-          0.26 + rngRange(rng, -0.05, 0.035),
-          rngRange(rng, 0.22, 0.42),
-          rngRange(rng, 0.5, 0.74)
+          0.29 + rngRange(rng, -0.045, 0.03),
+          rngRange(rng, 0.34, 0.58),
+          rngRange(rng, 0.22, 0.46)
         );
         _col[0] = _tint.r;
         _col[1] = _tint.g;
@@ -1123,7 +1243,29 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
       const dens = (step / spacing) * (step / spacing);
       for (let j = 0; j < steps; j++) {
         for (let i = 0; i < steps; i++) {
-          body(ox + (i + rng()) * step, oz + (j + rng()) * step, l, bound, dens);
+          const x = ox + (i + rng()) * step;
+          const z = oz + (j + rng()) * step;
+          /**
+           * A CAVE MOUTH IS A HOLE IN EVERY UNDERSTOREY LAYER, AND CLEARING THE
+           * CANOPY WAS MAKING IT THE OPPOSITE.
+           *
+           * `caveClearance` reaches these layers only through `forestDensity`,
+           * and `character` reads that as `meadow = 1 - canopy * 1.22`: light.
+           * So a gully — which is a hole in the tree field on purpose — scored
+           * the HIGHEST meadow weight in the world, and the approach to every
+           * cave came out as chest-high hay with the doorway somewhere behind
+           * it. `.shots/crag/a4-mouth.png` was a photograph of a cave mouth with
+           * no cave mouth in it; the mound the portal deletes was only ever the
+           * second thing in the way.
+           *
+           * Here rather than in each body because it is true of all nine of
+           * them, and before the body rather than inside it because the two
+           * position draws above have already been taken — so the seeded stream
+           * only diverges where there is a cave, which is where the world is
+           * meant to be different.
+           */
+          if (caveClearance(x, z) > 0.35) continue;
+          body(x, z, l, bound, dens);
         }
       }
     };
@@ -1458,6 +1600,219 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
       const grow = Math.max(g, gy);
       push(l, _mat, _col, x, y - 0.12 + bound.cy * grow, z, bound.r * grow);
       collide.push(x, z, stumpCollider(g));
+    });
+
+    /**
+     * ==== THE MID-STOREY, AND WHY IT IS APPENDED HERE ======================
+     *
+     * These three are LAST, and that is the one structural fact about them.
+     * The whole sector comes off a single seeded stream, so a layer inserted
+     * anywhere above this point would re-roll every draw after it and move
+     * every plant in the world; appended here, not one existing instance
+     * changes. The same rule put them last in the table in forest.js.
+     *
+     * WHAT THEY ARE FOR, in the order the measurement asked for them:
+     *
+     *   `palms` fills 8-12 m, which is the only band `sightlines.mjs` still
+     *   reports as a hole and the one that got WORSE as the trees improved.
+     *
+     *   `bromeliads` plant the steep ground, which every other layer in this
+     *   file hard-rejects and which in a rainforest is the lushest place there
+     *   is, and they are where the saturated colour lives.
+     *
+     *   `bigleaf` is the jungle cue at eye level: very few, very large.
+     */
+
+    // ---- understorey palms and tree ferns ---------------------------------
+    /**
+     * ONE LAYER FOR TWO PLANTS, split by the instance scale — 0.58 is a five
+     * metre tree fern in deep shade and 1.42 is a twelve metre palm with its
+     * crown just under the canopy. See the header on `palmGeometry`.
+     *
+     * `pow(rng(), 0.7)` RATHER THAN A UNIFORM DRAW, and it is the only tuning
+     * number here that came straight off the instrument. A uniform range puts
+     * as much of this layer at 5-7 m — where the wood is already full — as at
+     * 9-12 m, where the hole is. The exponent skews the draw toward the top of
+     * the range (mean 0.588 of it rather than 0.5), so the crowns pile up in
+     * the band that is empty. Anything more aggressive starts to read as a
+     * plantation of identical palms, which is the failure the fern layer's own
+     * `pow(rng(), 1.7)` note describes from the other end.
+     *
+     * KEYED TO THE CANOPY, NOT AGAINST IT. Understorey palms are shade plants —
+     * that is what "understorey" means — so they thicken under a closed canopy,
+     * which is also exactly where the colonnade complaint comes from. Excluded
+     * from the meadow so that a light gap stays a light gap: a glade you cannot
+     * see across is not a glade.
+     */
+    underLayer('palms', 6.2, (x, z, l, bound, p) => {
+      if (slopeAt(x, z) > 0.52) return;
+      const c = character(x, z);
+      const want = (0.14 + c.canopy * 0.5) * (1 - c.litter * 0.45) * (1 - c.meadow * 0.5);
+      if (rng() > want * p) return;
+      if (submerged(x, z)) return;
+      const y = heightAt(x, z);
+      const grow = 0.58 + Math.pow(rng(), 0.7) * 0.84;
+      const gy = grow * rngRange(rng, 0.9, 1.12);
+      yawMatrix(_mat, x, y - 0.15, z, rng() * TAU, grow, gy, grow);
+      /**
+       * THE TINT IS CORRELATED WITH THE HEIGHT, which is what turns one
+       * geometry into two plants.
+       *
+       * A five-metre tree fern is standing in the darkest part of the wood and
+       * a twelve-metre palm has its head in the light under the canopy, so the
+       * small ones go deep and slightly blue and the tall ones go bright. It
+       * costs nothing — this is an instance colour either way — and it is worth
+       * more than any amount of geometry, because a stand in which every plant
+       * is the same value reads as one object repeated however varied its
+       * silhouette is.
+       */
+      const tallT = (grow - 0.58) / 0.84;
+      _tint.setHSL(
+        0.27 - tallT * 0.02 + rngRange(rng, -0.03, 0.035),
+        rngRange(rng, 0.28, 0.5),
+        0.46 + tallT * 0.24 + rngRange(rng, -0.06, 0.08)
+      );
+      _col[0] = _tint.r;
+      _col[1] = _tint.g;
+      _col[2] = _tint.b;
+      const big = Math.max(grow, gy);
+      push(l, _mat, _col, x, y - 0.15 + bound.cy * big, z, bound.r * big);
+    });
+
+    // ---- bromeliads on the banks ------------------------------------------
+    /**
+     * THE ONLY LAYER IN THIS FILE WHOSE SLOPE GATE IS THE RIGHT WAY UP.
+     *
+     * Every other rule here rejects above a slope of 0.30-0.50 and the sward is
+     * separately zeroed under a closed canopy, so a steep shaded bank rejects
+     * every layer in the world except rocks and sticks and comes out bald. That
+     * is a named open problem in this project and it is backwards twice over: a
+     * bank is the one surface in a rainforest that gets light from the SIDE,
+     * and it is where the epiphytes that could not find a branch end up. A cut
+     * slope in Amazonia is a wall of bromeliads.
+     *
+     * So this rule REQUIRES slope and gets denser as the ground steepens, which
+     * is what makes it affordable at 2.6 m spacing: on the flat ground the
+     * player actually walks over it does not exist, so it adds nothing to the
+     * near field and everything to the banks you look at across a valley.
+     *
+     * The canopy term is deliberately weak (0.35 + 0.3) rather than the strong
+     * one the shade layers use. A bank grows these in the open and in the deep
+     * wood alike, and gating it on canopy would have put the wall back in the
+     * same places everything else already is.
+     */
+    underLayer('bromeliads', 2.1, (x, z, l, bound, p) => {
+      const c = character(x, z);
+      /**
+       * THE RAMP WAS MEASURED, AND THE FIRST GUESS PRODUCED EXACTLY ZERO OF
+       * THIS LAYER IN THE WHOLE WORLD.
+       *
+       * It read `clamp01((slope - 0.26) * 1.6)`, which does not reach 1 until a
+       * slope of 0.885 — and this terrain's steepest square metre inside a
+       * 440 m box measures 0.742. So the acceptance never got above 0.38
+       * anywhere, on ground that is itself rare, and the layer counted 0
+       * instances at all three stations. Nothing reported it: a layer that
+       * places nothing looks exactly like a layer that works.
+       *
+       * The distribution, sampled on a 1.7 m lattice over 440 m at the wood
+       * station, is what the numbers below are fitted to:
+       *
+       *     < 0.05  75.1%     0.15-0.20   2.0%     0.30-0.40   1.0%
+       *   0.05-0.10 13.6%     0.20-0.25   1.0%     0.40-0.60   0.9%
+       *   0.10-0.15  5.3%     0.25-0.30   0.8%     > 0.60      0.3%
+       *
+       * A gate at 0.26 therefore covers 3% of the ground before any acceptance
+       * runs. The ramp now starts at 0.08 — a bank you would notice leaning
+       * into, not a cliff — and is full by 0.24, which puts a real wall on 6.6%
+       * of the ground rather than a rounding error on 3%.
+       *
+       * AND THERE IS A FLOOR UNDER THE CLOSED CANOPY, which is the half of this
+       * rule that is not about slope at all. A steep bank is where the wall is;
+       * the deep shaded floor is where the COLOUR is missing, and this is the
+       * only layer in the file that can carry a saturated one. 0.1 x canopy is
+       * about one rosette per sixteen square metres of deep wood — a thing you
+       * keep finding, not a ground cover.
+       */
+      const bank = clamp01((slopeAt(x, z) - 0.08) * 6.25) * (0.5 + c.canopy * 0.35);
+      const want = Math.max(bank, c.canopy * 0.13) * (1 - c.damp * 0.35);
+      if (rng() > want * p) return;
+      if (submerged(x, z)) return;
+      const y = heightAt(x, z);
+      const g = rngRange(rng, 0.62, 1.8);
+      const gy = g * rngRange(rng, 0.8, 1.2);
+      // Sunk proportionally rather than by a constant. On a 0.5 slope the
+      // ground falls 0.3 m across a 1.25 m card, so a rosette planted at the
+      // sampled height shows a bright sliver of daylight under its uphill edge
+      // from twenty metres away — the same artefact the litter mats' rumple
+      // exists to prevent, on ground that is steep by definition.
+      const base = y - 0.11 * g;
+      yawMatrix(_mat, x, base, z, rng() * TAU, g, gy, g);
+      /**
+       * NEARLY NEUTRAL, AND THAT IS THE WHOLE COLOUR ARGUMENT.
+       *
+       * The scarlet is in the canvas and the material colour is 0xffffff, so
+       * this tint is the last chance to destroy it. Saturation is held at
+       * 0.04-0.16 — enough for one rosette to be warmer than its neighbour, far
+       * too little to drag a red texel toward green. Every other card layer in
+       * the world does the opposite, and every other card layer in the world is
+       * green.
+       */
+      _tint.setHSL(
+        0.24 + rngRange(rng, -0.09, 0.09),
+        rngRange(rng, 0.04, 0.16),
+        rngRange(rng, 0.58, 0.94)
+      );
+      _col[0] = _tint.r;
+      _col[1] = _tint.g;
+      _col[2] = _tint.b;
+      const big = Math.max(g, gy);
+      push(l, _mat, _col, x, base + bound.cy * big, z, bound.r * big);
+    });
+
+    // ---- giant leaves ------------------------------------------------------
+    /**
+     * ELEVEN METRE SPACING, WHICH MAKES THIS THE SPARSEST GREEN THING IN THE
+     * WORLD, AND THAT IS THE DESIGN.
+     *
+     * A door-sized perforated leaf is the strongest "jungle, not wood" cue
+     * available and it stops being one the moment there are enough of them to
+     * be a texture. About a hundred and seventy resident against the meadow's
+     * ten thousand: one every eleven metres of shaded floor, which is a thing
+     * you come across.
+     *
+     * It is also the layer with the least right to spend anything. The 0.6-4 m
+     * bands are the best-filled part of the wood already and near-field cards
+     * are the ones that cover the screen, so this exists for the colour and the
+     * silhouette rather than to stop a ray, and it is priced accordingly.
+     *
+     * Excluded from the meadow HARD (1 - meadow x 0.7), because a light gap is
+     * where the heliconia clumps are — that is what the `meadow` layer draws —
+     * and the closed shaded floor is where the aroids are. Two different plants
+     * in two different places rather than both everywhere.
+     */
+    underLayer('bigleaf', 9, (x, z, l, bound, p) => {
+      if (slopeAt(x, z) > 0.46) return;
+      const c = character(x, z);
+      const want = (0.1 + c.canopy * 0.42 + c.damp * 0.3) * (1 - c.litter * 0.5) * (1 - c.meadow * 0.7);
+      if (rng() > want * p) return;
+      if (submerged(x, z)) return;
+      const y = heightAt(x, z);
+      const g = rngRange(rng, 0.62, 1.6);
+      const gy = g * rngRange(rng, 0.85, 1.15);
+      yawMatrix(_mat, x, y - 0.06, z, rng() * TAU, g, gy, g);
+      // Neutral for the same reason the bromeliads are: the Heliconia bract on
+      // this card is the second-most saturated thing in the world and a green
+      // tint over it is a dark maroon.
+      _tint.setHSL(
+        0.26 + rngRange(rng, -0.06, 0.06),
+        rngRange(rng, 0.05, 0.18),
+        rngRange(rng, 0.56, 0.92)
+      );
+      _col[0] = _tint.r;
+      _col[1] = _tint.g;
+      _col[2] = _tint.b;
+      const big = Math.max(g, gy);
+      push(l, _mat, _col, x, y - 0.06 + bound.cy * big, z, bound.r * big);
     });
   }
 

@@ -3,19 +3,23 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import { TAU, clamp01, fbm2, makeRng, rngRange } from '../core/util.js';
 import { GroundField } from './ground.js';
 import { SPECIES_NAMES, growTree, speciesMaterials } from './trees.js';
-import { fernFrond, glowSprite, grassBlade } from './textures.js';
+import { fernFrond, forestFloor, glowSprite, herbTuft } from './textures.js';
 import {
   brambleTexture,
+  bromeliadTexture,
   cardClump,
   flowerTexture,
+  giantLeafTexture,
+  heliconiaTexture,
   litterPatch,
   litterTexture,
+  palmFrondTexture,
+  palmGeometry,
   reedTexture,
   saplingGeometry,
   shrubTexture,
   stickGeometry,
   stumpGeometry,
-  tallGrassTexture,
 } from './undergrowth.js';
 import { PLANT_SCALE, makeLiving, setPlantScale } from '../trip/living.js';
 import { InstanceCuller, packSlab } from './culling.js';
@@ -306,6 +310,205 @@ function mushroomGeometry(rng) {
   return { stem, cap };
 }
 
+/**
+ * METRES ACROSS ONE TILE OF THE FLOOR MAP, AT EACH OF THE TWO SCALES.
+ *
+ * The map is 512², so the macro tile puts a texel at 1.43 cm and the fine tile
+ * at 2.56 mm. What each scale DRAWS follows from that and is the reason there
+ * are two of them: `forestFloor`'s leaves are 3.5–10.5% of the canvas, so at
+ * 7.3 m they are 26–77 cm — the big entire leaves of a rainforest, seen from
+ * standing height — and at 1.31 m the same marks are 4.6–13.7 cm, which is the
+ * litter you are actually walking on. Its roots are 60–210 px, so the macro tile
+ * draws them at 0.9–3.0 m, which is the scale a real surface root runs at, and
+ * the fine tile turns them into twigs.
+ *
+ * 5.57:1, and deliberately not a round ratio. Two scales of the same canvas at
+ * an integer ratio re-align every few tiles and the repeat becomes visible as a
+ * plaid; the fine sample is also rotated 34° off the macro one, so there is no
+ * bearing along which the two grids agree.
+ *
+ * NEITHER NUMBER IS A MULTIPLE OR A DIVISOR OF 128, which is the chunk pitch.
+ * The UV is world XZ, so the tiling is continuous across chunk borders whatever
+ * these are — but a tile that divided the chunk would put a texture seam and a
+ * geometry seam in the same place, and coincident seams are what the eye finds.
+ */
+const FLOOR_MACRO_M = 7.3;
+const FLOOR_FINE_M = 1.31;
+/**
+ * How much of the floor map's structure reaches the albedo.
+ *
+ * 1.0 is the raw normalised product; this is a `mix` from white, so values ABOVE
+ * one extrapolate and are a contrast gain on the map — and because the map's
+ * mean is exactly 1.0, extrapolating about it is mean-preserving. That is the
+ * whole reason for normalising: a gamma or a scale would have made the floor
+ * brighter or darker as a side effect of making it more detailed, and those are
+ * two different decisions.
+ *
+ * The negative tail is clamped. Above 1.0 the extrapolation can in principle
+ * cross zero — it does so wherever the normalised product falls below
+ * 1 - 1/gain, which at 1.18 is 0.15, and that needs both samples to land on a
+ * dark mark at once. Rare and shallow, and clamped anyway: a negative albedo
+ * multiplied by a coloured light is a channel inversion, not a dark patch, and
+ * the failure would be a scatter of magenta specks rather than anything a
+ * reviewer would recognise as a clipping bug.
+ */
+const FLOOR_AMOUNT = 1.18;
+/** Peak sky-sheen added on standing water, at grazing incidence. */
+const WET_GLOSS = 2.6;
+
+/**
+ * The ground material: Lambert, vertex colours, and the two things the floor was
+ * missing.
+ *
+ *
+ * 1. A TEXTURE, PROJECTED FROM WORLD XZ, BECAUSE THE MESH HAS NO UVs.
+ *
+ * `heightGrid` emits position, normal, colour and `aWet` and nothing else, so
+ * `material.map` is not available: three would compute `vMapUv` from a `uv`
+ * attribute that does not exist, WebGL would hand it a constant zero, and the
+ * whole world would be one texel. Generating UVs is the obvious fix and it is
+ * the worse one — a per-chunk float2 attribute is 52 KB more upload per chunk
+ * for a value that is a linear function of a position already being uploaded.
+ *
+ * So the UV is `rrSurf.xz`, which is the world position living.js already
+ * exports for the trip. That costs nothing, has no seams anywhere (world space
+ * is continuous across chunk borders by construction), and it comes for free
+ * with the property that the floor's grain swims with the surface warp during a
+ * trip instead of sliding over it.
+ *
+ * THE MAP IS DIVIDED BY ITS OWN MEAN BEFORE IT MULTIPLIES ANYTHING. See the
+ * pivot in `forestFloor`. Its measured linear mean is (0.561, 0.527, 0.483), so
+ * sampled twice and multiplied an unnormalised map would take the ground to
+ * 0.30/0.28/0.23 of its brightness — a two-stop exposure cut, and a warm one,
+ * arriving as a side effect of a texture edit.
+ *
+ * TWO FETCHES, AND THE FADE IS FREE. Both samples are of a mipped, wrapped,
+ * 8×-anisotropic texture, so at distance each one converges to its own mean and
+ * the normalised product converges to exactly 1.0 — the modulation fades itself
+ * out into the flat vertex colour with no distance term, no smoothstep and no
+ * chance of the metre-scale leopard print this project has removed twice.
+ *
+ *
+ * 2. A WET SHEEN, WHICH IS WHAT `aWet` WAS ALWAYS FOR.
+ *
+ * `aWet` has been computed, transferred and bound since the chunk streamer was
+ * written, and read by nothing. Here it is a varying and it does two jobs: the
+ * vertex colour is already darker and richer where it is high (terrain.js), and
+ * this adds a grazing-angle reflection of the sky on top — which is the whole
+ * optics of wet ground. Water fills the surface roughness, so the diffuse goes
+ * down and a specular lobe appears, and at the grazing angles a floor is nearly
+ * always seen at, that lobe is most of what you see.
+ *
+ * THE SHEEN COLOUR IS `fogColor`. Not a constant, and not the sun: what a
+ * horizontal puddle under a closed canopy reflects is the sky, and `fogColor` is
+ * this scene's own idea of what the distance looks like — so the sheen tracks
+ * dawn, noon, dusk and the trip's own grading without a line of code here. At
+ * night it goes to nearly nothing, which is correct.
+ *
+ * IT IS SHAPED BY THE FLOOR MAP. `rrFloorL` is the map's luminance at this
+ * fragment, and the sheen is gated on the DARK part of it, so the shine lands in
+ * the hollows between the leaves and the roots rather than evenly over
+ * everything. That is where the puddles come from, and it costs a smoothstep on
+ * a value the albedo already computed — no new fetch, no new geometry.
+ *
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO. Nothing here makes the ground
+ * transparent, alpha-tested or double-sided. Hiding the floor was measured at
+ * 0.27–2.48 ms SLOWER depending on the station, because it is the frame's best
+ * early-Z occluder; the additions are two texture fetches and a dot product on a
+ * surface that still writes depth first and unconditionally.
+ */
+function groundMaterial() {
+  const material = makeLiving(new THREE.MeshLambertMaterial({ vertexColors: true }), 'terrain');
+  const floor = forestFloor();
+  const mean = floor.userData.mean ?? { r: 0.5, g: 0.5, b: 0.5 };
+
+  /**
+   * WRAPPED AROUND `makeLiving`'S HOOK RATHER THAN UNDER IT.
+   *
+   * `makeLiving` chains onto whatever `onBeforeCompile` it finds and calls it
+   * FIRST, so a hook installed before it would run before its declarations were
+   * spliced in — which is fine for text but means this code could not see
+   * `rrSurf`, and could not be placed relative to the living layer's own blocks.
+   * Installing afterwards and calling through gives both. The anchors used below
+   * — color_fragment and opaque_fragment — are ones living.js does not touch, so
+   * neither hook can eat the other's replacement.
+   */
+  const chained = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    chained?.(shader, renderer);
+    shader.uniforms.uFloorMap = { value: floor };
+    shader.uniforms.uFloorRep = {
+      value: new THREE.Vector2(1 / FLOOR_MACRO_M, 1 / FLOOR_FINE_M),
+    };
+    shader.uniforms.uFloorNorm = {
+      value: new THREE.Vector3(1 / (mean.r * mean.r), 1 / (mean.g * mean.g), 1 / (mean.b * mean.b)),
+    };
+    shader.uniforms.uFloorAmt = { value: FLOOR_AMOUNT };
+    shader.uniforms.uWetGloss = { value: WET_GLOSS };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute float aWet;\nvarying float vRrWet;'
+      )
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vRrWet = aWet;');
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        [
+          '#include <common>',
+          'uniform sampler2D uFloorMap;',
+          'uniform vec2 uFloorRep;',
+          'uniform vec3 uFloorNorm;',
+          'uniform float uFloorAmt;',
+          'uniform float uWetGloss;',
+          'varying float vRrWet;',
+          '// The floor map luminance at this fragment, 1.0 = the map average.',
+          'float rrFloorL;',
+        ].join('\n')
+      )
+      .replace(
+        '#include <color_fragment>',
+        /* glsl */ `#include <color_fragment>
+  {
+    vec2 rrFuv = rrSurf.xz;
+    vec3 rrFa = texture2D(uFloorMap, rrFuv * uFloorRep.x).rgb;
+    // Rotated 34 degrees so the two scales share no axis. See FLOOR_MACRO_M.
+    vec2 rrFrot = vec2(rrFuv.x * 0.829 + rrFuv.y * 0.559, rrFuv.y * 0.829 - rrFuv.x * 0.559);
+    vec3 rrFb = texture2D(uFloorMap, rrFrot * uFloorRep.y).rgb;
+    vec3 rrFloor = rrFa * rrFb * uFloorNorm;
+    rrFloorL = dot(rrFloor, vec3(0.2126, 0.7152, 0.0722));
+    diffuseColor.rgb *= max(vec3(0.0), mix(vec3(1.0), rrFloor, uFloorAmt));
+  }`
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        /* glsl */ `
+  {
+    #ifdef USE_FOG
+      vec3 rrSky = fogColor;
+    #else
+      vec3 rrSky = vec3(0.30, 0.38, 0.48);
+    #endif
+    // Wet where the terrain says so, and wettest in the map's own hollows.
+    float rrWet = clamp(vRrWet, 0.0, 1.0) * smoothstep(1.10, 0.70, rrFloorL);
+    if (rrWet > 0.003) {
+      // Schlick, near enough: a fourth power is a puddle, a square is a sheet of
+      // wet plastic, and the difference at 40 degrees off grazing is 3x.
+      float rrF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+      rrF *= rrF;
+      rrF *= rrF;
+      outgoingLight += rrSky * (rrF * rrWet * uWetGloss);
+    }
+  }
+#include <opaque_fragment>`
+      );
+  };
+  return material;
+}
+
 export function buildForest(scene, seed = 'grove-01') {
   const group = new THREE.Group();
   group.name = 'forest';
@@ -325,7 +528,7 @@ export function buildForest(scene, seed = 'grove-01') {
    * Nothing is built here. The first chunks arrive over the following handful
    * of frames, which all happen behind the entry gate.
    */
-  const groundMat = makeLiving(new THREE.MeshLambertMaterial({ vertexColors: true }), 'terrain');
+  const groundMat = groundMaterial();
   const groundField = new GroundField(groundMat);
   group.add(groundField.group);
 
@@ -365,29 +568,74 @@ export function buildForest(scene, seed = 'grove-01') {
   const culler = new InstanceCuller();
 
   // ---- undergrowth --------------------------------------------------------
-  const grassTex = grassBlade({ key: 'sward', seed: `${seed}:grass`, hue: 90, sat: 42, light: 44 });
+  /**
+   * THE TINTS ON THIS LAYER AND THE THREE BELOW WERE ALL YELLOW-GREEN, AND
+   * THEY MOVED TOGETHER.
+   *
+   * `0xb6cc8c` and its neighbours are a pale hay colour. Multiplied over a
+   * texture that was ALSO drawn at a yellow-green hue, the product was the
+   * single most temperate thing in the frame — a lawn under an Amazonian
+   * canopy. Every one of these moved toward a true green by taking red out and
+   * putting a little blue back, and they were checked in luminance rather than
+   * by eye: 0xb6cc8c is Rec.709 luma 195 and 0x9ecc94 is 190, a 2.5% drop.
+   *
+   * THAT CHECK IS NOT PEDANTRY, it is the trap the bramble block in
+   * undergrowth.js records at length. A card's screen colour is the texture
+   * times the material colour times the instance tint, three factors that each
+   * look reasonable alone and whose product can be four per cent. "Greener"
+   * done by eye means "darker" every time, and darker down here does not read
+   * as lush, it reads as a hole in the floor.
+   */
+  const grassTex = herbTuft({ key: 'sward', seed: `${seed}:grass`, hue: 128, sat: 42, light: 42 });
+  /**
+   * `receivesShadow: false` HERE AND ON EVERY OTHER CARD LAYER BELOW, for the
+   * reason trees.js:2575 states for the trunk and the leaf — and this is the
+   * half of that change which never landed.
+   *
+   * `addStreamed` gives every one of these meshes `receiveShadow: false` (see
+   * its default), and in three that is a runtime uniform: the fragment shader
+   * skips the lookup, but the VERTEX shader still runs the shadow normal bias,
+   * still does the `directionalShadowMatrix` multiply, and still exports a vec4
+   * varying carrying the result. Four floats of vertex export, on the largest
+   * instance layers in the world — grass is 65 536 capacity and 12 296
+   * submitted in a canopy frame — for a value the fragment stage is guaranteed
+   * to throw away.
+   *
+   * The deep station measures VERTEX-BOUND at 67%, so this is the stage that
+   * matters, and on this GPU it is worth more than the float count suggests:
+   * unused exports are stripped by NVIDIA's compiler and NOT by AMD's, which is
+   * the argument living.js already makes at length.
+   *
+   * THE INVARIANT IS THE SAME ONE, and it is still not checked anywhere: a mesh
+   * drawn with one of these will not receive shadows whatever `receiveShadow`
+   * says. Every layer using them defaults to false today; `rockMat`, `logMat`
+   * and the `stumps` layer that shares `logMat` are the three that genuinely do
+   * receive, and they are deliberately left alone.
+   */
   const grassMat = makeLiving(
     new THREE.MeshLambertMaterial({
       map: grassTex,
       alphaTest: 0.4,
       side: THREE.DoubleSide,
-      color: 0xb6cc8c,
+      color: 0x9ecc94,
     }),
-    'plant'
+    'plant',
+    { receivesShadow: false }
   );
   const grassGeo = clumpGeometry(0.42, 0.52, 3, makeRng(`${seed}:grassgeo`), 0.2, PLANT_SCALE.grass);
 
 
   // Ferns: bigger, shade-loving, so they go where the trees are.
-  const fernTex = fernFrond({ key: 'fern', seed: `${seed}:fern`, hue: 100, sat: 40, light: 44 });
+  const fernTex = fernFrond({ key: 'fern', seed: `${seed}:fern`, hue: 122, sat: 40, light: 44 });
   const fernMat = makeLiving(
     new THREE.MeshLambertMaterial({
       map: fernTex,
       alphaTest: 0.4,
       side: THREE.DoubleSide,
-      color: 0xa8c284,
+      color: 0x92c28c,
     }),
-    'plant'
+    'plant',
+    { receivesShadow: false }
   );
   const fernGeo = clumpGeometry(1.5, 1.15, 4, makeRng(`${seed}:ferngeo`), 0.3, PLANT_SCALE.fern);
 
@@ -408,11 +656,13 @@ export function buildForest(scene, seed = 'grove-01') {
   const { stem, cap } = mushroomGeometry(shroomRng);
   const stemMat = makeLiving(
     new THREE.MeshLambertMaterial({ color: 0xd9cdae, emissive: 0x1b1508, emissiveIntensity: 0.5 }),
-    'prop'
+    'prop',
+    { receivesShadow: false }
   );
   const capMat = makeLiving(
     new THREE.MeshLambertMaterial({ color: 0x8e5f9e, emissive: 0x2a1740, emissiveIntensity: 1.1 }),
-    'prop'
+    'prop',
+    { receivesShadow: false }
   );
 
 
@@ -548,7 +798,10 @@ export function buildForest(scene, seed = 'grove-01') {
   const cardMaterial = (map, color) =>
     makeLiving(
       new THREE.MeshLambertMaterial({ map, alphaTest: 0.4, side: THREE.DoubleSide, color }),
-      'plant'
+      'plant',
+      // See grassMat: none of the eleven layers built from this receives a
+      // shadow, so none of them should be exporting a shadow coordinate.
+      { receivesShadow: false }
     );
 
   // ---- meadow: long grass in the glades -----------------------------------
@@ -609,8 +862,9 @@ export function buildForest(scene, seed = 'grove-01') {
     scale: 0.29,
   });
   const meadowMat = cardMaterial(
-    tallGrassTexture({ key: 'meadow', seed: `${seed}:meadow` }),
-    0xc4cf94
+    heliconiaTexture({ key: 'meadow', seed: `${seed}:meadow` }),
+    // Was 0xc4cf94. Same luma to within 2% — see the tint note on `grassMat`.
+    0xa9cf9a
   );
 
   // ---- bramble: the thicket -----------------------------------------------
@@ -653,7 +907,8 @@ export function buildForest(scene, seed = 'grove-01') {
   });
   const brambleMat = cardMaterial(
     brambleTexture({ key: 'bramble', seed: `${seed}:bramble` }),
-    0xafc48d
+    // Was 0xafc48d. Same luma to within 2% — see the tint note on `grassMat`.
+    0x99c495
   );
 
   // ---- bushes and saplings ------------------------------------------------
@@ -668,7 +923,8 @@ export function buildForest(scene, seed = 'grove-01') {
    * different sights.
    */
   const shrubTex = shrubTexture({ key: 'shrub', seed: `${seed}:shrub` });
-  const shrubMat = cardMaterial(shrubTex, 0xbfd199);
+  // Was 0xbfd199. Same luma to within 2% — see the tint note on `grassMat`.
+  const shrubMat = cardMaterial(shrubTex, 0xa8d19f);
   /**
    * TALLER AND LESS SPLAYED THAN THE FIRST VERSION, WHICH WAS A BLACK SPLAT.
    *
@@ -780,7 +1036,10 @@ export function buildForest(scene, seed = 'grove-01') {
    * the file: no discards at all, and every pixel writes depth.
    */
   const stickGeo = stickGeometry(makeRng(`${seed}:stickgeo`), 1.7, 0.038);
-  const twigMat = makeLiving(new THREE.MeshLambertMaterial({ color: 0x56463a }), 'prop');
+  // `sticks` is the only layer using this, and it does not receive. See grassMat.
+  const twigMat = makeLiving(new THREE.MeshLambertMaterial({ color: 0x56463a }), 'prop', {
+    receivesShadow: false,
+  });
 
   // ---- wildflowers --------------------------------------------------------
   /**
@@ -858,7 +1117,8 @@ export function buildForest(scene, seed = 'grove-01') {
     // should be the one that nods most.
     scale: 0.27,
   });
-  const reedMat = cardMaterial(reedTexture({ key: 'reed', seed: `${seed}:reed` }), 0xb3c489);
+  // Was 0xb3c489. Same luma to within 2% — see the tint note on `grassMat`.
+  const reedMat = cardMaterial(reedTexture({ key: 'reed', seed: `${seed}:reed` }), 0x9bc491);
 
   // ---- stumps -------------------------------------------------------------
   /**
@@ -878,6 +1138,176 @@ export function buildForest(scene, seed = 'grove-01') {
    * a real stump.
    */
   const stumpGeo = stumpGeometry(makeRng(`${seed}:stumpgeo`), 0.7, 0.4);
+
+  // ---- the mid-storey: understorey palms and tree ferns --------------------
+  /**
+   * THE ONLY THING IN THIS WOOD BETWEEN 5 m AND THE CANOPY.
+   *
+   * `sightlines.mjs` classifies what stopped each ray rather than counting
+   * whether one was stopped, and after the tree pass its verdict was precise:
+   * the composition problem was solved — bare-trunk hits across 2-12 m had gone
+   * from ~27% to 2-6% — and what was left was a hole at a specific ALTITUDE.
+   * The median sight line at 8 m had gone 23.6 -> 27.5 m and at 12 m 30.2 ->
+   * 40.1 m, i.e. those two bands got EMPTIER while the average got better,
+   * because shortening the trees and clumping their crowns pulled foliage down
+   * out of 8-12 m into 2-6. The tell is the escape rate at 12 m: 4% -> 17% of
+   * rays flying a hundred and twenty metres and hitting nothing whatever, at
+   * exactly canopy-underside height. A wood with a roof does not do that.
+   *
+   * A 9 m GEOMETRY AT 0.58-1.42 IS 5.2 TO 12.8 m, so the crowns land between 4
+   * and 12 m with the bulk of them at 7-11. That range is chosen against the
+   * measurement and nothing else, and the tall skew in the instance scale — see
+   * the `palms` rule in scatter.js — is there because the hole is at the top of
+   * it.
+   *
+   * WHY THIS IS THE CHEAP WAY TO FILL THAT BAND, which is the whole reason it
+   * is a bare stem with a crown on the end rather than a shrub scaled up. Cost
+   * here is screen coverage and overdraw, not instances or triangles: an
+   * alpha-tested card is 21x a solid triangle per unit of area. A stem is solid
+   * geometry — sixty triangles of open tube, in the 8%-of-the-cost category the
+   * per-layer census puts trunks in — and it carries the expensive cards to 8 m
+   * and puts NONE of them at 1-4 m, where the wood is already full and where a
+   * card fills the most screen. Filling the hole from the ground up would have
+   * cost several times this for the same rays stopped, and it would have made
+   * the near field claustrophobic, which is its own failure: a cathedral you
+   * can see twenty metres into beats a hedge you can see five metres into.
+   *
+   * NO SHADOW, and that is measured rather than cautious. Leaf cards are 4.01 ms
+   * of a 4.77 ms shadow pass while trunks — 73% of all triangles — are 0.42 ms.
+   * The shadow camera is a 58 m box, so every one of these inside it would be
+   * rendered again as alpha-tested fill. What is lost is real — a palm crown
+   * throws a beautiful shadow — and it is not worth a third of the frame.
+   *
+   * NO COLLIDER EITHER, deliberately, and this is the one omission worth
+   * writing down rather than the obvious call. A 12 m palm you walk through is
+   * wrong. But `colliderGrid` is what fauna.js identifies trees by, using
+   * radius alone — "anything under 0.8 is a tree and nothing else can be" — so
+   * a slender stem pushed at its true 0.2 m would be indexed as a tree and the
+   * birds would start perching eight metres above a palm as if it were an oak,
+   * and pushing it at the 0.82 m floor instead stops the player half a metre
+   * short of a pole he can see is thin. Both are worse than walking through it.
+   * See `stumpCollider` in scatter.js for the contract.
+   */
+  const palmGeo = palmGeometry(makeRng(`${seed}:palmgeo`), {
+    height: 9,
+    /**
+     * NINE FRONDS, NOT SEVEN, and the reason is the one thing a screenshot
+     * settles that arithmetic cannot. A rosette seen end-on is half the cards
+     * it has, and a crown silhouetted against the sky at 10 m has every one of
+     * its alpha gaps backlit — the first build read as a handful of sticks with
+     * leaves stuck on them. Two more cards is twelve triangles on a layer that
+     * draws a few hundred, and the fronds themselves went wider and much
+     * denser in the same pass, which is the cheap direction: fill is free,
+     * silhouette is not.
+     */
+    fronds: 9,
+    /**
+     * 0.5, which is a RATIO of 0.158 rather than the 0.44 the ground layers
+     * hold. `check-plants.mjs` measures peak displacement over the plant's own
+     * height; at the peak every term scales as 2.906 x aScale, and this
+     * geometry's bounding box is about 9.2 m, so 2.906 x 0.5 / 9.2 = 0.158. A
+     * palm is a column with a thrashing head, not a blade of grass — holding
+     * the grass ratio here would throw a twelve-metre plant four metres
+     * sideways. It is still the tallest displacement in the understorey in
+     * absolute metres, which is right: the fronds are what you see move.
+     */
+    scale: 0.5,
+  });
+  /**
+   * A shade darker and less yellow than the shrubs, because these are seen
+   * against the SKY as often as against the wood — a crown at 10 m with
+   * daylight behind it is the one place in this forest a pale green card
+   * blows out into a white smear. Luma 176 against `shrubMat`'s 195.
+   */
+  const palmMat = cardMaterial(
+    palmFrondTexture({ key: 'frond', seed: `${seed}:frond` }),
+    0x93bf8c
+  );
+
+  // ---- bromeliads: the bank ------------------------------------------------
+  /**
+   * THE STEEP GROUND WAS THE BALDEST GROUND IN THE WORLD AND IT SHOULD BE THE
+   * LUSHEST.
+   *
+   * Every understorey layer rejects above a slope of 0.30-0.50 and the sward is
+   * separately zeroed under a closed canopy, so a steep, high, shaded bank
+   * hard-rejects literally every layer except rocks and sticks. That is
+   * backwards. A bank in a rainforest gets light from the SIDE, which is the
+   * one direction light gets in down there, and it is where the epiphytes that
+   * cannot find a branch go instead: a cut slope in Amazonia is a wall of
+   * bromeliads, Anthurium and Selaginella.
+   *
+   * So this layer's slope gate is INVERTED — it wants slope above 0.26 and gets
+   * denser as the ground steepens — which makes it the only thing in the file
+   * that plants where everything else refuses to. That is also why it can be
+   * dense (2.6 m) without touching the frame anywhere the player usually
+   * stands: on flat walkable ground it does not exist at all.
+   *
+   * WHITE MATERIAL, and it is the only card layer here that has one. The colour
+   * is in the canvas; see the note on `bromeliadTexture`. A green material
+   * colour multiplied over a scarlet texel is a dark maroon, which is the trap
+   * this project has now hit three times.
+   */
+  const bromeliadGeo = cardClump({
+    width: 1.25,
+    height: 0.95,
+    cards: 4,
+    rng: makeRng(`${seed}:bromgeo`),
+    lean: 0.2,
+    tilt: 0.55,
+    spread: 0.12,
+    rise: 0.05,
+    segments: 2,
+    flexBase: 0.2,
+    bulge: 0.6,
+    // 0.34 x 0.85 / 2.906. A bromeliad is a stiff thing bolted to a bank; the
+    // grass ratio would have it waving like seaweed.
+    scale: 0.1,
+  });
+  const bromeliadMat = cardMaterial(
+    bromeliadTexture({ key: 'bromeliad', seed: `${seed}:bromeliad` }),
+    0xffffff
+  );
+
+  // ---- giant leaves --------------------------------------------------------
+  /**
+   * THE FEWEST AND LARGEST THINGS ON THE FLOOR, WHICH IS ALSO THE CHEAPEST WAY
+   * TO BUY A JUNGLE.
+   *
+   * Three cards a metre and a half across at eleven-metre spacing: about a
+   * hundred and seventy of them resident against the meadow's ten thousand. A
+   * big solid card is cheaper per square metre of coverage than several small
+   * wispy ones — the middle of it writes depth and occludes, a discard does
+   * neither — so this is the direction the measurement has been pointing the
+   * whole time, taken to its end.
+   *
+   * It is also the one layer here that is not about the sightline number at
+   * all. It sits at 1.2-3.4 m, where the wood is already well filled, and it is
+   * deliberately sparse so it does not fill it further; what it is for is the
+   * complaint that the colour is "specks, not lushness". A perforated cordate
+   * leaf the size of a door, with a lobster-claw Heliconia beside it, is a
+   * thing you come across rather than a texture you walk through.
+   */
+  const bigLeafGeo = cardClump({
+    width: 1.5,
+    height: 2.1,
+    cards: 3,
+    rng: makeRng(`${seed}:bigleafgeo`),
+    lean: 0.16,
+    tilt: 0.34,
+    spread: 0.2,
+    rise: 0.12,
+    segments: 3,
+    flexBase: 0.18,
+    bulge: 0.45,
+    // 0.42 x 2.0 / 2.906, the ground-layer ratio: this one really is a floppy
+    // leaf on a stalk and it should move like one.
+    scale: 0.29,
+  });
+  const bigLeafMat = cardMaterial(
+    giantLeafTexture({ key: 'bigleaf', seed: `${seed}:bigleaf` }),
+    0xffffff
+  );
 
   /**
    * TWO OF THESE NINE LAYERS PUSH A COLLIDER AND SEVEN DO NOT.
@@ -1276,6 +1706,37 @@ export function buildForest(scene, seed = 'grove-01') {
       castShadow: true,
       receiveShadow: true,
     },
+    /**
+     * THE THREE MID-STOREY LAYERS, AND THEY ARE LAST IN THIS TABLE FOR A REASON
+     * THAT HAS NOTHING TO DO WITH DRAWING ORDER.
+     *
+     * A sector's whole contents come off ONE seeded rng stream, so inserting a
+     * layer anywhere but the end reseeds every plant and every tree placed after
+     * it — `authored-check.mjs` exists to notice exactly that. These three are
+     * appended here and their `underLayer` calls are appended at the end of the
+     * sequence in `underSector`, so not one existing instance in the world
+     * moves. See the note on test order in scatter.js.
+     *
+     * CAPACITIES, by the rule the block above states: the layer's per-square-
+     * metre ceiling — one over the spacing squared, times the largest acceptance
+     * its rule can return — over the ~40 960 m² the 80 m ring holds, rounded up
+     * to a power of two.
+     *
+     *   palms       1/6.2² x 0.64 x 40 960 =   682   ->  2048
+     *   bromeliads  1/2.1² x 0.85 x 40 960 = 7 897   ->  8192
+     *   bigleaf     1/9²   x 0.82 x 40 960 =   414   ->   512
+     *
+     * The two that are over-provisioned are over-provisioned on purpose. A
+     * growth event is a full `bufferData` of the new capacity on the next
+     * render, i.e. a stall the player feels at the moment he walks somewhere
+     * new, and the bromeliads are the one layer here whose density is decided by
+     * the TERRAIN rather than by a biome weight — a session whose seed puts a
+     * long steep escarpment inside the ring is not an unusual session, it is a
+     * hilly one. 623 KB against a hitch is the same trade the tree slabs make.
+     */
+    { id: 'palms', geo: palmGeo, mat: palmMat, capacity: 2048, bucketSize: 30 },
+    { id: 'bromeliads', geo: bromeliadGeo, mat: bromeliadMat, capacity: 8192, bucketSize: 20 },
+    { id: 'bigleaf', geo: bigLeafGeo, mat: bigLeafMat, capacity: 512, bucketSize: 28 },
   ];
   for (const u of understoreyLayers) {
     addStreamed(u.id, u.id, u.geo, u.mat, {
@@ -1502,6 +1963,85 @@ export function buildForest(scene, seed = 'grove-01') {
       return out;
     },
     culler,
+
+    /**
+     * How far the wood is DRAWN, at runtime.
+     *
+     * WHY THIS EXISTS, MEASURED. `.perf/presets.json` records that the whole
+     * quality ladder moves the triangle count by ONE PER CENT: low submits
+     * 16.08 M triangles at the deep station and ultra submits 16.21 M, and the
+     * ladder's entire 44% of travel is bought with pixels, MSAA and shadow
+     * texels. Fitting frame time against resolution at low gives
+     * `1.53 ms + 0.319 ms/Mpixel`, so 75% of that frame is
+     * resolution-independent, and hiding the canopy alone is worth 1.10 ms
+     * against the 0.37 ms that deleting 71% of every fragment buys. Reach is
+     * the only lever in the building that removes geometry, and geometry is
+     * what the frame is made of.
+     *
+     * THE THREE LAYERS MOVE TOGETHER OR THE WOOD BREAKS. A tree is two packers
+     * over one worker payload — see the `mirrorOf` block above — and their
+     * bands are exactly complementary, `trunk` testing `<= lod` and
+     * `trunk-far` testing `> lod`. Set them apart and a bucket lands in both,
+     * so every distant trunk is drawn twice at two resolutions z-fighting with
+     * itself; set them overlapping the other way and a ring of the wood is
+     * missing. Nothing outside this function knows that pairing, which is why
+     * `packer.setBand` is deliberately not something callers reach for.
+     *
+     * AND IT IS NOT USEFUL WITHOUT THE FOG. `TREE_REACH` was chosen so that fog
+     * had already deleted the trees before the reach did: sober `FogExp2`
+     * transmits `exp(-(d·ρ)²)`, and at 384 m that is 3.7e-6, far below the
+     * 1/255 the framebuffer can hold. Which is exactly why cutting reach at
+     * today's density does not fade anything out — it opens a hard-edged
+     * circular hole that follows the player. Hiding a reach of `d` needs
+     * `ρ >= sqrt(ln 255)/d = 2.354/d`: 0.0061 at 384 m, which sober density
+     * clears comfortably, but 0.0196 at 120 m, which is 2.1× sober. So a
+     * caller shortening the reach MUST thicken the fog to match, and
+     * `fogDistance` — the preset that was flattened to [1,1,1,1] precisely
+     * because nothing culled on fog — becomes load-bearing the moment
+     * something does.
+     *
+     * @param {number} lod    where the near trunk hands over to the far sweep
+     * @param {number} reach  where the wood stops being drawn at all
+     * @param {{leafReach?: number, alwaysNear?: number}} [opts]
+     *   `leafReach` lets the canopy stop short of the trunks, which is the one
+     *   asymmetry worth having: leaves are 45% of the frame for 3.50 M of its
+     *   16.08 M triangles — about ten times the cost per triangle of trunk —
+     *   so the canopy is where a reach cut pays. Defaults to `reach`.
+     *   `alwaysNear` is the radius inside which a bucket skips the frustum test
+     *   entirely. Its 82 m default is shadow arithmetic (58 m of shadow
+     *   half-extent, 6 m of anchor trail, ~15 m of canopy lean) and is dead
+     *   weight on any tier with shadows off — it is what keeps trees behind
+     *   your head in the draw.
+     */
+    setReach(lod, reach, { leafReach = reach, alwaysNear = null } = {}) {
+      if (!(lod > 0) || !(reach > lod)) {
+        console.warn(`[forest] setReach(${lod}, ${reach}): need 0 < lod < reach`);
+        return;
+      }
+      for (const layer of streamedLayers) {
+        const kind = layer.id.split(':')[0];
+        if (kind === 'trunk') {
+          layer.packer.setBand({ max: lod, ...(alwaysNear === null ? {} : { near: alwaysNear }) });
+        } else if (kind === 'trunk-far') {
+          // min === the near layer's max. This is the invariant.
+          layer.packer.setBand({ min: lod, max: reach });
+        } else if (kind === 'leaf') {
+          layer.packer.setBand({
+            max: leafReach,
+            ...(alwaysNear === null ? {} : { near: alwaysNear }),
+          });
+        }
+      }
+      culler.invalidate();
+    },
+
+    /** What every tree layer currently believes its band is. For tests. */
+    reachStats() {
+      return streamedLayers
+        .filter((l) => /^(trunk|trunk-far|leaf):/.test(l.id))
+        .map((l) => ({ id: l.id, ...l.packer.band() }));
+    },
+
     /**
      * Repack the instanced layers for this camera, and bring the ground ring up
      * to date. Call once per frame, after everything that moves the camera and

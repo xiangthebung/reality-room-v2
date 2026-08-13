@@ -38,6 +38,8 @@
  * a slow machine.
  */
 
+import { newbornWatch, drainNewborn, kb } from './newborn.js';
+
 /** Frames kept for the running median. A few seconds at any plausible rate. */
 const RING = 512;
 /** No frame under this is a freeze, whatever the median says. */
@@ -45,11 +47,15 @@ const FLOOR_MS = 45;
 /** …nor is anything under this multiple of the median. */
 const RATIO = 3;
 /**
- * An interval this long was not a frame at all — a tab switch, a debugger, the
- * perf probe holding the renderer. Same reasoning and roughly the same number as
- * MAX_PLOTTABLE_MS in ui/stats.js.
+ * An interval this long was not a frame at all — a debugger, an OS suspend that
+ * fired no visibility event. Same reasoning and the same number as
+ * NOT_A_FRAME_MS in ui/stats.js, INCLUDING why it is 30 s and not the 2 s it
+ * used to be: at 2 s a log that exists to write down freezes was discarding the
+ * worst ones in the session as impossible, which is the bug that file's header
+ * now spends a section on. A tab switch and a perf-probe hold are excluded by
+ * their own explicit signals above, not by being slow.
  */
-const NOT_A_FRAME_MS = 2000;
+const NOT_A_FRAME_MS = 30000;
 /** How many freezes to keep. Older ones drop off the front. */
 const KEEP = 200;
 
@@ -65,6 +71,40 @@ export function installFreezeLog(RR) {
   const ring = new Float32Array(RING);
   let ringCount = 0;
   let ringHead = 0;
+
+  /**
+   * WHAT THE RENDERER MET FOR THE FIRST TIME, which is what `geometries` above
+   * has always been counting without being able to say so. See newborn.js: the
+   * counter moves on the frame a geometry is first DRAWN, not the frame it was
+   * built, so a ground chunk that landed quietly eight seconds ago bills its
+   * 416 KB upload to the frame the player turned to face it — and that frame
+   * has no other counter of its own. This is the single largest source of the
+   * "no counter this watches moved" verdict that used to cover most of the log.
+   */
+  const newborn = newbornWatch(renderer).log;
+  let newbornAt = 0;
+
+  /**
+   * HOW OFTEN A SLAB HAS DOUBLED, summed over every streamed layer.
+   *
+   * The one hazard in `packSlab` that is expensive by construction and was
+   * invisible here. A growth replaces the mesh's instance attribute, so the
+   * next render pays a full `bufferData` of the NEW capacity — up to 8 MB for
+   * the sward — and it also orphans the old GL buffer, because three keys its
+   * buffers on the attribute object and offers no way to release one. forest.js
+   * sizes the initial capacities so this stays at zero in ordinary play and
+   * says outright that "a 146 ms frame during the first walk out was one"; a
+   * detector that cannot see the difference between that frame and any other is
+   * missing the cause it would most want to be told about, especially with a
+   * content pass landing that moves every resident peak.
+   */
+  const slabGrowths = () => {
+    const g = forest.growths;
+    if (!g) return 0;
+    let n = 0;
+    for (const key in g) n += g[key];
+    return n;
+  };
 
   /**
    * The previous frame's readings. Every field here is a counter that only ever
@@ -94,6 +134,13 @@ export function installFreezeLog(RR) {
     prev.anchorX = atmosphere._anchorX;
     prev.level = settings?.autoLevel;
     prev.scale = pipeline.drs?.scale ?? 1;
+    /**
+     * The pre-warm meets several hundred geometries behind the gate, for the
+     * same reason it compiles fifty programs there. Forgetting them here is the
+     * same non-negotiable as forgetting the programs — see `resnap`'s header.
+     */
+    newbornAt = newborn.length;
+    prev.grows = slabGrowths();
   };
   resnap();
 
@@ -191,6 +238,16 @@ export function installFreezeLog(RR) {
      * want.
      */
     const anchorMoved = atmosphere._anchorX !== prev.anchorX;
+    /**
+     * Drained every frame rather than only on the frames that qualify, because
+     * the cursor has to move whether or not anybody reads it — otherwise the
+     * first freeze of a session would be handed every geometry met since the
+     * gate lifted. `drainNewborn` allocates nothing when the cursor is current,
+     * which is all but a handful of frames.
+     */
+    const met = drainNewborn(newborn, newbornAt);
+    newbornAt = met.cursor;
+    const grows = slabGrowths() - prev.grows;
     const level = settings?.autoLevel;
     const scale = pipeline.drs?.scale ?? 1;
     const rungChanged = level !== prev.level;
@@ -207,6 +264,7 @@ export function installFreezeLog(RR) {
     prev.anchorX = atmosphere._anchorX;
     prev.level = level;
     prev.scale = scale;
+    prev.grows += grows;
 
     if (ringCount < 30) return;
     const med = medianOf(ring, ringCount);
@@ -244,6 +302,10 @@ export function installFreezeLog(RR) {
       ground,
       geometries,
       textures,
+      /** First-drawn this frame, and what the driver had to upload for them. */
+      firstDrawn: met.count ? met.summary : '',
+      uploadKB: met.bytes ? Math.round(met.bytes / 1024) : 0,
+      slabGrowths: grows,
       instances: uploadedNow,
       heapMB: +(heap / 1e6).toFixed(1),
       shadow: sunCommits ? 'sun step' : anchorMoved ? 'anchor moved' : '',
@@ -264,9 +326,13 @@ export function installFreezeLog(RR) {
       announced = now;
       const why =
         (fresh.length ? `compiled ${fresh.join(', ')}; ` : '') +
+        (grows ? `${grows} slab${grows > 1 ? 's' : ''} doubled; ` : '') +
+        (met.count ? `first draw of ${met.summary} (${kb(met.bytes)} uploaded); ` : '') +
         (built ? `${built} sectors built; ` : '') +
         (evicted ? `${evicted} sectors evicted; ` : '') +
-        (geometries ? `${geometries > 0 ? '+' : ''}${geometries} geometries; ` : '') +
+        // Only when the newborn log did not already say what they were: the two
+        // count the same event and naming it twice reads as two events.
+        (geometries && !met.count ? `${geometries > 0 ? '+' : ''}${geometries} geometries; ` : '') +
         (textures ? `${textures > 0 ? '+' : ''}${textures} textures; ` : '') +
         (entry.rung ? `quality ${entry.rung}; ` : '') +
         (entry.shadow ? `shadow map (${entry.shadow}); ` : '');

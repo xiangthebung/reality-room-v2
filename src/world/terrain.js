@@ -1248,6 +1248,219 @@ function caveAt(k) {
   return made;
 }
 
+/* -------------------------------------------------------------------------- *
+ *  THE PORTAL — THE HOLE THE MOUTH HAS TO PUNCH IN THE GROUND MESH
+ * -------------------------------------------------------------------------- *
+ *
+ * THE ENTRANCE WAS BLOCKED BY TERRAIN, AND IT COULD NOT NOT BE.
+ *
+ * A height field has exactly one surface per column. At the mouth the tube's
+ * floor IS the gully floor, and thirty metres in the hillside is four metres
+ * over the tube's ceiling — so somewhere between the two, the ground surface
+ * passes THROUGH the passage. Measured on grove-01 (`scripts/cave-mouth.mjs`)
+ * it took three to five metres to do it and stood up to 5.7 m proud of the
+ * floor: a grass-topped mound filling the doorway, which you walked straight
+ * through because the body underground stands on `caveFloor` and not on
+ * `groundUnder`. `.shots/crag/b4-mouth.png` is the picture of it.
+ *
+ * Every way of MOVING that crossing was tried on paper first and they all fail
+ * for the same reason. Hold the notch down and the crossing moves deeper, where
+ * it is a wall in the dark. Cut the notch as a slot that follows the tube down
+ * and the crossing becomes a head wall at the end of the slot. Narrow the slot
+ * to a point and the crossing becomes a wedge closing in from both walls. There
+ * is no arrangement of a single-valued surface that gets from below a tube to
+ * above it without going through it.
+ *
+ * So the surface stops existing there. The predicate is exact rather than a
+ * radius: a ground vertex is inside the portal when it is inside the mouth's own
+ * cross-section, floor to ceiling — which means the boundary of the hole lies ON
+ * the tube's surface, and the tube's own mesh plugs it by construction. From
+ * inside, the rock. From the hillside above, the hole is under the ceiling and
+ * therefore under the hill. From outside and in front, the hood — which stands
+ * 1.6 m proud of the cavity over exactly this stretch — covers the rim.
+ *
+ * WHY THE MOUTH IS PLANNED HERE AND NOT IN caves.js. `heightGrid` runs in a
+ * worker that has terrain.js and nothing else, and the ground chunk containing a
+ * mouth is built long before the cave is close enough to stream. Recomputing the
+ * tube on this side would be the drift the terrain worker's own header warns
+ * about, so instead the FIRST FIVE NODES OF EVERY PASSAGE ARE PLANNED HERE and
+ * `buildNodes` consumes them. This is the same hand-over the gully already is:
+ * terrain owns where the mouth is, caves.js owns everything past it.
+ */
+
+/** The mouth's cross-section, in radii. Mirrors SEC_WIDE/TALL/FLOOR in caves.js. */
+const MOUTH_W = 1.3;
+const MOUTH_T = 0.98;
+const MOUTH_F = 0.52;
+/** Metres between planned nodes, and how many there are. See `caveMouthPlan`. */
+const MOUTH_STEP = 3;
+const MOUTH_NODES = 5;
+
+/**
+ * Where the tube starts and what its first five nodes are.
+ *
+ * Memoised on the descriptor, which is itself slot-cached and seed-guarded, so
+ * this runs once per cave per realm and costs about twenty `heightAt` calls.
+ *
+ * The reasoning about `aBury` — walk the gully floor inward and find the first
+ * metre at which the hillside stands clear over a passage of this size, then put
+ * ring zero three metres in front of it — belongs to caves.js and is quoted in
+ * full at `buildNodes`. It lives here only because the worker needs the answer.
+ */
+export function caveMouthPlan(c) {
+  if (c._mouth && c._mouthSeed === WORLD_SEED) return c._mouth;
+  const rng = makeRng(`${WORLD_SEED}:cave-path:${c.k}`);
+  const rMouth = rngRange(rng, 3.5, 4.5);
+  const need = rMouth * (MOUTH_F + MOUTH_T) + 0.6;
+  const at = (a) => {
+    const p = caveAxisPoint(c, a, 0);
+    return { x: p.x, z: p.z, surf: heightAt(p.x, p.z) };
+  };
+  let ref = at(c.aHold - 9).surf;
+  let aBury = c.aFade + 6;
+  for (let a = c.aHold - 8; a <= c.aFade + 8; a += 1) {
+    const g = at(a);
+    ref = Math.min(g.surf, ref + 0.12);
+    if (g.surf > ref + need) {
+      aBury = a;
+      break;
+    }
+  }
+
+  const aStart = aBury - 3;
+  const nodes = [];
+  let prevFloor = Infinity;
+  for (let i = 0; i < MOUTH_NODES; i++) {
+    const a = aStart + i * MOUTH_STEP;
+    const g = at(a);
+    const r = i === 0 ? rMouth : rngRange(rng, 3.0, 4.2);
+    const f = Math.min(g.surf, prevFloor + 0.34);
+    prevFloor = f;
+    nodes.push({ a, x: g.x, z: g.z, r, y: f + r * MOUTH_F, floor: f });
+  }
+  c._mouth = { aStart, nodes };
+  c._mouthSeed = WORLD_SEED;
+  return c._mouth;
+}
+
+/**
+ * The mouth's void directly over (x, z): `{floor, ceil}`, or null.
+ *
+ * Split from the height test because the scatter asks this question a great many
+ * times a second and `heightAt` is not free — this way the common answer, "there
+ * is no cave here", costs one slot lookup and a compare, and the height is only
+ * sampled by callers who have already learnt that there might be.
+ */
+export function cavePortalSpan(x, z, out = _portal) {
+  const ru = x * ridgeCos + z * ridgeSin;
+  const rv = z * ridgeCos - x * ridgeSin;
+  const c = caveAt(Math.round(ru * CAVE_INV_SPACING));
+  if (!c.live) return null;
+  const du = ru - c.u0;
+  const dv = (rv - c.v0) * c.inSign;
+  const a = dv * c.ca + du * c.sa;
+  const m = caveMouthPlan(c);
+  /**
+   * The portal ends at the last planned node and not a metre further.
+   *
+   * The twelve metres the five nodes span is already generous — `aBury` is by
+   * definition where the hillside has finished crossing the passage, and that is
+   * three metres in. Past the last node the tube leaves the gully's axis and
+   * this frame stops being able to say where it is, so the portal must not.
+   */
+  const last = m.aStart + (MOUTH_NODES - 1) * MOUTH_STEP;
+  if (a < m.aStart || a > last) return null;
+  const b = du * c.ca - dv * c.sa;
+
+  // Straight-line interpolation between the planned nodes. They are collinear on
+  // the gully's axis and evenly spaced, so the spline caves.js runs through them
+  // is the same line in x and z; only y and r are eased, and by centimetres.
+  const t = clamp((a - m.aStart) / MOUTH_STEP, 0, MOUTH_NODES - 1.0001);
+  const i = t | 0;
+  const f = t - i;
+  const n0 = m.nodes[i];
+  const n1 = m.nodes[i + 1];
+  const r = n0.r + (n1.r - n0.r) * f;
+  const y = n0.y + (n1.y - n0.y) * f;
+
+  /**
+   * A METRE WIDER THAN THE PLAN SAYS, and that slack is not timidity — it is the
+   * difference between the plan and the mesh.
+   *
+   * The plan is five nodes; the mesh is a Catmull-Rom resample of them at 0.95 m
+   * with its radius splined too, and then `rock` displaces every vertex by up to
+   * `r * rough`. So the drawn passage is routinely half a metre wider than the
+   * straight-line interpolation here, and the first run of this left grass
+   * standing at the outer edges of the doorway with the axis clean: 5.6 m of
+   * mound still on screen, over a sample the probe took at 0.8 of the real
+   * half-width.
+   *
+   * SIDEWAYS ONLY. The same metre was tried on the ceiling and, on top of the
+   * index filter's one-cell dilation, it opened the roof: `b4-mouth` came back
+   * with a patch of sunlit hillside showing through the top of the arch, which
+   * is the portal's own failure mode and worse than the mound. The extra
+   * sideways comes out of rock the HOOD is standing 1.6 m proud of; there is no
+   * hood over the ceiling, only hill.
+   */
+  const half = r * MOUTH_W + 0.9;
+  if (b <= -half || b >= half) return null;
+  const u = b / half;
+  const arc = r * MOUTH_T * Math.sqrt(1 - u * u);
+  out.floor = y - Math.min(arc, r * MOUTH_F);
+  /**
+   * Half a metre over the smooth outline, because the mesh is not smooth.
+   *
+   * `rock` displaces every vertex radially by up to `r * rough`, and the plan
+   * here is the outline before any of that. Ground that stands between this
+   * estimate and the real ceiling is ground the portal leaves alone and the
+   * player walks into: `cave-mouth` measured 4.9 m of it once the displacement
+   * gained a fourth octave. Overshooting costs a notch in the hillside no deeper
+   * than this number, in the one place the hood is standing 1.6 m proud.
+   */
+  out.ceil = y + arc + 0.6;
+  return out;
+}
+
+const _portal = { floor: 0, ceil: 0 };
+
+/**
+ * What a ground vertex at (x, z, h) is, as far as a cave mouth is concerned.
+ *
+ *   0  nothing to do with a mouth, which is all but three chunks in a world.
+ *   1  inside the doorway and under its ceiling. This vertex is DROPPED to just
+ *      below the tube's floor, where the tube's own floor mesh covers it.
+ *   2  inside the doorway and at or over its ceiling. Left exactly where it is:
+ *      this is the hillside the passage is buried under.
+ *
+ * DELETING TRIANGLES ALONE COULD NOT DO THIS, and five runs of trying is the
+ * evidence. The crossing to be removed is about three metres long against a
+ * 1.6 m cell, so the region is two cells deep and EVERY triangle in it is a
+ * boundary triangle. Every filter rule then trades one artefact for another:
+ * strict rules leave tan spikes of mound standing in the arch, generous ones
+ * delete the hillside over the roof and show sunlit forest through it, and the
+ * rule that vetoes on hillside leaves a wedge across the middle. There is no
+ * threshold, because the lattice cannot resolve the shape.
+ *
+ * Moving the vertices can. Pulled to the floor, the ground inside the doorway is
+ * a surface the tube is standing on rather than a surface crossing it, and the
+ * only thing left to cut is the ONE seam where the pulled ground meets the
+ * hillside — a single row of quads, whose top edge is the ceiling and whose
+ * bottom edge is the floor, exactly the hole the mouth wants. See `heightGrid`.
+ *
+ * The pull is to just BELOW the floor and never upward, so the walkable gully in
+ * front of the mouth — which is at the tube's floor for its whole width — is
+ * untouched. A version of this with any slack the other way deleted the approach
+ * and left you looking at the water plane through the world.
+ */
+export function cavePortal(x, z, h) {
+  const p = cavePortalSpan(x, z);
+  if (p === null) return 0;
+  return h < p.ceil - 0.4 ? 1 : 2;
+}
+
+/** How far under the tube's own floor a pulled ground vertex is put, in metres. */
+const PORTAL_SINK = 0.3;
+
 /**
  * How strongly a cave's gully wants the ground to itself, 0..1.
  *
@@ -1307,6 +1520,20 @@ export function caveClearance(x, z) {
   // before a trunk stands in it.
   const cut = caveNotch(c, a, b);
   if (cut > 0) return 1;
+  /**
+   * …and nothing may stand on ground that is about to be deleted.
+   *
+   * The scatter is placed on `heightAt`, which still answers for the mound the
+   * portal punches out of the mesh — so without this the grass and flowers that
+   * were growing on it are left hanging in the doorway with nothing under them.
+   * The notch above does not cover it: the mound is PAST `aHold`, which is where
+   * the notch has already begun to fade.
+   *
+   * Below the notch test rather than above it because this one costs a
+   * `heightAt`, and inside the gully the answer is already 1.
+   */
+  const portal = cavePortalSpan(x, z);
+  if (portal !== null && heightAt(x, z) > portal.floor) return 1;
   const margin = caveNotch(c, a, b > 0 ? Math.max(0, b - 4.5) : Math.min(0, b + 4.5));
   return Math.max(tor, margin > 0 ? clamp01(margin / Math.max(0.001, cut || margin)) : 0);
 }
@@ -1857,27 +2084,146 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
   }
 
   const H = new Float64Array(pad * pad);
+  /**
+   * Which of those samples a cave mouth has claimed. See the PORTAL block above.
+   *
+   * On the PADDED lattice, because the normal is a central difference over
+   * neighbours: pulling a vertex down and leaving its neighbour's contribution
+   * to the normal at the un-pulled height would light the seam as though the
+   * ground were still where it used to be. One extra `cavePortal` per sample,
+   * which is one slot lookup and a compare, and `holes` stays zero for all but
+   * the two or three chunks in a world that hold a mouth.
+   */
+  const claim = new Uint8Array(pad * pad);
+  let holes = 0;
+  /** The mouth's ceiling over each claimed sample, for the seam pass below. */
+  let roof = null;
   for (let k = 0; k < pad; k++) {
     const z = zs[k];
     const row = k * pad;
-    for (let i = 0; i < pad; i++) H[row + i] = heightAt(xs[i], z);
+    for (let i = 0; i < pad; i++) {
+      const h = heightAt(xs[i], z);
+      const c = cavePortal(xs[i], z, h);
+      if (c === 0) {
+        H[row + i] = h;
+        continue;
+      }
+      claim[row + i] = c;
+      holes++;
+      if (!roof) roof = new Float64Array(pad * pad);
+      roof[row + i] = _portal.ceil;
+      H[row + i] = c === 1 ? Math.min(h, _portal.floor - PORTAL_SINK) : h;
+    }
+  }
+  /**
+   * BRING THE LIP OF THE SEAM DOWN TO THE CEILING.
+   *
+   * The seam is the row of quads joining the pulled ground to the hillside, and
+   * its top edge is wherever the first un-pulled sample happens to be. The
+   * mound climbs at better than a metre per metre, so on a 1.6 m lattice that
+   * sample is routinely a metre or two ABOVE the roof — and cutting the seam
+   * then cuts a notch out of the hillside, which `cave-mouth` reports as a
+   * breach and which photographs as a patch of daylight over the arch.
+   *
+   * Dropping those samples to just over the ceiling puts the whole seam inside
+   * the passage's own silhouette, where the tube's roof covers it. Eight
+   * neighbours rather than four: a quad's diagonal makes triangles whose only
+   * pulled corner is diagonally opposite.
+   */
+  if (roof) {
+    const lip = Float64Array.from(H);
+    for (let k = 1; k < pad - 1; k++) {
+      for (let i = 1; i < pad - 1; i++) {
+        const c = k * pad + i;
+        if (claim[c] !== 2) continue;
+        let near = false;
+        for (let dk = -1; dk <= 1 && !near; dk++) {
+          for (let di = -1; di <= 1; di++) {
+            if (claim[c + dk * pad + di] === 1) {
+              near = true;
+              break;
+            }
+          }
+        }
+        if (near) lip[c] = Math.min(H[c], roof[c] + 0.25);
+      }
+    }
+    H.set(lip);
   }
 
   const position = new Float32Array(count * 3);
   const normal = new Float32Array(count * 3);
   // Per-vertex colour carries the biome blend. Doing it here rather than with a
   // texture means the ground colour follows the actual terrain — moss in the
-  // hollows, dry needle litter on the slopes, gravel at the waterline — with no
-  // UV seams and no texture memory.
+  // hollows, laterite on the banks, silt at the waterline — with no UV seams and
+  // no texture memory. It says WHAT this ground is; the `forestFloor` map wired
+  // on in forest.js says what it is MADE OF, at scales below the 1.6 m lattice.
+  // Neither replaces the other and they are multiplied.
   const color = new Float32Array(count * 3);
+  /**
+   * `aWet` — 0 dry, 1 standing water. Read in the fragment shader (forest.js) as
+   * the mask for the wet sheen, and used above to darken and enrich the albedo.
+   *
+   * It was dead for a long time: computed here, transferred by the worker, bound
+   * as an attribute and read by nothing at all — 26 KB of upload per chunk for a
+   * varying nobody declared. If it ever goes unread again, delete it rather than
+   * leaving it: the upload is not free and an attribute that means nothing is
+   * worse than no attribute.
+   */
   const wet = new Float32Array(count);
 
-  const moss = new THREE.Color(0x5c7a3c);
-  const litter = new THREE.Color(0x6a5231);
-  const dry = new THREE.Color(0x8a7d47);
-  const gravel = new THREE.Color(0x77736a);
+  /**
+   * THE FOUR GROUND COLOURS, MOVED TO THE TROPICS. Free — these are vertex
+   * colours on a mesh that is already being built, so the palette costs the
+   * same whatever it is.
+   *
+   *   `moss`   was a yellow-green at 0x5c7a3c, which is a temperate sward seen
+   *            from above. Under a closed tropical canopy the ground green is
+   *            much darker and browner, because most of what is down there is
+   *            wet moss and seedling rather than turf.
+   *   `litter` is the deep red-brown of rotting broadleaf, and it is now the
+   *            dominant colour of the world rather than a patch in it — the
+   *            sward above no longer covers it.
+   *   `dry`    IS THE BIGGEST SINGLE CHANGE IN THIS BLOCK. It was 0x8a7d47, a
+   *            pale chalky yellow, and it is what every slope and every bank in
+   *            the world lerps toward. Amazonian soil is laterite: iron-red,
+   *            saturated, and the standard visual shorthand for the place. A
+   *            red bank cut through green is a far stronger biome cue than
+   *            anything the canopy can do, and it appears wherever the ground
+   *            steepens, which is exactly where the eye already is.
+   *   `gravel` is now river mud rather than grey shingle. It only appears past
+   *            `damp > 0.45`, i.e. at the water, and a tropical river bank is
+   *            silt.
+   *
+   *
+   * `dry` CAME DOWN 22% IN LUMA, AND THAT IS THE POINT OF THE WHOLE BLOCK.
+   *
+   * It was 0x7c4a2c, Rec.709 luma 82.5 against `litter`'s 59.9 — so every bank
+   * and every slope in the world lerped toward something HALF A STOP BRIGHTER
+   * than the flat ground beside it. Lit by a warm sun that reads as pale tan,
+   * and a pale tan slope is the single loudest wrong note in a rainforest: a
+   * tropical hillside is the WETTEST part of the ground, not the driest, because
+   * water runs down it all day and the canopy over it never opens. 0x64381f is
+   * the same laterite hue at luma 64.5 — still visibly red against the olive
+   * flat, no longer brighter than it.
+   *
+   * `soak` IS NEW, AND IT IS THE ONLY COLOUR HERE THAT IS NOT A SUBSTRATE.
+   *
+   * Everything above answers "what is this ground made of". This answers "how
+   * wet is it", which on a rainforest floor is the bigger question and was not
+   * being asked anywhere: `aWet` was computed, uploaded per vertex and read by
+   * NOTHING. Damp earth is darker and more saturated than the same earth dry —
+   * water fills the pores, kills the diffuse scatter off the grain boundaries
+   * and lets the substrate's own colour through — so this is a dark, rich
+   * olive-brown that the blend leans toward wherever water collects, and the
+   * fragment side adds a sky-coloured sheen on top of it (see forest.js).
+   */
+  const moss = new THREE.Color(0x415a2e);
+  const litter = new THREE.Color(0x53381f);
+  const dry = new THREE.Color(0x64381f);
+  const gravel = new THREE.Color(0x5b5044);
+  const soak = new THREE.Color(0x3b3120);
   const tmp = new THREE.Color();
-  const shade = new THREE.Color();
   const twoCell = 2 * cell;
 
   for (let j = 0; j < side; j++) {
@@ -1911,33 +2257,91 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
       const damp = wetness(x, z);
       const patch = fbm2(x * 0.045 + kBiomeX, z * 0.045 + kBiomeZ, 2) * 0.5 + 0.5;
 
-      tmp.copy(moss).lerp(litter, clamp01(patch * 1.35 - 0.12));
-      tmp.lerp(dry, clamp01(slope * 2.1 - 0.25));
-      tmp.lerp(gravel, clamp01((damp - 0.45) * 2.6));
-      // Height-driven desaturation: the ridge is exposed and pale, the hollow is
-      // dark and green. It is the cheapest possible aerial perspective and it does
-      // most of the work in making the ridge read as *far away and high up*.
-      const alt = clamp01((h + 6) / 40);
-      tmp.lerp(shade.copy(tmp).offsetHSL(-0.02, -0.16 * alt, 0.1 * alt), alt);
+      /**
+       * HOW WET THIS SQUARE METRE IS — and why the stream is only a third of it.
+       *
+       * `wetness()` is the distance to the stream bank and nothing else, so it
+       * is zero over 99% of the world: sampled on a 4 m lattice across the
+       * authored region it returns 0.000 at every one of the eight camera
+       * stations. That is a fine answer to "may a tree grow here" and a useless
+       * one to "does this ground look damp", because in a rainforest ALL of it
+       * does. Three terms, strongest wins:
+       *
+       *   the stream, unchanged;
+       *   `basin`, low ground that is also flat — water runs downhill and then
+       *     stops, so a hollow holds it and a slope of the same height does not;
+       *   `seep`, a 50 m field that decides which parts of the wood are boggy
+       *     this week. Without it the damp map is a function of height alone and
+       *     reads as a contour line.
+       *
+       * The 0.22 floor is the biome: nothing in this forest is ever properly
+       * dry, and a floor with genuinely dry patches in it reads as woodland.
+       */
+      const basin = clamp01((5 - h) / 14) * (1 - clamp01(slope * 3.5));
+      const seep = fbm2(x * 0.019 + kGrain2X, z * 0.019 + kGrain2Z, 2) * 0.5 + 0.5;
+      const wetv = clamp01(Math.max(damp, 0.22 + basin * 0.52) * (0.5 + seep * 0.7));
 
       /**
-       * Mottle, at the scale of the mesh itself.
+       * Moss follows the water, which is the one thing the old blend did not
+       * know: the moss/litter split was a noise field and nothing else, so moss
+       * appeared in bands across dry ridges and bare litter sat in bogs. The
+       * bias is a third of the mix, so `patch` still decides most of it — this
+       * only breaks the ties, in the direction the water says.
+       */
+      tmp.copy(moss).lerp(litter, clamp01(patch * 1.35 - 0.12 - wetv * 0.34));
+      tmp.lerp(dry, clamp01(slope * 2.1 - 0.25));
+      tmp.lerp(gravel, clamp01((damp - 0.45) * 2.6));
+      // Damp earth is DARKER and RICHER than the same earth dry. See `soak`.
+      tmp.lerp(soak, wetv * 0.34);
+      /**
+       * Height-driven desaturation — WITH THE LIGHTENING TAKEN OUT.
        *
-       * The ground was a flat sheet of one green, which is the single most
-       * synthetic-looking surface in the world — real forest floor is a mess of
-       * leaf litter, moss, bare earth and root. Two octaves of high-frequency
-       * noise in both value and hue at roughly the vertex spacing gives it
-       * texture for free, no texture map and no UVs.
+       * This used to lerp toward a copy of itself desaturated 0.16 and LIGHTENED
+       * 0.10 in HSL, by `alt` again, so at the crest it was aerial perspective
+       * baked into the object's own albedo. Two things wrong with that. It is
+       * the fog's job, and doing it here means the ridge is pale at noon, at
+       * dusk and inside a rainstorm alike. And `offsetHSL` runs in the LINEAR
+       * working space, where these colours have an HSL lightness around 0.045 —
+       * so a +0.10 offset is not a tenth brighter, it is more than double, and
+       * that is why the high ground photographed as bare pale tan.
+       *
+       * What is left is a small desaturation, which is the half of aerial
+       * perspective that fog alone does not give you, at a third of the old
+       * strength and linear in `alt` rather than quadratic.
+       */
+      const alt = clamp01((h + 6) / 40);
+      tmp.offsetHSL(-0.008 * alt, -0.055 * alt, 0);
+
+      /**
+       * Mottle — NOW ONLY AT SCALES THE MESH CAN ACTUALLY HOLD.
+       *
+       * This was two octaves at 0.62 and 1.7 cycles per metre, i.e. periods of
+       * 1.6 m and 0.59 m, sampled at the vertices of a 1.6 m lattice. Both are
+       * at or past Nyquist for that lattice; the 1.7 octave is nearly three
+       * times past it. Sampling a field faster than the grid can represent does
+       * not draw fine grain, it draws uncorrelated random numbers at the
+       * vertices, which Gouraud then smears back out into low-frequency
+       * blotches — which is the blur. And with a lightness swing of ±0.12 in
+       * LINEAR HSL on a colour whose lightness is 0.045, those blotches were a
+       * two-to-three stop swing: the pale yellow patches.
+       *
+       * So the frequencies come down under the lattice, to 9 m and 32 m, where
+       * they are patchiness in the wood rather than grain in the ground, and the
+       * value swing becomes a multiply — ±26% of the colour, whatever the colour
+       * is — instead of an HSL offset that means something different for every
+       * shade it lands on. Everything finer than the mesh now lives in the
+       * `forestFloor` map, which is where it can be resolved.
        */
       const grain =
-        noise2(x * 0.62 + kGrainX, z * 0.62 + kGrainZ) * 0.5 +
-        noise2(x * 1.7 + kGrain2X, z * 1.7 + kGrain2Z) * 0.25;
-      tmp.offsetHSL(grain * 0.035, grain * 0.1, grain * 0.16);
+        noise2(x * 0.11 + kGrainX, z * 0.11 + kGrainZ) * 0.62 +
+        noise2(x * 0.031 + kGrain2X, z * 0.031 + kGrain2Z) * 0.38;
+      tmp.offsetHSL(grain * 0.01, grain * 0.035, 0);
+      tmp.multiplyScalar(1 + grain * 0.34);
 
       color[k] = tmp.r;
       color[k + 1] = tmp.g;
       color[k + 2] = tmp.b;
-      wet[j * side + i] = damp;
+      wet[j * side + i] = wetv;
     }
   }
 
@@ -1950,22 +2354,64 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
   const Index = count > 65535 ? Uint32Array : Uint16Array;
   const index = new Index(seg * seg * 6);
   let t = 0;
+  /**
+   * CUT THE ONE SEAM, WHICH IS ALL THERE IS LEFT TO CUT.
+   *
+   * The pull in the sampling loop has already put every claimed vertex either
+   * just under the tube's floor (1) or up on the hillside where it always was
+   * (2). Those two surfaces are the floor and the roof of the doorway, and the
+   * only geometry between them is the quads that join one to the other — a
+   * single row, standing across the passage, from the floor to the ceiling.
+   * That row is the hole.
+   *
+   * Per TRIANGLE rather than per quad, because a quad's diagonal often has all
+   * of the transition on one side of it and cutting both halves would take a
+   * cell of hillside with it.
+   */
+  const drop = (p, q, r) => {
+    const a = claim[p];
+    const b = claim[q];
+    const c = claim[r];
+    if (!a || !b || !c) return false;
+    const lo = a === 1 || b === 1 || c === 1;
+    const hi = a === 2 || b === 2 || c === 2;
+    return lo && hi;
+  };
+  /** Where a lattice vertex (ix, iy) sits in the PADDED sample grid. */
+  const pk = (ix, iy) => (iy + 1) * pad + ix + 1;
   for (let iy = 0; iy < seg; iy++) {
     for (let ix = 0; ix < seg; ix++) {
       const a = ix + side * iy;
       const b = ix + side * (iy + 1);
       const c = ix + 1 + side * (iy + 1);
       const d = ix + 1 + side * iy;
-      index[t++] = a;
-      index[t++] = b;
-      index[t++] = d;
-      index[t++] = b;
-      index[t++] = c;
-      index[t++] = d;
+      const pa = pk(ix, iy);
+      const pb = pk(ix, iy + 1);
+      const pc = pk(ix + 1, iy + 1);
+      const pd = pk(ix + 1, iy);
+      if (!holes || !drop(pa, pb, pd)) {
+        index[t++] = a;
+        index[t++] = b;
+        index[t++] = d;
+      }
+      if (!holes || !drop(pb, pc, pd)) {
+        index[t++] = b;
+        index[t++] = c;
+        index[t++] = d;
+      }
     }
   }
 
-  return { position, normal, color, aWet: wet, index };
+  return {
+    position,
+    normal,
+    color,
+    aWet: wet,
+    // Sliced rather than handed over long, because the worker TRANSFERS this
+    // buffer and a BufferAttribute over a partly-filled one draws the leftover
+    // zeroes as a fan of degenerate triangles at the chunk's first vertex.
+    index: t === index.length ? index : index.slice(0, t),
+  };
 }
 
 /** Wrap the five buffers `heightGrid` returns in a real BufferGeometry. */

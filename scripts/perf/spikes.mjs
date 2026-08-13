@@ -83,9 +83,30 @@ const CAUSES = [
   { name: 'sector evicted', of: (d) => d.evicted > 0, unit: 'sectors' },
   { name: 'ground chunk', of: (d) => d.ground !== 0, unit: 'chunks' },
   { name: 'geometry alloc', of: (d) => d.geometries > 0, unit: 'geometries' },
+  /**
+   * The same event as `geometry alloc`, split by what it actually costs.
+   *
+   * `geometry alloc` is the largest lift this report has ever measured and the
+   * least actionable line in it, because the counter behind it moves on the
+   * frame a geometry is first DRAWN and covers a 24-vertex campfire prop and a
+   * 1.8 MB cave mesh alike. Measured over a 20 s walk at the deep station: 29
+   * ground chunks at 416 KB each, one cave at 1.8 MB, and some eighty small
+   * props — and the props are the majority of the count while the chunks and
+   * the cave are the whole of the bytes. A quarter of a megabyte is the line
+   * between a first draw that hides inside a frame and one that does not.
+   */
+  { name: '  …of which >256 KB uploaded', of: (d) => d.metBytes > 262144, unit: 'bytes' },
   { name: 'geometry freed', of: (d) => d.geometries < 0, unit: 'geometries' },
   { name: 'texture alloc', of: (d) => d.textures !== 0, unit: 'textures' },
   { name: 'big instance repack', of: (d) => d.uploadedNow > 5000, unit: 'instances' },
+  /**
+   * A slab doubling: a full `bufferData` of the new capacity on the next
+   * render, up to 8 MB, plus an orphaned GL buffer that nothing can release.
+   * forest.js sizes the capacities so this never fires; it is here so that
+   * "never" is a measurement rather than an intention, and because a content
+   * pass that moves the resident peaks is exactly what would break it.
+   */
+  { name: 'slab doubled', of: (d) => d.grows > 0, unit: 'growths' },
   { name: 'GC (heap fell)', of: (d) => d.heap < -1e6, unit: 'bytes' },
 ];
 
@@ -120,6 +141,12 @@ for (const [w, walk] of runs.entries()) {
       phases: walk.phases?.[i] ?? null,
       ms: walk.intervals[i],
       programs: b.programs - a.programs,
+      // Already per-frame — the probe drains its cursor every frame — so unlike
+      // everything around it these are read rather than differenced.
+      met: b.met ?? 0,
+      metBytes: b.metBytes ?? 0,
+      metWhat: b.metWhat ?? '',
+      grows: (b.grows ?? 0) - (a.grows ?? 0),
       geometries: b.geometries - a.geometries,
       textures: b.textures - a.textures,
       built: b.built - a.built,
@@ -191,7 +218,50 @@ for (const f of hitches.sort((a, b) => b.ms - a.ms).slice(0, 25)) {
       `${why.length ? why.join(', ') : 'nothing measured here changed'}` +
       `${f.fresh.length ? `  →  ${f.fresh.join(', ')}` : ''}` +
       `${f.built ? ` [+${f.built} sectors]` : ''}` +
+      `${f.metWhat ? `  →  first draw: ${f.metWhat}` : ''}` +
       `${f.uploadedNow ? ` [${f.uploadedNow} instances]` : ''}`
+  );
+}
+
+/**
+ * WHAT THE FIRST DRAWS WERE, over the whole walk rather than over the hitches.
+ *
+ * The hitch rows above can only show the ones that happened to land on a slow
+ * frame, and the interesting question is the other way round: this is every
+ * mesh whose first upload the walk paid for, biggest first, so the ones worth
+ * pre-warming or splitting can be picked off by size rather than by whether
+ * they were unlucky. A first draw that costs 400 KB and lands inside a 16.7 ms
+ * frame today is a dropped frame on a 240 Hz panel and on a heavier build.
+ */
+const uploads = new Map();
+let uploadBytes = 0;
+for (const f of frames) {
+  if (!f.metBytes) continue;
+  uploadBytes += f.metBytes;
+  const row = uploads.get(f.metWhat) ?? { n: 0, bytes: 0, worstMs: 0 };
+  row.n++;
+  row.bytes += f.metBytes;
+  row.worstMs = Math.max(row.worstMs, f.ms);
+  uploads.set(f.metWhat, row);
+}
+if (uploads.size) {
+  console.log(heading('first draws during the walk (geometry uploaded on the frame it appeared)'));
+  console.log(`${PAD('what', 46)}${PAD('frames', 9)}${PAD('total', 11)}worst frame`);
+  for (const [what, row] of [...uploads].sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 12)) {
+    console.log(
+      PAD(what.length > 44 ? `${what.slice(0, 43)}…` : what, 46) +
+        PAD(String(row.n), 9) +
+        PAD(
+          row.bytes >= 1e6 ? `${(row.bytes / 1048576).toFixed(1)} MB` : `${Math.round(row.bytes / 1024)} KB`,
+          11
+        ) +
+        `${row.worstMs.toFixed(1)} ms`
+    );
+  }
+  console.log(
+    `\n  ${(uploadBytes / 1048576).toFixed(1)} MB uploaded across ${
+      frames.filter((f) => f.metBytes).length
+    } of ${frames.length} frames.`
   );
 }
 

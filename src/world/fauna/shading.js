@@ -529,7 +529,7 @@ varying float vFaunaAlert;
  * TWENTY-SIX PERCHERS, SIXTEEN SPECIES AND COUNTING, STILL ONE DRAW CALL.
  *
  * Every perching bird already carries a voice index into `audio/wildlife.js`, so
- * the wood has been full of birds that sing like a nuthatch and look like a
+ * the wood has been full of birds that sing like a toucan and look like a
  * generic dark smudge. Making the bird you can walk up to LOOK like the bird you
  * can hear is the single highest-value thing available here, and the tempting
  * way to do it — a geometry and a material per species — is the one change that
@@ -539,13 +539,13 @@ varying float vFaunaAlert;
  *
  *   aBuild  (span, girth, length, mark) — a non-uniform scale, applied to the
  *           ONE geometry. The wings and the body take different components,
- *           because a wood pigeon is a big broad-winged animal with a fat body
- *           and a cuckoo is a long-tailed slim one with the same wingspan;
+ *           because a tinamou is a big broad-winged animal with a fat body
+ *           and an aracari is a long-tailed slim one with the same wingspan;
  *           a single uniform scale can say "bigger" and nothing else, and
  *           "bigger" is not a species.
  *   aMark   (r, g, b, radius) — a second colour and how far up the front of the
- *           bird it reaches. A robin is not a red bird, it is a brown bird with
- *           a red front, and one colour per instance cannot say that.
+ *           bird it reaches. A quetzal is not a red bird, it is a green bird with
+ *           a crimson front, and one colour per instance cannot say that.
  *
  * THE MARK IS RESOLVED IN THE VERTEX SHADER, which is what makes it free. It
  * folds into `vFaunaTint` — the varying the fragment shader was already
@@ -561,8 +561,39 @@ export function flyerMaterial(spec) {
   });
   material.name = `fauna-${spec.name}`;
 
+  /**
+   * TWO-SIDED WINGS, and the one thing they are for.
+   *
+   * A blue morpho is not a blue butterfly. It is a brown butterfly with a
+   * mirror glued to the top of its wings: the blue is structural, produced by
+   * interference in the scale lamellae, and the underside is dead leaf-brown
+   * with eyespots. What that means in flight is the thing everybody who has
+   * seen one remembers — it does not fly past, it BLINKS past, a flash of
+   * impossible electric blue and then nothing, over and over, because on half
+   * of every wingbeat you are looking at the other side of the wing.
+   *
+   * That is a two-sided material and nothing else will do. A single colour
+   * flapping is a blue butterfly and a blue butterfly is not interesting; the
+   * blink is the whole image. `gl_FrontFacing` gives it for one branch on a
+   * surface that was already DoubleSide, and aUnder gives every instance its
+   * own underside — which is why this is spliced in per material rather than
+   * always: a bird's back and belly differ too, but not like this, and the
+   * bird program should not pay for an attribute it has nothing to say with.
+   */
+  const twoSided = !!spec.twoSided;
+
   const own = {
-    uWander: { value: new THREE.Vector3(...spec.wander) },
+    /**
+     * (x, y, z) metres the centre wanders, and W THE VERTICAL BOB.
+     *
+     * The bob used to be a hardcoded 1.5 in the orbit branch, which is right
+     * for a bird on a wide circuit over the canopy and absurd for a butterfly
+     * on a two-metre one: a 13 cm insect was bouncing three metres peak to peak
+     * every lap, which put it through the ground at the bottom and into the
+     * mid-storey at the top. It is a fact about the KIND of flyer, so it moved
+     * here rather than becoming a fifth channel on an attribute.
+     */
+    uWander: { value: new THREE.Vector4(spec.wander[0], spec.wander[1], spec.wander[2], spec.wander[3] ?? 1.5) },
     /**
      * Where the mark is anchored on this KIND of flyer, in the geometry's own
      * local units: x, y, z and how heavily sideways distance counts.
@@ -577,6 +608,8 @@ export function flyerMaterial(spec) {
      * the same mirror trick the eye highlight uses in the coat shader.
      */
     uMark: { value: new THREE.Vector4(...(spec.mark ?? [0, 0, 0, 1])) },
+    /** 1/half-span, i.e. metres of wingtip travel per radian of roll. See the wingbeat. */
+    uHinge: { value: spec.hinge ?? 1.15 },
   };
 
   material.onBeforeCompile = (shader) => {
@@ -588,8 +621,9 @@ export function flyerMaterial(spec) {
         /* glsl */ `#include <common>
 ${TRIP_DECL}
 ${NOISE3}
-uniform vec3 uWander;
+uniform vec4 uWander;
 uniform vec4 uMark;
+uniform float uHinge;
 attribute vec2 aWing;
 attribute vec4 aFlight;
 attribute vec4 aBeat;
@@ -601,6 +635,7 @@ varying vec3 vRrField;
 varying vec3 vFaunaWorld;
 varying vec3 vFaunaTint;
 varying float vFaunaAlert;
+${twoSided ? 'attribute vec4 aUnder;\nvarying vec4 vRrUnder;' : ''}
 vec3 rrRight;
 vec3 rrUp;
 vec3 rrFwd;
@@ -627,7 +662,31 @@ float rrBeat;
   // normals point out of it, and overwriting those would light a bird as a flat
   // card from above — which is what it used to be and is no longer.
   if (abs(aWing.x) > 0.06) {
-    float rrRoll = rrBeat * aBeat.y * sign(aWing.x) * 1.15;
+    /**
+     * THE ROLL IS A SLOPE, NOT A DISPLACEMENT, and the two were the same number.
+     *
+     * aBeat.y is the wingtip's travel in METRES. The angle the wing surface is
+     * actually tilted at is that travel over the wing's own half-span, and the
+     * old line used the metres directly as radians. For a bird those happen to
+     * be close — 0.2 m over a 0.31 m half-span is a slope of 0.65, against a
+     * 0.23 rad the old form produced, so the flock was under-rolled by a factor
+     * of three and nobody could tell at ninety metres.
+     *
+     * On a butterfly the same line is catastrophic rather than merely wrong.
+     * The wingtip travels 7 cm over an 8 cm half-span — a REAL tilt of about
+     * fifty degrees, which is what makes a butterfly a butterfly — while the
+     * shading normal was rolling four degrees. The geometry was flapping and
+     * the lighting was not, and worse, nothing that asks WHICH WAY THE WING IS
+     * POINTING could work at all. The morpho's flash is exactly that question.
+     *
+     * uHinge is 1/half-span, so the product is the true slope and atan is the
+     * true angle. For the birds uHinge stays at the 1.15 the old line had baked
+     * in, which makes this numerically identical for them to four decimal
+     * places (atan(x) ≈ x at a fifth of a radian) — the flock is not being
+     * changed by a butterfly pass. Correcting the birds is a separate question
+     * with a separate before-and-after.
+     */
+    float rrRoll = atan(rrBeat * aBeat.y * uHinge) * sign(aWing.x);
     objectNormal = vec3(-sin(rrRoll), cos(rrRoll), 0.0);
   }
 
@@ -658,7 +717,7 @@ float rrBeat;
     );
     float rrR = aFlight.x;
     vec2 rrRing = vec2(cos(rrAng) * rrR, sin(rrAng) * rrR * 0.78);
-    rrOrigin += vec3(rrRing.x, sin(rrAng * 2.0 + aBeat.x) * 1.5, rrRing.y);
+    rrOrigin += vec3(rrRing.x, sin(rrAng * 2.0 + aBeat.x) * uWander.w, rrRing.y);
     rrFwd = normalize(vec3(-sin(rrAng), 0.0, cos(rrAng) * 0.78));
     // Bank into the turn. A bird that circles flat is an aeroplane.
     rrUp = normalize(vec3(-rrFwd.z * aFlight.w, 1.0, rrFwd.x * aFlight.w));
@@ -700,16 +759,41 @@ float rrBeat;
    *
    * The unmodified "position", not "transformed", so the patch is nailed to the bird's
    * rest pose and does not slide up its chest when it beats its wings. The 2.4
-   * on y is what keeps it on the UNDERSIDE: without it a robin's red wraps over
+   * on y is what keeps it on the UNDERSIDE: without it a quetzal's crimson wraps over
    * the crown, and a bird whose whole head is one colour is a toy.
    */
   vec3 rrMd = vec3(abs(position.x) - uMark.x, position.y - uMark.y, position.z - uMark.z);
   float rrMarkD = length(rrMd * vec3(uMark.w, 2.4, 1.0));
   float rrMark = aBuild.w * (1.0 - smoothstep(aMark.w * 0.45, max(aMark.w, 1e-5), rrMarkD));
   vFaunaTint = mix(aTint, aMark.rgb, clamp(rrMark, 0.0, 1.0));
+${
+  twoSided
+    ? /* glsl */ `
+  /**
+   * THE UNDERSIDE, AND HOW MUCH OF A MIRROR THIS ONE IS — resolved here, for
+   * free, out of numbers the vertex shader has already computed.
+   *
+   * rgb is the colour of the BOTTOM of the wing, darkened where the top has its
+   * mark: a morpho's underside is not a flat brown, it carries the eyespots,
+   * and reusing rrMark puts a dark blotch out on the wing exactly where the
+   * upper surface has its border. One attribute, two markings.
+   *
+   * w is the mirror, masked to the WINGS. The body of a morpho is a furry brown
+   * stick and iridescing it would turn the animal into a lozenge of light; the
+   * mask is the same smoothstep over |aWing.x| the species scale already uses,
+   * so it costs nothing and it lands the flash on the plates where it belongs.
+   * It also carries the underside blend, which is why the thorax stays thorax
+   * coloured from below instead of flipping to leaf-brown.
+   */
+  float rrUnderMask = smoothstep(0.05, 0.24, rrSpan);
+  vec3 rrUnderC = aUnder.rgb * mix(1.0, 0.42, clamp(rrMark, 0.0, 1.0));
+  vRrUnder = vec4(mix(vFaunaTint, rrUnderC, rrUnderMask), aUnder.w * rrUnderMask);
+`
+    : ''
+}
 
   // The flap is in metres at the tip, so it has to shrink with the wing. A
-  // goldcrest swinging a wingtip through a blackbird's arc is a moth.
+  // manakin swinging a wingtip through a toucan's arc is a moth.
   transformed.y += rrBeat * aBeat.y * rrSpan * aBuild.x;
   transformed.x *= 1.0 - 0.30 * abs(rrBeat) * rrSpan * aBeat.y;
   transformed.z -= rrBeat * 0.06 * rrSpan;
@@ -753,12 +837,64 @@ varying vec3 vRrField;
 varying vec3 vFaunaWorld;
 varying vec3 vFaunaTint;
 varying float vFaunaAlert;
+${twoSided ? 'varying vec4 vRrUnder;' : ''}
 `
       )
       .replace(
         '#include <dithering_fragment>',
         /* glsl */ `#include <dithering_fragment>
-  vec3 rrC = gl_FragColor.rgb * vFaunaTint;
+${
+  twoSided
+    ? /* glsl */ `
+  /**
+   * THE BLINK. Which side of the wing is this, and is it catching the light?
+   *
+   * Two lines and they are the whole feature. gl_FrontFacing is true on the top
+   * of the wing — see the winding note in shapes.js, which had to be fixed
+   * before this meant anything — so a morpho on the downstroke is blue and on
+   * the upstroke is a dead leaf, which is what one actually looks like.
+   */
+  vec3 rrTint = gl_FrontFacing ? vFaunaTint : vRrUnder.rgb;
+  vec3 rrC = gl_FragColor.rgb * rrTint;
+
+  /**
+   * THE STRUCTURAL BLUE, AND IT IS ADDED, NOT MULTIPLIED.
+   *
+   * This is the line the fireflies got wrong. A morpho's blue is a mirror, not
+   * a pigment: it is brighter than anything reflective can be, which is why a
+   * photograph of one always looks retouched. Folding it into the tint — a
+   * multiplier on the Lambert term — would have made it a function of how
+   * square the wing happens to be to the sun, and a wing edge-on to the sun has
+   * a diffuse term near zero, so the flash would vanish at exactly the moment
+   * the real insect is at its most violent. The fireflies lost 93% of their
+   * brightness to that same mistake in a different file.
+   *
+   * So it is an additive term with its own angular law. rrFace is how square
+   * the wing is TO THE CAMERA, which is the correct variable: a mirror shows
+   * you its colour when it is pointing at you and shows you an edge otherwise.
+   * Raised to a power so it is a flash and not a wash — most of the beat it is
+   * near nothing and for a few frames it is everything.
+   *
+   * The light term is deliberately floored. rrLit is the untinted Lambert
+   * result, i.e. what the wood is giving this surface, and a morpho in deep
+   * shade genuinely IS duller than one in a light shaft — that link is worth
+   * keeping, it is what makes the insect belong to the wood rather than sit in
+   * front of it. Floored at 0.5 and capped at 1.1 so the total swing is 2.2x
+   * and the flash can never be extinguished by shade the way the fireflies
+   * were. The pipeline's quarter-res glow buffer does the rest: anything this
+   * bright that MOVES drags a comet tail, which is precisely how a morpho
+   * registers in peripheral vision.
+   */
+  if (vRrUnder.w > 0.001) {
+    float rrFace = abs(dot(normalize(vNormal), normalize(vViewPosition)));
+    float rrLit = dot(gl_FragColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float rrHit = vRrUnder.w * (gl_FrontFacing ? 1.0 : 0.08) * pow(rrFace, 2.6);
+    rrC += rrTint * rrHit * (0.5 + 0.4 * min(rrLit, 1.5));
+  }
+`
+    : /* glsl */ `
+  vec3 rrC = gl_FragColor.rgb * vFaunaTint;`
+}
   if (uLevel > 0.0005) {
     float rrLum = dot(rrC, vec3(0.2126, 0.7152, 0.0722));
     rrC = rrHueRotate(rrC, (vRrField.x * 1.35 + vRrField.y * 0.62) * uLevel * 0.45);
@@ -902,7 +1038,24 @@ export function swarmMaterial(sprite) {
          * gnats in a beam are backlit and they GLOW; that is the whole reason
          * anyone notices them.
          */
-        gl_PointSize = min(16.0, mix(2.8, 4.6, aKind) * (1.0 + uLevel * 0.7)
+        /**
+         * A POINT THAT WILL BE DISCARDED IS COLLAPSED HERE, NOT RASTERISED AND
+         * THEN THROWN AWAY.
+         *
+         * The fragment shader opens by discarding when vFade is below 0.004 —
+         * but by the time it runs, the point has already been expanded into a
+         * quad of up to 16x16 device pixels and every one of those fragments
+         * has been scheduled. vFade is settled right here in the vertex shader,
+         * so the cheap version of that same test is a point size of zero, which
+         * the rasteriser drops outright.
+         *
+         * It is exactly the fragments the discard was going to reject, so the
+         * picture is unchanged — but every midge past 30 m and every firefly
+         * past 66 m stops costing anything at all, and the whole cloud goes
+         * free in daylight, when uDusk holds vFade at zero for all 1340.
+         */
+        gl_PointSize = vFade < 0.004 ? 0.0
+                     : min(16.0, mix(2.8, 4.6, aKind) * (1.0 + uLevel * 0.7)
                        * uPixelRatio * 30.0 / max(dist, 1.0));
       }
     `,
@@ -947,7 +1100,28 @@ export function swarmMaterial(sprite) {
           // cycles on the clock is the sheen this project keeps having to remove.
           col = mix(col, rrHueRotate(col, vSeed * 6.28), uLevel * 0.8);
         }
-        float a = tex.a * vFade * blink * mix(0.85, 1.0, vKind) * (1.0 + uAudio.w * 0.4);
+        /**
+         * A MIDGE GETS THE SPRITE PROFILE SQUARED, AND THAT IS AN ADDITIVE-
+         * BLENDING DEFENCE RATHER THAN A LOOK CHANGE.
+         *
+         * These points are additive and they are deliberately arranged in tight
+         * columns, which means a column is by construction the place where the
+         * most sprites overlap. Additive blending against itself always drives
+         * toward white, so a per-point alpha that is perfectly reasonable for
+         * ONE insect sums to a solid white disc in the middle of a cluster.
+         * That happened: an unrelated change to how the columns were addressed
+         * doubled their density and the swarm rendered as hard blobs of
+         * confetti hanging in the clearing.
+         *
+         * Squaring leaves the core alone (tex.a is ~1 at the centre) and pulls
+         * the skirt down steeply, so a midge stays as bright as it was and
+         * stops contributing nearly as much where it overlaps its neighbours.
+         * The fireflies keep the linear profile: they blink on independent
+         * phases, so a field of them is almost never lit together, and their
+         * whole appeal is the soft halo the skirt makes.
+         */
+        float profile = mix(tex.a * tex.a, tex.a, vKind);
+        float a = profile * vFade * blink * mix(0.85, 1.0, vKind) * (1.0 + uAudio.w * 0.4);
         if (a < 0.003) discard;
         /**
          * And the specks get brighter as well as bigger, for the reason the

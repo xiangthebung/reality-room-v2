@@ -758,6 +758,20 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
       say('No screen to move. <kbd>P</kbd> puts one up.', 4000);
       return;
     }
+    /**
+     * The one geographic fact this layer already had, asked a second way.
+     *
+     * `aimGround` marches against the terrain, so underground it puts the
+     * screen on the hillside over your head rather than in the passage with
+     * you — see the longer note beside `placeSpeaker` in main.js, which is the
+     * same gesture and the same bug. This reads a flag the body publishes
+     * rather than sampling anything, so the boundary in this file's header is
+     * intact: still no geography here, still one import of the march.
+     */
+    if (controller.roofed) {
+      say('Nowhere to stand a screen down here.', 3200);
+      return;
+    }
     share.place(aimGround(controller));
     say(`Screen here, ${share.width.toFixed(1)} m across. Scroll to resize.`, 5200);
   }
@@ -1202,6 +1216,16 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
       say('You stop sharing.');
       return;
     }
+    /**
+     * Stopping is always allowed; starting is not, for the reason `moveScreen`
+     * gives. Checked before the picker rather than after, because the picker is
+     * several seconds of somebody choosing a window and the honest moment to
+     * refuse is the one they pressed the key in.
+     */
+    if (controller.roofed) {
+      say('Nowhere to stand a screen down here. <kbd>P</kbd> again outside.', 4000);
+      return;
+    }
     if (await share.startScreen()) {
       say(`A screen, ${share.width.toFixed(1)} m across. <kbd>O</kbd> moves it, scroll resizes it.`, 6000);
     }
@@ -1226,6 +1250,12 @@ export function attachMultiplayer({ scene, camera, controller, audio, hud }) {
     const file = [...(event.dataTransfer?.files ?? [])].find((f) => f.type.startsWith('video/'));
     if (!file) return;
     event.preventDefault();
+    // The third way a screen gets stood up, and it needs the same floor the
+    // other two do. See `moveScreen`.
+    if (controller.roofed) {
+      say('Nowhere to stand a screen down here. Drop it outside.', 4000);
+      return;
+    }
     share.startFile(file).then((ok) => {
       if (ok) say(`Putting on ${file.name}. <kbd>O</kbd> moves the screen.`, 6000);
     });

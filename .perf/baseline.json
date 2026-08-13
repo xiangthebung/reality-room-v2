@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-10T14:12:26.910Z",
+  "recordedAt": "2026-08-13T05:12:18.226Z",
   "identity": {
     "seed": "grove-01",
     "gpu": "ANGLE (AMD, AMD Radeon RX 9070 XT (0x00007550) Direct3D11 vs_5_0 ps_5_0, D3D11)",
@@ -7,82 +7,94 @@
     "url": "http://127.0.0.1:5180/",
     "passes": 5
   },
-  "level": 5.1058200000000005,
+  "level": 4.595469583333333,
   "structural": {
-    "programs": 42,
-    "geometries": 137,
-    "textures": 44,
+    "programs": 110,
+    "geometries": 190,
+    "textures": 49,
     "instances": {
       "trunk": {
-        "submitted": 7156,
-        "resident": 47424
+        "submitted": 7087,
+        "resident": 47162
       },
       "leaf": {
-        "submitted": 7188,
-        "resident": 23712
+        "submitted": 7024,
+        "resident": 23581
       },
       "grass": {
-        "submitted": 24191,
-        "resident": 51845
+        "submitted": 11427,
+        "resident": 26563
       },
       "ferns": {
-        "submitted": 1842,
-        "resident": 3374
+        "submitted": 1727,
+        "resident": 3169
       },
       "rocks": {
-        "submitted": 63,
-        "resident": 138
+        "submitted": 58,
+        "resident": 139
       },
       "logs": {
-        "submitted": 24,
-        "resident": 52
+        "submitted": 25,
+        "resident": 50
       },
       "shroom-stem": {
-        "submitted": 21,
-        "resident": 62
+        "submitted": 9,
+        "resident": 53
       },
       "shroom-cap": {
-        "submitted": 21,
-        "resident": 62
+        "submitted": 9,
+        "resident": 53
       },
       "meadow": {
-        "submitted": 1398,
-        "resident": 2715
+        "submitted": 1364,
+        "resident": 2632
       },
       "bramble": {
-        "submitted": 101,
-        "resident": 428
+        "submitted": 41,
+        "resident": 360
       },
       "bushes": {
-        "submitted": 224,
-        "resident": 475
+        "submitted": 233,
+        "resident": 460
       },
       "saplings": {
-        "submitted": 98,
+        "submitted": 83,
         "resident": 188
       },
       "sticks": {
-        "submitted": 632,
-        "resident": 1160
+        "submitted": 535,
+        "resident": 1102
       },
       "flowers": {
-        "submitted": 174,
-        "resident": 542
+        "submitted": 198,
+        "resident": 533
       },
       "litter": {
-        "submitted": 132,
-        "resident": 254
+        "submitted": 98,
+        "resident": 236
       },
       "reeds": {
-        "submitted": 20,
-        "resident": 364
+        "submitted": 21,
+        "resident": 375
       },
       "stumps": {
-        "submitted": 13,
-        "resident": 21
+        "submitted": 17,
+        "resident": 34
+      },
+      "palms": {
+        "submitted": 147,
+        "resident": 292
+      },
+      "bromeliads": {
+        "submitted": 499,
+        "resident": 1043
+      },
+      "bigleaf": {
+        "submitted": 49,
+        "resident": 114
       }
     },
-    "sceneObjects": 355,
+    "sceneObjects": 365,
     "sectors": {
       "forest": 71,
       "ground": 39,
@@ -91,172 +103,172 @@
   },
   "scenarios": {
     "clearing.sober": {
-      "ratio": 0.8134735621963431,
-      "ratioSpread": 0.1200871447005325,
-      "ms": 4.154320833333333,
+      "ratio": 0.9184717085797999,
+      "ratioSpread": 0.11077448627619593,
+      "ms": 3.98254,
       "msRange": [
-        4.144392083333334,
-        4.364140833333333
+        3.8732020833333336,
+        4.400725416666667
       ],
       "counters": {
         "calls": {
-          "value": 160,
+          "value": 158,
           "spread": 0
         },
         "triangles": {
-          "value": 13173567,
+          "value": 17147779,
           "spread": 0
         }
       }
     },
     "clearing.peak": {
-      "ratio": 0.9498126131462318,
-      "ratioSpread": 0.10097674897451775,
-      "ms": 4.924991666666666,
+      "ratio": 0.9474796082681294,
+      "ratioSpread": 0.08613657961839115,
+      "ms": 4.2136474999999995,
       "msRange": [
-        4.661075416666667,
-        5.120680416666667
+        4.106233333333333,
+        4.583260416666667
       ],
       "counters": {
         "calls": {
-          "value": 160,
+          "value": 158,
           "spread": 0
         },
         "triangles": {
-          "value": 13173567,
+          "value": 17147779,
           "spread": 0
         }
       }
     },
     "deep.sober": {
-      "ratio": 0.8545732288512585,
-      "ratioSpread": 0.13035596172121067,
-      "ms": 4.313280833333333,
+      "ratio": 0.8848692194767547,
+      "ratioSpread": 0.07984055770998721,
+      "ms": 4.066389583333334,
       "msRange": [
-        4.248867083333333,
-        4.56528375
+        4.017574583333333,
+        4.088787916666667
       ],
       "counters": {
         "calls": {
-          "value": 130,
+          "value": 118,
           "spread": 0
         },
         "triangles": {
-          "value": 12218548,
+          "value": 16210633,
           "spread": 0
         }
       }
     },
     "deep.peak": {
-      "ratio": 1.2028117001923428,
-      "ratioSpread": 0.0926508662526578,
-      "ms": 6.15611375,
+      "ratio": 1.1914948171045965,
+      "ratioSpread": 0.08275410339427867,
+      "ms": 5.4579345833333335,
       "msRange": [
-        5.6857,
-        6.6486075
+        5.260144166666667,
+        5.601504583333334
       ],
       "counters": {
         "calls": {
-          "value": 130,
+          "value": 118,
           "spread": 0
         },
         "triangles": {
-          "value": 12218548,
+          "value": 16210633,
           "spread": 0
         }
       }
     },
     "canopy.sober": {
-      "ratio": 0.7372369505126828,
-      "ratioSpread": 0.09560403866722605,
-      "ms": 3.913396666666667,
+      "ratio": 0.7613266850891064,
+      "ratioSpread": 0.0841906741577692,
+      "ms": 3.5306487499999997,
       "msRange": [
-        3.7641991666666663,
-        4.080361666666667
+        3.4794474999999996,
+        3.5791804166666665
       ],
       "counters": {
         "calls": {
-          "value": 128,
+          "value": 115,
           "spread": 0
         },
         "triangles": {
-          "value": 9513066,
+          "value": 13394065,
           "spread": 0
         }
       }
     },
     "canopy.peak": {
-      "ratio": 1.0051080229364595,
-      "ratioSpread": 0.07588940606738981,
-      "ms": 5.257112083333333,
+      "ratio": 1.0039701764513103,
+      "ratioSpread": 0.046280064469556376,
+      "ms": 4.630012916666667,
       "msRange": [
-        5.06406875,
-        5.83350625
+        4.494947499999999,
+        4.761165416666667
       ],
       "counters": {
         "calls": {
-          "value": 128,
+          "value": 115,
           "spread": 0
         },
         "triangles": {
-          "value": 9513066,
+          "value": 13394065,
           "spread": 0
         }
       }
     },
     "canopy.egodeath": {
-      "ratio": 1.16132365015927,
-      "ratioSpread": 0.08447838137365118,
-      "ms": 5.959951666666666,
+      "ratio": 1.1573323074437352,
+      "ratioSpread": 0.042133063490352944,
+      "ms": 5.211656666666666,
       "msRange": [
-        5.56992,
-        6.26099
+        5.074774583333333,
+        5.318485416666666
       ],
       "counters": {
         "calls": {
-          "value": 128,
+          "value": 115,
           "spread": 0
         },
         "triangles": {
-          "value": 9513066,
+          "value": 13394065,
           "spread": 0
         }
       }
     },
     "ridge.onset": {
-      "ratio": 1,
-      "ratioSpread": 0.06341235742338203,
-      "ms": 5.298048333333333,
+      "ratio": 1.0988922754220547,
+      "ratioSpread": 0.033685073980326795,
+      "ms": 5.0020420833333334,
       "msRange": [
-        4.861461666666666,
-        5.80386
+        4.860704583333333,
+        5.15572375
       ],
       "counters": {
         "calls": {
-          "value": 131,
+          "value": 117,
           "spread": 0
         },
         "triangles": {
-          "value": 12713318,
+          "value": 16743382,
           "spread": 0
         }
       }
     },
     "canopy.peak.still": {
-      "ratio": 1.0292565473278443,
-      "ratioSpread": 0.049448908045874075,
-      "ms": 5.4986395833333335,
+      "ratio": 1,
+      "ratioSpread": 0.041966059507701825,
+      "ms": 4.7423375000000005,
       "msRange": [
-        5.00369125,
-        5.859900833333334
+        4.27913375,
+        4.7883233333333335
       ],
       "counters": {
         "calls": {
-          "value": 128,
+          "value": 115,
           "spread": 0
         },
         "triangles": {
-          "value": 9473022,
+          "value": 13367695,
           "spread": 0
         }
       }

@@ -46,6 +46,26 @@ const JUMP = 7.1;
  */
 const CLIMB_K = 1.6;
 /**
+ * The tallest rise a stride can take you up, in metres. Underground only.
+ *
+ * 0.55 is a big step rather than a scramble: it clears the breakdown chip and
+ * the flowstone lip and the rippled floor, and stops at anything you would
+ * actually have to put a hand on. See the step block in `update`.
+ */
+const STEP_UP = 0.55;
+/**
+ * How much hillside has to be over your head before the surface is out of
+ * reach, in metres. See `roofed`.
+ *
+ * 2.4 is head height plus a stretch: the eye is at 1.68 and the longest reach
+ * anything in the world asks for is a mushroom at 2.6 m, so at this clearance
+ * there is nothing on the surface you could plausibly be touching. Above it,
+ * every reach through the ceiling is somebody standing under a mountain — and
+ * below it you are at a mouth, where the ground overhead IS the ground you are
+ * about to walk out onto and everything should still work.
+ */
+const ROOF_CLEARANCE = 2.4;
+/**
  * Flight, which exists for the debug panel and for nothing else.
  *
  * Both numbers are guarded by `this.fly`, which is false in every shipping path,
@@ -120,6 +140,21 @@ export class Controller {
     this.inCave = 0;
     this.caveFloor = 0;
     this.caveDepth = 0;
+    /**
+     * IS THERE ROCK BETWEEN YOU AND THE SKY. Published beside the other five and
+     * for the same reason: it is a fact about where the body is, `caveSample`
+     * has already run, and every consumer must agree about it on one frame.
+     *
+     * IT IS NOT `inCave > 0.5` AND THAT DISTINCTION IS THE WHOLE POINT. The
+     * containment ramp says how ENCLOSED you are, which is high one metre inside
+     * a narrow mouth where you can still see the clearing and reach a mushroom
+     * growing in it — and only about 0.5 in the middle of a chamber sixty metres
+     * under a mountain. Every question anybody actually wants to ask of it is
+     * "can I touch the surface from here", and the honest answer to that is a
+     * height, not a ramp: how far the hillside overhead stands above the floor
+     * the body is standing on. See `ROOF_CLEARANCE`.
+     */
+    this.roofed = false;
     /**
      * …and what the passage is like where the body is, for the audio.
      *
@@ -263,6 +298,15 @@ export class Controller {
     }
     this.velocity.y -= GRAVITY * dt;
 
+    /**
+     * Where the feet were, and what they were standing on, before the step.
+     *
+     * Only used underground — see the step block after the collision passes.
+     */
+    const fromX = this.position.x;
+    const fromZ = this.position.z;
+    const fromFloor = this.inCave > 0 ? this.caveFloor : this.position.y - EYE;
+
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.z * dt;
     this.position.y += this.velocity.y * dt;
@@ -271,6 +315,44 @@ export class Controller {
     this._resolveBrush();
     confine(this.position);
     this._resolveCave();
+
+    /**
+     * A STEP YOU COULD NOT TAKE, WHICH IS THE ONE THING THE HEIGHT FIELD NEVER
+     * NEEDED AND THE CAVE CANNOT DO WITHOUT.
+     *
+     * "The walking logic is different from on land — I go up objects instantly."
+     * It was, and this is why. On the surface the floor is `groundUnder`, a
+     * height field: it is continuous, so the clamp below never moves the body
+     * more than the hillside's own gradient times a frame's travel, and anything
+     * that is not walkable — a trunk, a boulder — is a COLLIDER and gets walked
+     * round. Underground the floor is whatever `caveSample` says, and it says
+     * "the top of that breakdown block" the instant your circle overlaps one.
+     * The clamp then teleports the body up to it: the guard over there only
+     * requires the block's top to be under `y + 0.6`, which with the eye at 1.68
+     * is a free 2.3 m lift. You do not climb a boulder, you appear on it.
+     *
+     * So the same rule the surface gets for nothing: a rise you could step onto
+     * you step onto, and a rise you could not is a wall. Blocking is the whole
+     * of it — the horizontal move is given back and the velocity is left alone,
+     * so you slide along the face of the block exactly as you slide along a
+     * trunk, and the next `caveSample` is the price. Nothing lifts the body but
+     * the clamp, and now nothing lifts it by more than a stride.
+     *
+     * ONLY UNDERGROUND, and that restraint is deliberate rather than timid. The
+     * surface has cliffs steeper than STEP_UP over a frame's travel at RUN, and
+     * a body that suddenly could not climb them is a change nobody asked for to
+     * a world people have already walked.
+     */
+    if (
+      this.inCave > 0 &&
+      this.onGround &&
+      this.caveStep > 0.05 &&
+      this.caveFloor - fromFloor > STEP_UP
+    ) {
+      this.position.x = fromX;
+      this.position.z = fromZ;
+      this._resolveCave();
+    }
 
     /**
      * The floor, which underground is not the ground.
@@ -506,9 +588,23 @@ export class Controller {
       this.caveTight = 0;
       this.caveRoom = 0;
       this.caveWater = 0;
+      this.roofed = false;
       return;
     }
     this.caveFloor = s.floor;
+    /**
+     * Five height samples, and only ever underground — where the whole frame is
+     * 0.60 ms and this is the cheapest thing in it. On the surface the early
+     * return above means it is not computed at all.
+     *
+     * `groundUnder` and not `heightAt` because it is the same surface the body
+     * would be standing on if it were up there, and the two differ by a few
+     * centimetres on a slope; `s.floor` and not `position.y` because a jump must
+     * not un-bury you for the third of a second you are in the air.
+     */
+    this.roofed = groundUnder(this.position.x, this.position.z) - s.floor > ROOF_CLEARANCE;
+    /** How much of the floor is something lying on it rather than the passage. */
+    this.caveStep = s.floor - s.floorRock;
     this.caveDepth = s.along;
     this.caveTight = s.tight;
     this.caveRoom = s.room;

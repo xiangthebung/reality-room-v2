@@ -133,6 +133,19 @@ export default defineConfig(({ command }) => ({
     host: '127.0.0.1',
     port: DEV_PORT,
     strictPort: true,
+    /**
+     * `npm run go` points a Cloudflare quick tunnel at this port, and the
+     * request arrives carrying `Host: <random-words>.trycloudflare.com`. Since
+     * Vite 6 an unrecognised Host is answered with "Blocked request. This host
+     * is not allowed." — a plain-text page, HTTP 200-shaped enough to look like
+     * the tunnel is fine, so the failure lands entirely on the friend who was
+     * sent the link and reads as "your game is broken".
+     *
+     * A leading dot allows the subdomains of that domain, which is the only
+     * form that works here: the quick-tunnel hostname is minted fresh on every
+     * run and cannot be listed ahead of time.
+     */
+    allowedHosts: ['.trycloudflare.com'],
     // Disabled so background edits don't reload/HMR the page out from under
     // a manual test session — refresh yourself when you want the changes.
     hmr: false,

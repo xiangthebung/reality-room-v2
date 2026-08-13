@@ -3,7 +3,13 @@ import { TAU, clamp, clamp01, damp, lerp, makeRng, rngRange, wrapAngle } from '.
 import { WORLD_RADIUS, heightAt, slopeAt, wetness } from './terrain.js';
 import { colliderGrid } from './forest.js';
 import { glowSprite } from './textures.js';
-import { deerGeometry, flyerGeometry, rabbitGeometry, squirrelGeometry } from './fauna/shapes.js';
+import {
+  tapirGeometry,
+  flyerGeometry,
+  flutterGeometry,
+  agoutiGeometry,
+  capuchinGeometry,
+} from './fauna/shapes.js';
 import { beastMaterial, flyerMaterial, swarmMaterial } from './fauna/shading.js';
 /**
  * A NAMESPACE IMPORT, ON PURPOSE, AND ONLY BECAUSE OF WHAT IS NOT IN IT YET.
@@ -76,9 +82,9 @@ const { VOICE_COUNT, Wildlife } = wildlifeAudio;
  *
  *   THE PERCHERS ARE SPECIES NOW. Each one already carried a voice index into
  *   the audio table and looked like a generic dark smudge, so the wood was full
- *   of birds that sang like a nuthatch and looked like nothing. A goldcrest is
- *   tiny, a wood pigeon is big and grey, a blackbird is black with a yellow
- *   bill, a robin has a red front — matched to the voice, through two instanced
+ *   of birds that sang like a toucan and looked like nothing. A manakin is
+ *   tiny, a tinamou is big and round, a toucan is black with a yellow bib, a
+ *   quetzal trails half a metre of tail — matched to the voice, through two instanced
  *   attributes and the SAME geometry and material. Still one draw call. This is
  *   the highest-value thing in the file per line, because the percher is the
  *   only bird you get within three metres of.
@@ -117,7 +123,7 @@ const { VOICE_COUNT, Wildlife } = wildlifeAudio;
 const FAUNA_RENDER_ORDER = -2;
 
 /** How far a creature can be before it is not worth drawing. Metres. */
-const FAR = { deer: 130, rabbit: 78, squirrel: 64 };
+const FAR = { tapir: 130, agouti: 78, capuchin: 64 };
 
 /** Grid cell for the trunk index, metres. Big enough that a lookup is 9 cells. */
 const TRUNK_CELL = 16;
@@ -379,7 +385,7 @@ function shade(out, rng, lo, hi, cast = null) {
  * block in shading.js.
  */
 const MORPHS = {
-  deer: [
+  tapir: [
     { name: 'ordinary', w: 0.8, light: [0.88, 1.18] },
     // A dark red deer stag reads almost black in shade and is the single most
     // impressive thing this wood can put in front of you.
@@ -387,7 +393,7 @@ const MORPHS = {
     { name: 'pale', w: 0.06, light: [1.55, 1.95], cast: [1.03, 1.0, 0.95] },
     { name: 'red', w: 0.05, light: [1.02, 1.3], cast: [1.18, 0.92, 0.72] },
   ],
-  rabbit: [
+  agouti: [
     { name: 'ordinary', w: 0.78, light: [0.82, 1.22] },
     { name: 'black', w: 0.07, light: [0.4, 0.55], cast: [0.98, 0.98, 1.03] },
     { name: 'sandy', w: 0.08, light: [1.4, 1.85], cast: [1.09, 1.0, 0.84] },
@@ -396,7 +402,7 @@ const MORPHS = {
     // mistake for anything else at forty metres.
     { name: 'pied', w: 0.07, light: [0.88, 1.2], pied: [0.65, 1.0] },
   ],
-  squirrel: [
+  capuchin: [
     { name: 'ordinary', w: 0.76, light: [0.85, 1.2] },
     { name: 'melanistic', w: 0.1, light: [0.32, 0.46] },
     { name: 'ginger', w: 0.09, light: [1.35, 1.8], cast: [1.14, 0.95, 0.78] },
@@ -450,15 +456,21 @@ function pickMorph(rng, name) {
  * are forced female — which is the only reason the table needs to know.
  */
 const SEXES = {
-  deer: [
-    { name: 'stag', nerve: 1.06, size: 1.14, antler: [0.6, 1.2] },
-    { name: 'doe', nerve: 0.78, size: 0.94, antler: 0 },
+  /**
+   * A tapir's sexes barely differ — the female is slightly the larger, which is
+   * the reverse of the deer this replaces and true of the real animal. `antler`
+   * is 0 on both because there is no antler geometry left to scale; see the
+   * `horn` note in BEASTS.
+   */
+  tapir: [
+    { name: 'male', nerve: 1.04, size: 0.96, antler: 0 },
+    { name: 'female', nerve: 0.92, size: 1.05, antler: 0 },
   ],
-  rabbit: [
+  agouti: [
     { name: 'buck', nerve: 1.05, size: 1.08, antler: 0 },
     { name: 'doe', nerve: 0.88, size: 0.93, antler: 0 },
   ],
-  squirrel: [
+  capuchin: [
     { name: 'male', nerve: 1.04, size: 1.05, antler: 0 },
     { name: 'female', nerve: 0.9, size: 0.95, antler: 0 },
   ],
@@ -495,45 +507,87 @@ const JUVENILE = { nerve: 0.62, size: 0.6, territory: 0.35 };
  * either side of the mean is not a herd, it is a rendering tolerance.
  */
 const BEASTS = {
-  deer: {
-    build: deerGeometry,
-    count: 5,
+  /**
+   * ==== THE TAPIR, WHICH IS NOT A DEER WITH A NEW NAME ====================
+   *
+   * Every behavioural number here moved, because the two animals behave
+   * nothing alike and the numbers are most of what the player actually meets.
+   *
+   *   FEWER AND MORE SOLITARY. `count` 5 -> 3 and `territory` 26 -> 34. A red
+   *   deer herd is a group you come across; a tapir is almost always alone,
+   *   and meeting one should be rarer and therefore worth more.
+   *
+   *   SLOWER, AND IT DOES NOT BOLT LIKE A DEER. `bolt` 8.2 -> 5.6 m/s. A tapir
+   *   is fast for its size but it is a 250 kg animal crashing through
+   *   undergrowth, not something that flows away over a hedge. `stride` drops
+   *   with the leg length.
+   *
+   *   IT LETS YOU GET MUCH CLOSER, and this is the one that changes the
+   *   encounter. `notice` 36 -> 19 and `flee` 14 -> 8. Tapirs have famously
+   *   poor eyesight and rely on scent and hearing, so they blunder about and
+   *   notice you late. A deer sees you at thirty-six metres and is gone before
+   *   you knew it was there; this you can walk up on, which is the whole
+   *   difference between an animal that decorates the wood and one you have an
+   *   encounter with.
+   */
+  tapir: {
+    build: tapirGeometry,
+    count: 3,
     young: 1,
-    scale: [0.86, 1.15],
-    speed: { graze: 0.5, walk: 1.5, bolt: 8.2 },
-    stride: 1.75,
-    notice: 36,
-    flee: 14,
-    watch: [1.8, 4.2],
-    territory: 26,
-    colour: 0x7a5a3c,
-    /** Reflectance multiplier on the underside. A belly is not a colour. */
-    pale: [1.75, 1.62, 1.4],
-    /** spineY, bellyY, strength, topY — see the countershading block. */
-    belly: [1.06, 0.8, 0.85, 1.42],
-    /** The rump patch: x, y, z, radius. */
-    flash: [0, 1.07, -0.94, 0.32],
-    eye: [0.086, 1.84, 1.45, 0.032],
-    trimRate: 0.9,
-    trimAmp: 0.02,
-    bob: 0.05,
-    lung: 0.008,
+    scale: [0.88, 1.12],
+    speed: { graze: 0.42, walk: 1.15, bolt: 5.6 },
+    stride: 1.25,
+    notice: 19,
+    flee: 8,
+    // Longer than a deer's. A short-sighted animal that has heard something
+    // stands and works out what it was, and standing still is what makes it
+    // photographable.
+    watch: [2.6, 6.5],
+    territory: 34,
+    // Very dark grey-brown. A tapir is nearly black in shade and the pale
+    // countershading below is doing more work here than on any other animal.
+    colour: 0x3b332e,
     /**
-     * The point inside the skull a doe's antlers fold away to, in the body's
-     * own local coordinates — the head blob is at (0, 1.82, 1.36) with radii of
-     * about (0.10, 0.115, 0.19), so this is inside it from every angle and the
-     * collapsed beam is twenty zero-area triangles nobody can see.
+     * Reflectance multiplier on the underside. A belly is not a colour.
      *
-     * It replaces `antlerChance`, which said "half of them are stags" and was
-     * read by the shader as a wobble amplitude. Every deer wore a rack; half of
-     * them wore one that did not move.
+     * STRONGER THAN THE DEER'S, because the base coat is now nearly black and
+     * a multiplier can only lift what is there. This is the pale throat, chest
+     * and lower flank a real tapir has, and against 0x3b332e it is the only
+     * thing that keeps the animal from being a silhouette in the understory.
      */
-    horn: [0, 1.86, 1.32],
+    pale: [2.25, 2.1, 1.9],
+    /** spineY, bellyY, strength, topY — see the countershading block. */
+    belly: [1.04, 0.72, 0.95, 1.2],
+    /**
+     * A tapir has no rump flash, so this is doing a different job: the pale
+     * EDGE of the rump and the white ear rims are the only markings on the
+     * animal. Smaller radius, and moved up and back to sit on the haunch.
+     */
+    flash: [0, 1.18, -0.86, 0.2],
+    // Small, dark and set far forward and low — the head dropped by 0.65 m
+    // when the neck was shortened, and the eye has to come with it.
+    eye: [0.1, 1.13, 1.36, 0.028],
+    // Faster and wider than a deer's: with the antlers gone this channel is
+    // the ears alone, and a tapir's ears are never still.
+    trimRate: 1.9,
+    trimAmp: 0.05,
+    bob: 0.04,
+    lung: 0.011,
+    /**
+     * NO `horn`. The antler geometry was deleted from `tapirGeometry` outright
+     * rather than folded away, so there is nothing on the head-and-trim channel
+     * pair for the headpiece branch to collapse — and omitting the field sets
+     * `uHorn.w` to 0, which switches that branch off for this species
+     * altogether. See the block at the top of the builder in shapes.js: the
+     * side effect is that the full trim swing is handed back to the ears, via
+     * the `mix(1.0, aTone.x, rrHorn)` in shading.js, which is exactly what is
+     * wanted here.
+     */
     /** Steps per second at a walk, for the audio. */
-    step: 1.6,
+    step: 1.15,
   },
-  rabbit: {
-    build: rabbitGeometry,
+  agouti: {
+    build: agoutiGeometry,
     count: 12,
     young: 2,
     scale: [0.78, 1.24],
@@ -543,7 +597,9 @@ const BEASTS = {
     flee: 7.5,
     watch: [0.5, 1.4],
     territory: 9,
-    colour: 0x6e5c46,
+    // Grizzled orange-brown. An agouti's coarse rump hair is the one warm
+    // colour on the forest floor and it is what you see going away from you.
+    colour: 0x6b4526,
     pale: [1.9, 1.8, 1.62],
     belly: [0.24, 0.1, 0.9, 0.4],
     flash: [0, 0.23, -0.23, 0.09],
@@ -554,8 +610,8 @@ const BEASTS = {
     lung: 0.004,
     step: 3.4,
   },
-  squirrel: {
-    build: squirrelGeometry,
+  capuchin: {
+    build: capuchinGeometry,
     count: 6,
     young: 0,
     scale: [0.78, 1.18],
@@ -565,7 +621,10 @@ const BEASTS = {
     flee: 9,
     watch: [0.3, 0.9],
     territory: 7,
-    colour: 0x7c4a2a,
+    // Buff body, dark cap and limbs. The base is the pale part — the coat
+    // shader's countershading and the dark cast in the morph table below do
+    // the rest, because a multiplier cannot lift a dark base into a light one.
+    colour: 0x8a7350,
     pale: [1.85, 1.7, 1.5],
     belly: [0.15, 0.05, 0.95, 0.28],
     /** A pale throat rather than a rump: a squirrel's give-away is its tail. */
@@ -587,19 +646,20 @@ for (const [name, spec] of Object.entries(BEASTS)) spec.name = name;
  * WHAT THE BIRD YOU CAN HEAR LOOKS LIKE.
  *
  * Every percher already holds a voice index into `audio/wildlife.js`, and until
- * now that was the only thing about it that was a species: twenty-six identical
- * dark smudges, one of which sang like a wood pigeon and one like a goldcrest.
- * Coupling the two is the cheapest way to make this wood feel like a place,
- * because it turns the bird in the tree in front of you from a decoration into
- * a FACT that two different systems agree about — and being able to walk toward
- * a sound and find the animal that makes it is most of what a wood is.
+ * this table existed that was the only thing about it that was a species:
+ * twenty-six identical dark smudges, one of which sang like a wood pigeon and
+ * one like a goldcrest. Coupling the two is the cheapest way to make this
+ * forest feel like a place, because it turns the bird in the tree in front of
+ * you from a decoration into a FACT that two different systems agree about —
+ * and being able to walk toward a sound and find the animal that makes it is
+ * most of what a forest is.
  *
- * KEYED BY NAME, NOT BY INDEX, and that is the whole reason this table exists
- * here rather than as an array in voice order. `VOICES` in wildlife.js has grown
- * from six to twelve once already and is growing again; an array indexed 0..11
- * would silently re-skin every bird in the wood the next time somebody inserts
- * a species above the one they were adding. A name either matches or it does
- * not, and a miss falls through to `STRANGERS` and gets a plausible bird.
+ * KEYED BY NAME, NOT BY INDEX, and that is the whole reason this table lives
+ * here rather than as an array in voice order. `VOICES` in wildlife.js has been
+ * rewritten twice and grown three times; an array indexed 0..19 would silently
+ * re-skin every bird in the wood the next time somebody inserted a species
+ * above the one they were adding. A name either matches or it does not, and a
+ * miss falls through to `STRANGERS` and gets a plausible bird.
  *
  * THERE IS NO SIZE IN HERE, AND THAT IS THE SECOND HALF OF THE SAME ARGUMENT.
  * `wildlife.js` carries every species' body length in centimetres and hands it
@@ -608,181 +668,342 @@ for (const [name, spec] of Object.entries(BEASTS)) spec.name = name;
  * roster of exactly the kind the name-keying above exists to avoid, and it
  * would go stale in the same way and just as quietly. See `sizeOf`.
  *
+ * WHY THE WHOLE TABLE IS NOW A RAINFOREST, AND WHAT THAT CHANGES.
+ *
+ * The roster was twenty British woodland birds and the honest summary of them
+ * as OBJECTS TO LOOK AT is that sixteen of the twenty were brown. That is true
+ * of a British wood and it is the wrong problem to have here, because the
+ * player's report about this forest was not "the birds are dull", it was I CAN
+ * HEAR BIRDS EVERYWHERE AND I CAN NEVER SPOT ONE — and against dark bark, in a
+ * wood that is deliberately dim, at twenty-five metres, a small brown bird is
+ * genuinely not findable. Half of that problem is where the birds are and how
+ * they behave, which is `updatePerchers`; the other half is what they look
+ * like, which is this table, and a rainforest fixes it almost for free:
+ *
+ *   THEY ARE BIGGER. The new roster averages 27 cm of body against 17, which
+ *   through `sizeOf` is about a quarter more bird in every direction. A toucan
+ *   is 50 cm and a manakin is 10, so the range is wider as well as higher.
+ *
+ *   THEY ARE SATURATED. A scarlet-rumped tanager, a quetzal and an aracari are
+ *   not "a browner brown than the last one" — they are the only saturated
+ *   objects in a world made of green and shadow, which is exactly the argument
+ *   `WINGS` makes for the butterflies and it applies twice as hard to something
+ *   the size of a crow.
+ *
+ *   THE SILHOUETTES DIVERGE. `build` was carrying small differences between
+ *   birds that were all roughly one shape. A quetzal has 60 cm of tail
+ *   streamer, a motmot has a bare racket-tipped tail, a tinamou has no tail at
+ *   all and is a rugby ball on legs, a hermit is a splinter with a long bill.
+ *   Those read at a distance where a colour does not.
+ *
  * WHAT EACH NUMBER IS, AND WHY THEY ARE THE NUMBERS THEY ARE.
  *
- *   build   [span, girth, length]. A uniform scale can only say
- *           "bigger", and bigger is not a species — a cuckoo has a wood
- *           pigeon's wingspan on a slim long-tailed body, and a wren is a fat
- *           ball with almost no wing and no tail at all. This is the field that
- *           makes two birds of the same size read as different animals.
- *   coat    a MULTIPLIER on the shared bird colour (0x2a2a2c, near black), not
+ *   build   [span, girth, length]. A uniform scale can only say "bigger", and
+ *           bigger is not a species. This is the field that makes two birds of
+ *           the same size read as different animals, and in this roster it does
+ *           more work than in the last one: the range on `length` runs from a
+ *           manakin's 0.66 to a quetzal's 1.85, nearly three to one.
+ *   coat    a MULTIPLIER on the shared bird colour (0x8c8c90, a mid grey), not
  *           an absolute — the same discipline as `shade`, so a bird still goes
- *           dark when it hops into shade instead of glowing there. Around 2 is
- *           a mid brown, 0.7 is a blackbird, 2.5 with a blue lean is a pigeon.
+ *           dark when it hops into shade instead of glowing there.
+ *
+ *           IN LINEAR SPACE, WHICH IS NOT WHERE ANYONE PICKS A COLOUR. Three
+ *           converts a material colour to linear on assignment, so these
+ *           multiply linear components and the ratios are NOT the ratios of the
+ *           sRGB values you would type into a colour picker. The difference is
+ *           large and it is not a rounding error: a rufous brown wants 0.39 on
+ *           green where the sRGB ratio for the same colour is 0.64, which comes
+ *           out a washed-out grey — which is exactly what the first attempt at
+ *           the old table did. 1.0 is the base grey, 0.02 is a toucan's black,
+ *           and white is around 3.5 rather than around 1.8. DERIVE THEM rather
+ *           than guessing — `mult = linear(target) / linear(base)` with the
+ *           standard sRGB transfer — and read the result back with
+ *           `bird-lineup.mjs`, which prints what each species ended up as,
+ *           converted to sRGB so it can be read.
  *   mark    the second colour, and the reach is how far up the front of the
  *           bird it goes. This is the field that earns the whole attribute: a
- *           robin is a brown bird with a red front, and one colour cannot say
- *           that. At reach 0.05 it is a bill and nothing else; at 0.2 it is the
- *           entire breast. Every bird here has one, because every bird alive is
- *           paler underneath than on top.
+ *           quetzal is a green bird with a crimson front, and one colour cannot
+ *           say that. At reach 0.06 it is a bill and nothing else; at 0.24 it is
+ *           the entire breast. Every bird here has one, because every bird alive
+ *           is differently coloured underneath than on top — and in this roster
+ *           several of them ARE the mark: a toucan is a black bird with a
+ *           yellow bib and an enormous yellow bill, and nothing else.
+ *   henMark an optional replacement mark for the hen, for the four species where
+ *           she is not a duller version of him but a DIFFERENT COLOUR. See
+ *           `plumageInto`, which handles every other row with one number. Four
+ *           rows use it here against two in the old table, and that is not
+ *           inflation: tropical dimorphism is routinely a different ANIMAL
+ *           rather than a faded one — a hen manakin and a hen honeycreeper are
+ *           both plain green birds whose males are black-and-gold and violet.
  *   dimorph how much duller the hen is, 0 to 1. See `plumageInto`.
  */
 const PLUMAGE = {
-  /** Warm brown, slate crown, and a pink flush on the breast. */
-  chaffinch: {
-    build: [1.0, 1.0, 1.02],
-    coat: [2.15, 1.62, 1.34],
-    mark: [3.5, 1.85, 1.6],
-    reach: 0.18,
-    // The hen is a completely different-looking bird — plain olive-grey, no
-    // pink at all — which is why she is at the top of the range.
-    dimorph: 0.85,
-  },
-  /** Olive back, and the loudest yellow in a British wood. */
-  greattit: {
-    build: [0.92, 1.06, 0.95],
-    coat: [1.5, 1.9, 1.0],
-    mark: [4.3, 3.5, 0.8],
+  /**
+   * A screaming piha, and the best joke in the roster: the loudest bird in the
+   * forest is a featureless grey nothing with a slightly paler front. It is on
+   * the table as the control — proof that the colours below are the species and
+   * not a filter applied to everything.
+   */
+  piha: {
+    build: [1.0, 1.02, 1.0],
+    coat: [1.05, 1.05, 0.88],
+    mark: [1.83, 1.83, 1.56],
     reach: 0.2,
+    dimorph: 0,
+  },
+  /**
+   * A three-wattled bellbird: a chestnut body under a pure white head and
+   * breast, and the longest reach in the table because on this bird the white
+   * really is the whole front third of it.
+   */
+  bellbird: {
+    build: [1.0, 1.15, 0.88],
+    coat: [0.56, 0.16, 0.05],
+    mark: [3.45, 3.32, 2.84],
+    reach: 0.26,
+    // She is olive-green and streaky and does not look like the same species,
+    // which is what the top of this range is for.
+    henMark: [0.72, 0.95, 0.3],
+    dimorph: 0.8,
+  },
+  /**
+   * A Montezuma oropendola: nearly black at the front, deep chestnut behind,
+   * with a pale bill and a blue cheek patch — which at this reach is a face and
+   * not a breast, and a face is exactly what identifies one.
+   */
+  oropendola: {
+    build: [1.06, 1.0, 1.3],
+    coat: [0.26, 0.09, 0.03],
+    mark: [3.32, 2.46, 0.16],
+    reach: 0.12,
     dimorph: 0.15,
   },
-  /** A rufous ball with no tail to speak of. The smallest silhouette here. */
-  wren: {
-    build: [0.82, 1.22, 0.68],
-    coat: [2.3, 1.5, 0.88],
-    mark: [2.8, 2.15, 1.5],
+  /**
+   * A resplendent quetzal, which is the reason a length multiplier exists.
+   *
+   * 1.85 is the tail streamer and it is the single most extreme number in this
+   * table. The bird is 40 cm and the tail is another 60, so a quetzal is very
+   * nearly all tail — and since `aBuild.z` lengthens the whole rear of the
+   * animal (see the shader), that is what it draws. Iridescent green over a
+   * crimson breast, and the crimson gets a long reach because it is most of
+   * the underside.
+   */
+  quetzal: {
+    build: [1.0, 0.95, 1.85],
+    coat: [0.05, 0.97, 0.3],
+    mark: [2.2, 0.02, 0.1],
+    reach: 0.22,
+    // The hen has no crimson and no streamers; she is a grey-breasted green
+    // bird. The mark cannot fade to that, so she gets her own.
+    henMark: [0.97, 1.02, 0.83],
+    dimorph: 0.5,
+  },
+  /**
+   * A turquoise-browed motmot: green over a rufous belly, with the racket tail
+   * and the electric-blue brow that names it. The mark is that brow — a short
+   * reach, because it is a stripe over the eye and nothing more.
+   */
+  motmot: {
+    build: [0.95, 1.0, 1.45],
+    coat: [0.18, 0.97, 0.52],
+    mark: [0.03, 1.83, 2.17],
+    reach: 0.12,
+    dimorph: 0,
+  },
+  /**
+   * A great tinamou: olive-brown, barred, tailless, and shaped like a rugby
+   * ball. The girth at 1.3 and the length at 0.7 are the whole bird — you will
+   * hear this species far more often than you see it, and when you do see it,
+   * it is on the ground and it is the wrong shape for a bird.
+   */
+  tinamou: {
+    build: [0.85, 1.22, 0.7],
+    coat: [0.55, 0.4, 0.18],
+    mark: [2.46, 2.08, 1.3],
+    reach: 0.18,
+    dimorph: 0,
+  },
+  /**
+   * A black-throated trogon: green above, brilliant yellow below, sitting bolt
+   * upright and absolutely still on a mid-storey branch. One of the two or three
+   * species here you can genuinely walk up to, so the colours matter more than
+   * most.
+   */
+  trogon: {
+    build: [0.9, 1.12, 1.2],
+    coat: [0.11, 0.56, 0.27],
+    mark: [3.39, 2.13, 0.17],
+    reach: 0.2,
+    // She swaps green for warm brown and keeps the yellow.
+    dimorph: 0.45,
+  },
+  /**
+   * A common potoo, which is bark. Grey-brown, mottled, and its entire defence
+   * is that it looks like the broken stump it is sitting on — so it gets the
+   * narrowest contrast in the table on purpose. Finding one is meant to be
+   * hard; hearing one is not.
+   */
+  potoo: {
+    build: [1.05, 1.15, 1.15],
+    coat: [0.59, 0.48, 0.33],
+    mark: [1.4, 1.16, 0.84],
+    reach: 0.12,
+    dimorph: 0,
+  },
+  /**
+   * A great kiskadee: rufous wings, a black-and-white striped head and the
+   * brightest yellow breast of anything in the understorey. A long reach,
+   * because that yellow is the whole front of the bird — and this is the
+   * species a player is most likely to identify twice, so it is worth getting
+   * loud.
+   */
+  kiskadee: {
+    build: [1.0, 1.08, 0.95],
+    coat: [1.43, 0.47, 0.08],
+    mark: [3.55, 2.51, 0.01],
+    reach: 0.24,
+    dimorph: 0,
+  },
+  /** A musician wren: rufous, barred, tiny, tail cocked. Plain, and famous anyway. */
+  musicianwren: {
+    build: [0.85, 1.2, 0.72],
+    coat: [1.23, 0.39, 0.12],
+    mark: [2.73, 2.23, 1.44],
+    reach: 0.15,
+    dimorph: 0,
+  },
+  /**
+   * A white-plumed antbird: slate grey, and named for the white throat plume
+   * that is the only thing on it. Reach 0.1 is that plume — any more and it is
+   * a bird with a white chest, which is a different species entirely.
+   */
+  antbird: {
+    build: [0.9, 1.1, 0.85],
+    coat: [0.26, 0.3, 0.34],
+    mark: [3.26, 3.35, 3.24],
+    reach: 0.1,
+    dimorph: 0.35,
+  },
+  /**
+   * A golden-headed manakin: a ten-centimetre jet-black bird with a
+   * fluorescent yellow head. The single highest contrast in the table, on the
+   * single smallest body — and it works, because the head is a fifth of the
+   * animal.
+   */
+  manakin: {
+    build: [0.8, 1.25, 0.66],
+    coat: [0.03, 0.03, 0.03],
+    mark: [3.39, 1.74, 0.02],
+    reach: 0.11,
+    // She is a plain olive-green bird and nobody would guess they were the same
+    // species. `dimorph` can only take contrast out of black, which gives a
+    // grey male rather than a green female, so she gets her own colour.
+    henMark: [0.59, 0.97, 0.15],
+    dimorph: 0.9,
+  },
+  /**
+   * A paradise tanager, which is the most absurdly coloured thing in this
+   * forest and is on the roster mostly for that: turquoise breast, apple-green
+   * head, black back, scarlet rump. The voice is a thin squeak, so this is the
+   * one species you find by LOOKING, which is a useful thing for a roster to
+   * contain.
+   */
+  tanager: {
+    build: [0.95, 1.05, 0.95],
+    coat: [0.02, 1.43, 1.98],
+    mark: [1.3, 2.79, 0.1],
     reach: 0.13,
     dimorph: 0,
   },
   /**
-   * Black, long-tailed, and the yellow bill is the only thing on it that is not
-   * black — which is exactly what `reach` at 0.05 draws. It is also the sharpest
-   * test of the mark: get it wrong by a factor of three and you have a
-   * blackbird with a yellow head.
+   * A red-legged honeycreeper: violet-blue with a turquoise crown, slim, with a
+   * decurved bill.
    */
-  blackbird: {
-    build: [0.98, 1.0, 1.16],
-    coat: [0.7, 0.66, 0.7],
-    mark: [5.4, 3.3, 0.5],
-    reach: 0.05,
-    // The hen blackbird is brown. Handled by the same rule as everything else
-    // — see plumageInto — because pulling near-black toward its own mid grey
-    // and then warming it is, usefully, exactly what a hen blackbird is.
-    dimorph: 0.75,
+  honeycreeper: {
+    build: [0.92, 0.98, 0.95],
+    coat: [0.35, 0.23, 2.07],
+    mark: [0.14, 2.41, 1.89],
+    reach: 0.1,
+    // Plain grass-green, like the manakin's hen and for the same reason.
+    henMark: [0.3, 1.23, 0.17],
+    dimorph: 0.85,
   },
-  /** Big, broad, blue-grey and stout. The one bird here you cannot mistake. */
-  pigeon: {
-    build: [1.14, 1.26, 1.0],
-    coat: [2.5, 2.55, 2.8],
-    mark: [3.5, 3.0, 3.0],
-    reach: 0.17,
-    dimorph: 0,
-  },
-  /** Olive-buff, small, and utterly plain. Some birds are. */
-  chiffchaff: {
-    build: [0.95, 0.92, 1.0],
-    coat: [1.7, 1.78, 1.16],
-    mark: [3.0, 2.9, 2.0],
-    reach: 0.16,
-    dimorph: 0,
-  },
-  /** Round, olive-brown, with the orange-red front that names it. */
-  robin: {
-    build: [0.9, 1.16, 0.9],
-    coat: [1.9, 1.62, 1.15],
-    mark: [4.8, 2.0, 0.8],
-    reach: 0.17,
-    dimorph: 0,
-  },
-  /** Warm buff-brown above, a pale speckled breast below. */
-  songthrush: {
-    build: [1.0, 1.06, 1.02],
-    coat: [2.2, 1.86, 1.34],
-    mark: [3.7, 3.25, 2.4],
-    reach: 0.2,
-    dimorph: 0,
-  },
-  /** Blue-grey above, buff below, dumpy, and with practically no tail. */
-  nuthatch: {
-    build: [0.9, 1.16, 0.76],
-    coat: [1.45, 1.75, 2.45],
-    mark: [3.3, 2.0, 1.2],
-    reach: 0.19,
-    dimorph: 0.2,
-  },
-  /** Tiny. That is the entire identity and the size does all the work. */
-  goldcrest: {
-    build: [0.85, 1.06, 0.8],
-    coat: [1.55, 1.85, 1.12],
-    mark: [4.2, 3.5, 1.0],
-    reach: 0.055,
-    dimorph: 0.3,
-  },
-  /** Grey, long-winged, long-tailed. Looks far more like a hawk than a songbird. */
-  cuckoo: {
-    build: [1.22, 0.86, 1.24],
-    coat: [1.95, 2.0, 2.2],
-    mark: [3.4, 3.4, 3.4],
-    reach: 0.19,
-    dimorph: 0.25,
-  },
-  /** Plain warm brown, and famously nothing to look at. */
-  nightingale: {
-    build: [0.95, 0.96, 1.1],
-    coat: [2.0, 1.52, 1.05],
-    mark: [2.7, 2.3, 1.75],
-    reach: 0.14,
-    dimorph: 0,
-  },
-  /* ---- the third pass, matched to the four voices added with it. ---- */
-  /** Olive above, pale yellow below, and slighter than the chiffchaff it hides among. */
-  willowwarbler: {
-    build: [0.98, 0.9, 1.02],
-    coat: [1.68, 1.86, 1.12],
-    mark: [3.4, 3.15, 1.5],
-    reach: 0.17,
+  /**
+   * A long-billed hermit: a dull green-brown hummingbird that is mostly bill
+   * and tail spike. The narrowest body in the table and the narrowest wing —
+   * 0.78 span on a 0.85 girth is a splinter, which is what one looks like when
+   * it stops moving, which is almost never.
+   */
+  hermit: {
+    build: [0.78, 0.85, 1.3],
+    coat: [0.56, 0.55, 0.27],
+    mark: [3.08, 2.65, 1.56],
+    reach: 0.07,
     dimorph: 0,
   },
   /**
-   * Streaky brown, long-winged, and it is in a WOOD's fauna table only because
-   * the voice is: `wildlife.js` puts a skylark over the field edge and lets you
-   * hear it from inside the trees. A percher wearing it is the one you see when
-   * the wood opens out, so it gets the long wings and the plain brown and
-   * nothing else.
+   * A barred woodcreeper: warm brown, finely barred, with a stiff tail it props
+   * itself on. Long and straight, because it lives clinging to vertical trunks
+   * and that is the shape that reads as one.
    */
-  skylark: {
-    build: [1.14, 1.04, 0.98],
-    coat: [2.05, 1.8, 1.3],
-    mark: [3.2, 2.95, 2.3],
+  woodcreeper: {
+    build: [0.95, 1.0, 1.28],
+    coat: [0.97, 0.39, 0.12],
+    mark: [2.28, 1.61, 0.85],
     reach: 0.18,
     dimorph: 0,
   },
   /**
-   * Grey-olive, and the cap it is named for is on the CROWN — which this
-   * material cannot draw, because the mark is anchored under the head and
-   * pulling it over the top would put colour on every bird's forehead. So the
-   * blackcap gets its body and not its badge. That is the correct trade: an
-   * invented marking is worse than a missing one, and nothing else in the wood
-   * is this particular grey.
+   * A barred antshrike, and the most extreme dimorphism on the roster: he is
+   * black-and-white barred with a crest, she is uniform bright rufous with a
+   * chestnut crest. Two different birds by any visual test, and the reason
+   * `henMark` exists.
    */
-  blackcap: {
-    build: [0.95, 1.0, 1.02],
-    coat: [1.72, 1.75, 1.62],
-    mark: [2.9, 2.85, 2.6],
-    reach: 0.16,
-    dimorph: 0.15,
+  antshrike: {
+    build: [0.92, 1.14, 1.0],
+    coat: [1.23, 1.23, 1.19],
+    mark: [0.02, 0.02, 0.02],
+    henMark: [1.76, 0.34, 0.05],
+    reach: 0.12,
+    dimorph: 0.8,
   },
   /**
-   * Chestnut back and a head and breast of the brightest yellow in any hedge.
-   * The one species in the table the mark was almost designed for — reach at
-   * 0.21 is the whole front of the bird, which is exactly where the yellow is.
+   * A collared aracari: a small toucan, so a slim body, a long tail and a bill
+   * half the length of the animal. Dark green above, and a yellow underside
+   * with the black-and-red banding that the reach at 0.22 stands in for.
    */
-  yellowhammer: {
-    build: [0.98, 1.0, 1.1],
-    coat: [2.3, 1.5, 0.95],
-    mark: [4.6, 3.9, 0.7],
-    reach: 0.21,
-    dimorph: 0.55,
+  aracari: {
+    build: [1.0, 0.85, 1.4],
+    coat: [0.11, 0.44, 0.13],
+    mark: [3.39, 2.08, 0.03],
+    reach: 0.22,
+    dimorph: 0,
+  },
+  /**
+   * A black-faced solitaire: slate grey with a black face and a bright orange
+   * bill and legs. Reach 0.06 is the bill and only the bill — the same discipline
+   * a bill-only mark always needs, and the same test: get it wrong by a factor of
+   * three and it is a grey bird with an orange head.
+   */
+  solitaire: {
+    build: [0.98, 1.0, 1.05],
+    coat: [0.3, 0.34, 0.38],
+    mark: [3.32, 0.74, 0.02],
+    reach: 0.06,
+    dimorph: 0,
+  },
+  /**
+   * A keel-billed toucan, which is the bird everybody actually came here for.
+   * Black body, brilliant yellow bib, and a bill you can see from forty metres.
+   * The mark covers the bib AND the bill because at this geometry they are the
+   * same end of the same animal, and the biggest body in the table carries it.
+   */
+  toucan: {
+    build: [0.95, 1.05, 1.25],
+    coat: [0.02, 0.02, 0.03],
+    mark: [3.55, 2.84, 0.25],
+    reach: 0.2,
+    dimorph: 0,
   },
 };
 
@@ -793,19 +1014,24 @@ const PLUMAGE = {
  * that are not above, so the interesting question is not "how do we know them
  * all" but "what does a bird we do not know look like". A generic average of
  * the table would be one shape repeated, which is the thing this whole pass
- * exists to remove; four plausible woodland archetypes picked by a hash of the
- * NAME gives an unknown species a stable, unremarkable, believable appearance
- * that will not be a magenta parrot when the audio agent adds a treecreeper.
+ * exists to remove; four plausible archetypes picked by a hash of the NAME
+ * gives an unknown species a stable, unremarkable, believable appearance.
+ *
+ * They moved continents with everything else. A "small brown job" is still the
+ * right first guess anywhere on earth, but the grey one became a green one and
+ * the big dark one got a bright throat, because an unknown bird in THIS forest
+ * is far more likely to be green with something loud on the front of it than to
+ * be a dunnock.
  */
 const STRANGERS = [
-  // A small brown job.
-  { build: [0.95, 1.05, 0.96], coat: [1.98, 1.6, 1.2], mark: [2.9, 2.4, 1.8], reach: 0.16, dimorph: 0.2 },
-  // A grey one.
-  { build: [1.02, 1.0, 1.06], coat: [1.7, 1.75, 1.95], mark: [3.0, 3.0, 3.0], reach: 0.17, dimorph: 0.1 },
-  // An olive one.
-  { build: [0.9, 1.02, 0.92], coat: [1.6, 1.82, 1.15], mark: [3.2, 3.0, 1.9], reach: 0.15, dimorph: 0.2 },
-  // A big dark one.
-  { build: [1.03, 1.0, 1.1], coat: [0.95, 0.9, 0.92], mark: [2.4, 2.1, 1.7], reach: 0.12, dimorph: 0.3 },
+  // A small brown job. Every forest has them.
+  { build: [0.95, 1.05, 0.96], coat: [1.16, 0.77, 0.4], mark: [2.01, 1.49, 0.83], reach: 0.16, dimorph: 0.2 },
+  // A green one, which is what most of the canopy is.
+  { build: [0.98, 1.0, 1.05], coat: [0.3, 0.86, 0.35], mark: [2.2, 2.3, 0.6], reach: 0.17, dimorph: 0.25 },
+  // An olive understorey bird with a pale throat.
+  { build: [0.9, 1.08, 0.92], coat: [0.62, 0.7, 0.38], mark: [2.3, 2.1, 1.4], reach: 0.15, dimorph: 0.2 },
+  // Something big and dark with a bright bill.
+  { build: [1.03, 1.05, 1.18], coat: [0.14, 0.13, 0.14], mark: [3.2, 2.1, 0.2], reach: 0.12, dimorph: 0.2 },
 ];
 
 /**
@@ -814,29 +1040,35 @@ const STRANGERS = [
  * `wildlife.js` exports `VOICE_NAMES`, and its comment on that export makes the
  * same argument this file would have: the species list is defined by what the
  * thing sounds like, it lives in exactly one place, and a second roster is one
- * that goes stale the next time a row is added, silently, with a nuthatch
- * wearing a wood pigeon. Two agents arrived at that independently, which is
- * usually a sign it is right.
+ * that goes stale the next time a row is added, silently, with a hermit wearing
+ * a toucan. Two agents arrived at that independently, which is usually a sign
+ * it is right.
  *
  * The literal below is a floor, not a copy in use: it is what this file falls
  * back to if it is ever loaded next to a `wildlife.js` from before that export
- * existed, and a wrong-but-plausible bird beats twenty-six undefined ones. It
- * is the first twelve names because those are the twelve that were in the table
- * on the day the export did not exist.
+ * existed, and a wrong-but-plausible bird beats twenty-six undefined ones.
  */
 const VOICE_ROSTER = wildlifeAudio.VOICE_NAMES ?? [
-  'chaffinch',
-  'greattit',
-  'wren',
-  'blackbird',
-  'pigeon',
-  'chiffchaff',
-  'robin',
-  'songthrush',
-  'nuthatch',
-  'goldcrest',
-  'cuckoo',
-  'nightingale',
+  'piha',
+  'bellbird',
+  'oropendola',
+  'quetzal',
+  'motmot',
+  'tinamou',
+  'trogon',
+  'potoo',
+  'kiskadee',
+  'musicianwren',
+  'antbird',
+  'manakin',
+  'tanager',
+  'honeycreeper',
+  'hermit',
+  'woodcreeper',
+  'antshrike',
+  'aracari',
+  'solitaire',
+  'toucan',
 ];
 
 /** What voice `v` looks like. Never returns null. */
@@ -862,15 +1094,26 @@ function plumageOf(v) {
  * SIZE for free and only its colours fall through to `STRANGERS`.
  *
  * The curve is not linear and must not be. True proportions against a 25 cm
- * blackbird would put the wood pigeon at 1.74 and the goldcrest at 0.38 —
- * eighteen triangles at 0.38 is a speck, and the archetype geometry in
- * shapes.js was tuned around the middle of the range and starts to read as a
- * balloon much above 1.4. The 0.85 power compresses both ends without ever
- * reordering them, which is what matters: a goldcrest is still unmistakably the
- * smallest thing in the wood and a pigeon still twice its size. Over the
- * sixteen species in the table it means 0.60 to 1.43, averaging 0.84 — a hair
- * under the 0.885 the old undifferentiated perchers averaged, so the wood has
- * the same amount of bird in it and it is distributed.
+ * reference would put the toucan at 2.0 and the manakin at 0.4 — eighteen
+ * triangles at 0.4 is a speck, and the archetype geometry in shapes.js was
+ * tuned around the middle of the range and starts to read as a balloon much
+ * above 1.4. The 0.85 power compresses both ends without ever reordering them,
+ * which is what matters: a manakin is still unmistakably the smallest thing in
+ * the forest and a toucan still two and a half times its size.
+ *
+ * THE RAINFOREST ROSTER MOVED THIS WITHOUT CHANGING A NUMBER IN IT, which is
+ * the point of taking the size from the audio table rather than keeping a
+ * column here. The old twenty species came out at 0.60 to 1.43 averaging 0.84;
+ * the new ones are 0.63 to 1.58 averaging 1.05, because rainforest birds are
+ * simply bigger — 27 cm of body against 17. That is a QUARTER more bird in
+ * every direction on every percher in the wood, for free, and it is a direct
+ * answer to "I can hear them and I can never spot one".
+ *
+ * Five species now sit above the 1.4 the comment above calls a balloon, and
+ * they get away with it through `build` rather than through this curve: an
+ * aracari is 0.85 girth, a toucan 1.05, an oropendola 1.0. The one deliberately
+ * round animal is the tinamou, which is a rugby ball on legs and is supposed to
+ * look like one.
  */
 function sizeOf(v) {
   const cm = wildlifeAudio.voiceInfo?.(v)?.size ?? 15;
@@ -885,64 +1128,273 @@ function sizeOf(v) {
  * nearly the truth: across small woodland birds the female is duller, less
  * saturated and has a smaller or absent version of whatever patch the male
  * wears. Pulling the coat toward its own luminance and the mark toward the coat
- * turns a cock chaffinch into a plain olive one and a cock blackbird into a
- * brown hen, out of one number per species.
+ * turns a cock trogon into a warm brown one and a cock bellbird into a streaky
+ * olive hen, out of one number per species.
  *
- * `dimorph` is that number, and it is zero for most of the table — robins,
- * wrens, pigeons and thrushes genuinely cannot be sexed by eye, and inventing a
- * difference there would be the exact thing the brief forbids.
+ * `dimorph` is that number, and it is zero for over half of the table —
+ * toucans, kiskadees, motmots, tanagers and potoos genuinely cannot be sexed by
+ * eye, and inventing a difference there would be the exact thing the brief
+ * forbids. Where it is NOT zero here it tends to be extreme, because tropical
+ * dimorphism usually is: four rows are at 0.8 or above and every one of them
+ * also carries a `henMark`, because at that strength the general rule has
+ * stopped describing anything.
  */
 function plumageInto(coat, mark, spec, hen) {
   const d = hen ? spec.dimorph ?? 0 : 0;
   const lum = spec.coat[0] * 0.2126 + spec.coat[1] * 0.7152 + spec.coat[2] * 0.0722;
   // Toward its own luminance, then warmed a shade: a dull bird is not a grey
-  // bird, and a hen blackbird is brown rather than charcoal.
+  // bird, and a hen trogon is brown rather than charcoal.
   const warm = [1 + d * 0.34, 1 + d * 0.06, 1 - d * 0.16];
+  /**
+   * THE FOUR SPECIES THE ONE-NUMBER RULE CANNOT DESCRIBE.
+   *
+   * The rule above is that a hen is a cock with the contrast taken out, and it
+   * is very nearly the truth — but it can only ever move a colour toward the
+   * body, and for a hen antshrike the badge does not fade, it turns RUFOUS
+   * where his is black. Pulling black toward grey-olive gives a washed-out male
+   * and not a female. Same for the hen manakin and the hen honeycreeper, whose
+   * males are black-and-gold and violet-blue and who are both, simply, green.
+   *
+   * So `henMark` replaces the mark outright, and the dimorph rule still runs on
+   * the coat underneath it — she is duller AND differently badged, which is
+   * both halves of what she actually looks like. Four rows use it and the other
+   * sixteen are unaffected, which is the right shape for an exception: the
+   * general rule keeps its reach and stops lying about the two cases it cannot
+   * reach.
+   */
+  const badge = hen && spec.henMark ? spec.henMark : spec.mark;
   for (let i = 0; i < 3; i++) {
     coat[i] = (spec.coat[i] + (lum - spec.coat[i]) * d * 0.7) * warm[i];
-    mark[i] = spec.mark[i] + (coat[i] - spec.mark[i]) * d * 0.62;
+    mark[i] = spec.henMark && hen ? badge[i] : badge[i] + (coat[i] - badge[i]) * d * 0.62;
   }
-  return spec.reach * (1 - d * 0.45);
+  return spec.reach * (1 - d * (spec.henMark ? 0.15 : 0.45));
 }
 
 /**
- * Butterflies, which get the same two attributes for a much smaller sum.
+ * Butterflies, which get the same two attributes for a much smaller sum, plus
+ * one of their own that only they have any use for.
  *
- * The old spread was one hue ramp from orange to yellow and a lightness — which
- * is a good instinct badly served, because the note it was serving is the one
- * in the loop below: a butterfly is the ONLY saturated thing in a wood made of
- * greens and browns and that is exactly why finding one is worth anything. A
- * ramp between two neighbouring hues cannot deliver that; you get twenty-two
- * differently-lit copies of the same marigold.
+ * THE ROSTER WAS STILL BRITISH. Aug 2026, and this is the fourth object found
+ * in the same state as the forest floor's hay-meadow flowers: the rainforest
+ * pass moved the canopy, the birds, the ground cover and the insect bed to the
+ * Neotropics and left a peacock and a small tortoiseshell flying about
+ * underneath a kapok. Nobody notices, because a butterfly is 13 cm and moving —
+ * which is exactly why it was worth fixing, since the SAME argument says the
+ * one Amazonian butterfly everybody can picture was also missing.
  *
- * Real species are the answer and they cost nothing extra, because the mark
- * attribute the birds needed does the other half of every one of them: an
- * orange-tip is a WHITE butterfly with orange only at the wingtip, a small
- * tortoiseshell is rust with a dark border, a peacock is maroon with a blue
- * flash out at the corner. The band is the species in almost every case, and
- * the flyer's mark anchor for this material sits out on the wing rather than on
- * the breast for precisely that reason.
+ * The old note here is still right and is the reason this table exists at all:
+ * a butterfly is the only saturated thing in a wood made of greens and browns,
+ * so a ramp between two neighbouring hues gets you twenty differently-lit
+ * copies of the same marigold and real species get you something worth walking
+ * over to look at. The mark attribute the birds needed does the other half of
+ * every one of them — a postman is a BLACK butterfly with one scarlet bar, a
+ * zebra longwing is a black one with cream stripes, a sulphur is lemon with an
+ * orange apex. The band is the species in almost every case, which is why the
+ * flyer's mark anchor for this material sits out on the wing.
  *
- * `w` is how common. Whites and browns are the two you actually see most of in
- * a British wood; a common blue is the one that stops you.
+ * THE MORPHO IS WHY THIS PASS HAPPENED, and it needs the third attribute.
+ *
+ * Every other butterfly here is one colour with a marking on it, top and
+ * bottom, and a single tint says all of it. A blue morpho is not: it is a drab
+ * brown insect with a MIRROR on the top of its wings. The blue is structural —
+ * interference in the scale lamellae, not pigment — and the underside is
+ * leaf-brown with eyespots, so what a morpho does when it flies through a light
+ * shaft is BLINK: electric blue, gone, electric blue, gone, once per wingbeat,
+ * as the two faces of the same wing alternate. Ask anyone who has been to the
+ * Amazon what they saw and this is the image you get back.
+ *
+ * `under` is that second face, and `flash` is how much of a mirror the species
+ * is. They ride one more instanced vec4 on a mesh that is already one draw
+ * call, and the shader half is a `gl_FrontFacing` branch — see `flyerMaterial`.
+ * Everything else in the table is a pigment butterfly with flash 0, which
+ * compiles to the same arithmetic it always did.
+ *
+ * ALL OF THESE ARE LINEAR MULTIPLIERS ON A WHITE BASE, i.e. they ARE the linear
+ * colour, and the sRGB value each one is aiming at is in the comment. Deriving
+ * them as sRGB ratios is the mistake that rendered every bird in this wood a
+ * washed grey; see PLUMAGE. The lit surface under a canopy is well below 1, so
+ * the numbers below land darker than the sRGB they name — for the morpho that
+ * gap is closed on purpose by the additive flash, which is what makes it read
+ * as a mirror rather than as a blue card.
+ *
+ * `w` is how common. A sulphur or a julia is the butterfly you see constantly
+ * over a Neotropical clearing; the morpho is weighted so that roughly one in
+ * five is one, which is often enough to happen and rare enough to be an event.
  */
 const WINGS = [
-  { name: 'white', w: 1.2, size: 0.95, build: [1.0, 1.0, 1.0], coat: [1.5, 1.5, 1.45], mark: [0.55, 0.55, 0.62], reach: 0.038 },
-  { name: 'brimstone', w: 1.0, size: 1.05, build: [1.08, 0.95, 1.05], coat: [1.55, 1.45, 0.42], mark: [1.75, 1.5, 0.3], reach: 0.032 },
-  { name: 'tortoiseshell', w: 0.9, size: 1.0, build: [1.0, 1.05, 0.98], coat: [1.95, 0.78, 0.2], mark: [0.3, 0.22, 0.24], reach: 0.05 },
-  { name: 'meadowbrown', w: 0.9, size: 0.8, build: [0.94, 1.05, 0.95], coat: [0.72, 0.48, 0.3], mark: [1.9, 0.9, 0.26], reach: 0.03 },
-  { name: 'orangetip', w: 0.8, size: 0.85, build: [1.02, 0.95, 1.0], coat: [1.55, 1.5, 1.45], mark: [2.5, 1.0, 0.16], reach: 0.055 },
-  { name: 'peacock', w: 0.6, size: 1.12, build: [1.05, 1.1, 1.0], coat: [1.35, 0.34, 0.22], mark: [0.42, 0.48, 1.15], reach: 0.042 },
-  { name: 'commonblue', w: 0.45, size: 0.68, build: [0.95, 0.95, 0.95], coat: [0.55, 0.72, 2.1], mark: [1.5, 1.5, 1.62], reach: 0.028 },
+  {
+    // Morpho menelaus. Upper #3878F0, border #12141F, underside #6B5A46.
+    name: 'morpho',
+    w: 1.6,
+    size: 1.34,
+    build: [1.06, 0.86, 1.0],
+    coat: [0.04, 0.188, 0.871],
+    mark: [0.006, 0.007, 0.014],
+    under: [0.3, 0.21, 0.13],
+    flash: 1.2,
+    reach: 0.03,
+    beat: [0.86, 6.8],
+  },
+  {
+    // Caligo, the owl butterfly. Dull mauve-brown above, dead leaf below.
+    name: 'owl',
+    w: 0.3,
+    size: 1.5,
+    build: [1.0, 1.1, 1.02],
+    coat: [0.195, 0.127, 0.188],
+    mark: [0.014, 0.01, 0.008],
+    under: [0.34, 0.22, 0.1],
+    flash: 0.0,
+    reach: 0.055,
+    beat: [0.82, 5.6],
+  },
+  {
+    // Heliconius melpomene. Black, one scarlet bar. Long wings, slow and floppy.
+    name: 'postman',
+    w: 0.6,
+    size: 1.0,
+    build: [1.16, 0.82, 1.12],
+    coat: [0.01, 0.009, 0.012],
+    mark: [0.687, 0.018, 0.013],
+    under: [0.075, 0.06, 0.05],
+    flash: 0.0,
+    reach: 0.045,
+    beat: [0.8, 6.2],
+  },
+  {
+    // Heliconius charithonia, the zebra longwing. Black with cream stripes.
+    name: 'zebra',
+    w: 0.45,
+    size: 1.02,
+    build: [1.18, 0.8, 1.14],
+    coat: [0.013, 0.012, 0.01],
+    mark: [0.807, 0.716, 0.188],
+    under: [0.11, 0.1, 0.07],
+    flash: 0.0,
+    reach: 0.052,
+    beat: [0.78, 6.0],
+  },
+  {
+    // Phoebis, a sulphur. The one you see most of over any clearing.
+    name: 'sulphur',
+    w: 0.5,
+    size: 0.86,
+    build: [1.0, 0.98, 0.98],
+    coat: [0.52, 0.36, 0.028],
+    mark: [0.58, 0.2, 0.014],
+    under: [0.4, 0.36, 0.1],
+    flash: 0.0,
+    reach: 0.036,
+    beat: [0.9, 11.5],
+  },
+  {
+    // Dryas iulia. Long orange wings, dark border.
+    name: 'julia',
+    w: 0.45,
+    size: 1.04,
+    build: [1.12, 0.88, 1.08],
+    coat: [0.5, 0.1, 0.008],
+    mark: [0.03, 0.012, 0.006],
+    under: [0.3, 0.16, 0.07],
+    flash: 0.0,
+    reach: 0.048,
+    beat: [0.84, 8.4],
+  },
+  {
+    // Parides / Battus, a swallowtail. Black with an emerald band.
+    name: 'swallowtail',
+    w: 0.4,
+    size: 1.2,
+    build: [1.08, 0.9, 1.1],
+    coat: [0.009, 0.01, 0.013],
+    mark: [0.04, 0.515, 0.156],
+    under: [0.07, 0.075, 0.065],
+    flash: 0.18,
+    reach: 0.042,
+    beat: [0.85, 7.2],
+  },
 ];
-const WINGS_TOTAL = WINGS.reduce((s, k) => s + k.w, 0);
+/**
+ * WINGS[0] is the morpho and the code below relies on it, which is worth one
+ * line to say out loud: three of the eight slots are dealt it outright rather
+ * than rolled for it. See `seatFlutter`.
+ */
+const MORPHO_SLOTS = 2;
+/** Everything that is a pigment butterfly, i.e. everything the deal does not cover. */
+const PIGMENT = WINGS.slice(1);
+const PIGMENT_TOTAL = PIGMENT.reduce((s, k) => s + k.w, 0);
 
 /** Flock birds, drawn entirely by the vertex shader. */
-const FLOCK_BIRDS = 96;
+/**
+ * The wheeling flocks, plus MACAW_BIRDS reserved at the end of the same range.
+ *
+ * 96 was the flock budget and it still is; the six macaws are ADDED rather
+ * than carved out, because carving would have taken two birds off each of the
+ * four flocks and a flock is already only twenty-four. Six more slots in an
+ * InstancedMesh that is already drawn once is nothing — see the macaw block
+ * below for why they cost no draw call, no material and no shader branch.
+ */
+const FLOCK_BIRDS = 96 + 6;
+/** Three pairs. See the macaw block after the flock loop. */
+const MACAW_PAIRS = 3;
+const MACAW_BIRDS = MACAW_PAIRS * 2;
 const FLOCKS = 4;
 /** Birds that sit on real branches and leave when you get near. */
 const PERCHERS = 26;
-const BUTTERFLIES = 22;
+/**
+ * EIGHT, AND ALL OF THEM WITHIN TWENTY-ONE METRES OF YOU.
+ *
+ * EIGHT IS THE SECOND ANSWER. The first was twenty, chosen by arguing from the
+ * old count of twenty-two, and a wide gameplay frame settled it in one look: at
+ * twenty there were four to seven butterflies in every 60° frame, spread evenly
+ * through the whole depth of the wood, and the eye files that as weather. It
+ * stops being an animal and becomes debris blowing about — which is the exact
+ * failure the note below about "not sixty" was trying to name and did not
+ * bite hard enough on. Measured per station at twenty: clearing 7, glade 6,
+ * ridge 5, wood 4. At eight it is two or three, which is a thing you notice
+ * one at a time.
+ *
+ * The radius came down with it, and for a separate reason: the far half of a
+ * thirty-metre disc was contributing the specks and none of the images. A
+ * butterfly at twenty-five metres is three pixels; it can only ever be
+ * confetti. Twenty-one metres is the range at which one is an animal.
+ *
+ * Twenty-two was the old count, and it used to mean something completely
+ * different: they were scattered once, at load, over a disc of eighty metres
+ * centred on the WORLD ORIGIN, and never touched again. Two consequences, and
+ * between them they are why the recon for this pass came back saying there were
+ * no butterflies in this world at all.
+ *
+ * The first is streaming. This world is endless and the flocks, the herds and
+ * the perchers all learned to follow the player; the butterflies never did, so
+ * walking two hundred metres left every one of them behind for ever.
+ *
+ * The second is that eighty metres was the wrong disc even at the origin. A
+ * butterfly is 13 cm across. At forty metres that is under two pixels at 1440p
+ * and it is behind nine trunks; the far three-quarters of that disc were paying
+ * for instances nobody could see. Concentrating the same handful into the
+ * radius where a butterfly is actually an image raises the density you
+ * experience by about seven times for no cost at all.
+ *
+ * Eight and not sixty, deliberately. A cloud of butterflies reads as moths and
+ * kills the effect stone dead — the thing being reproduced here is finding ONE,
+ * not walking through a hatch.
+ */
+const BUTTERFLIES = 7;
+/** The annulus a butterfly is seated in, around the player, in metres. */
+const FLUTTER_NEAR = 2.5;
+const FLUTTER_FAR = 11;
+/**
+ * How far one is allowed to get before it is recycled to the near side.
+ *
+ * Comfortably beyond FLUTTER_FAR, and that gap is the whole of the hysteresis:
+ * a butterfly reseated at thirty metres cannot immediately re-qualify, so
+ * walking back and forth over one spot does not strobe them. It is also why no
+ * frustum test is needed here, unlike the beasts' recycler — the pop happens at
+ * forty-four metres and lands no closer than thirty, and at thirty metres a
+ * butterfly is two pixels. A teleport you cannot resolve is not a teleport.
+ */
+const FLUTTER_DROP = 17;
 const MIDGES = 880;
 const FIREFLIES = 460;
 
@@ -967,7 +1419,18 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   const birdGeo = flyerGeometry({ span: 0.62, body: 0.3, sweep: 0.22, girth: 1 });
   const birdMat = flyerMaterial({
     name: 'bird',
-    colour: 0x2a2a2c,
+    /**
+     * A MID GREY, and it used to be 0x2a2a2c — near black.
+     *
+     * Every coat in PLUMAGE is a multiplier on this, so the base is what
+     * decides whether the table has anywhere to go. Against 42 units it did
+     * not: a coat had to climb above one just to be visible at all, the
+     * brightest species in the wood came out as a dark brown smudge, and
+     * nothing could be darker than the base so nothing read as black either.
+     * The long version is in PLUMAGE's own docblock; the short version is that
+     * a near-black base is why the birds could not be seen.
+     */
+    colour: 0x8c8c90,
     /** Metres the flock's own centre wanders, in x, y, z. */
     wander: [22, 3.4, 22],
     /**
@@ -977,7 +1440,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      *
      * It is at the FRONT rather than the middle of the breast because that is
      * the end of the range that has to be precise. `reach` grows the patch
-     * backward from here, so 0.05 is a blackbird's bill, 0.14 is a throat and
+     * backward from here, so 0.06 is a solitaire's bill, 0.14 is a throat and
      * 0.2 is the whole front of the animal; anchored at the breast instead, the
      * small end of the range would have been a spot in the middle of the chest,
      * which is not a marking any bird has.
@@ -1020,7 +1483,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    *
    * aBuild is (span, girth, length, how much mark) and aMark is (r, g, b, how
    * far the mark reaches). Between them they hold every difference between a
-   * goldcrest and a wood pigeon, on one geometry, in one draw call. See the
+   * manakin and a toucan, on one geometry, in one draw call. See the
    * block above `flyerMaterial` in shading.js for why it is these two and not a
    * mesh per species.
    */
@@ -1060,6 +1523,9 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * everything. Stored here at no cost and replayed against a new anchor.
    */
   const flocks = [];
+  /** Scratch for the per-flock plumage resolve. Nothing at load may allocate. */
+  const _fCoat = [1, 1, 1];
+  const _fMark = [1, 1, 1];
   for (let f = 0; f < FLOCKS; f++) {
     /**
      * ONE FLOCK CIRCLES THE CLEARING, AND THAT IS NOT DECORATION.
@@ -1072,6 +1538,30 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      * cross the open sky rather than sitting in the middle of it.
      */
     const overClearing = f === 0;
+    /**
+     * WHAT THIS FLOCK IS. One species for the whole ring — see the build write
+     * below for why a flock is not a mixture.
+     *
+     * Drawn from the same roster the perchers deal from, so a flock overhead is
+     * a bird you can also meet in a tree, and biased toward the big ones: the
+     * things that actually cross a rainforest canopy in numbers are parrots,
+     * toucans and oropendolas rather than manakins. `sizeOf` is already the
+     * authority on which is which, so this is two rolls and a comparison rather
+     * than a second list of who flocks.
+     *
+     * THE THRESHOLD WENT UP WITH THE ROSTER, from 0.85 to 1.25, and it had to.
+     * The old table averaged 0.84, so 0.85 excluded about half of it; the new
+     * one averages 1.05, so the same number would have excluded almost nothing
+     * and the flocks would have gone back to being anonymous. 1.25 keeps the
+     * top six — motmot, potoo, quetzal, aracari, tinamou, oropendola, toucan —
+     * which read as something at forty metres up.
+     */
+    let flockVoice = Math.floor(rng() * VOICE_ROSTER.length);
+    for (let tries = 0; tries < 4 && sizeOf(flockVoice) < 1.25; tries++) {
+      flockVoice = Math.floor(rng() * VOICE_ROSTER.length);
+    }
+    const flockPlume = plumageOf(flockVoice);
+    plumageInto(_fCoat, _fMark, flockPlume, false);
     const a = rng() * TAU;
     const r = overClearing ? rng() * 10 : 34 + rng() * 96;
     const cx = Math.cos(a) * r;
@@ -1083,10 +1573,10 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     const ringR = overClearing ? rngRange(rng, 30, 42) : rngRange(rng, 26, 58);
     const flock = { a, r, lift, birds: [] };
     const speed = rngRange(rng, 0.055, 0.115) * (rng() < 0.5 ? -1 : 1);
-    const per = Math.floor(FLOCK_BIRDS / FLOCKS);
+    const per = Math.floor((FLOCK_BIRDS - MACAW_BIRDS) / FLOCKS);
     for (let i = 0; i < per; i++) {
       const k = f * per + i;
-      if (k >= FLOCK_BIRDS) break;
+      if (k >= FLOCK_BIRDS - MACAW_BIRDS) break;
       // A loose crowd, not a formation: each bird takes its own radius, its own
       // phase and its own offset from the centre.
       birdFlight.setXYZW(
@@ -1112,24 +1602,36 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       // A multiplier on the coat, not a colour: some birds are darker than
       // others and a couple catch the light. Around 1, warm one way, cool the
       // other, so a flock is not one repeated silhouette.
-      shade(_tint, rng, 0.55, 1.35);
-      birdTint.setXYZ(k, _tint.r, _tint.g, _tint.b);
+      shade(_tint, rng, 0.78, 1.18);
+      birdTint.setXYZ(k, _fCoat[0] * _tint.r, _fCoat[1] * _tint.g, _fCoat[2] * _tint.b);
       /**
-       * A LOOSE SPREAD OF BUILDS, AND NO SPECIES.
+       * A LOOSE SPREAD OF BUILDS, AND A SPECIES PER FLOCK.
        *
        * The perchers get a real plumage because you meet them at three metres.
        * A flock bird is a four-pixel silhouette ninety metres up, where the only
-       * thing legible about it is the OUTLINE — so it gets a little spread in
-       * span, girth and tail and no mark at all, which costs the same one write
-       * and stops a wheeling ring from being one shape stamped twenty-four
-       * times. A breast patch up there would be a wasted attribute; a
-       * long-tailed bird among short-tailed ones is visible.
+       * thing legible about it is the OUTLINE — so it still gets a little spread
+       * in span, girth and tail and no mark, because a breast patch up there is
+       * a wasted attribute while a long-tailed bird among short-tailed ones is
+       * visible.
+       *
+       * WHAT IT DID NOT GET, AND SHOULD HAVE, IS A COLOUR. Ninety-six of the
+       * hundred and twenty-two birds in this wood are flock birds and every one
+       * of them was the bare base tint — which against a near-black base meant
+       * ninety-six identical dark specks, and is a large part of "I barely
+       * notice them". The species coat costs the same single write that was
+       * already happening.
+       *
+       * BY FLOCK RATHER THAN BY BIRD, because that is what a flock is. Mixed
+       * colours wheeling in one ring would be a fairground; twenty-four wood
+       * toucans over the clearing and twenty-four green aracaris away to
+       * the north is two flocks you can tell apart at distance, which is the
+       * thing worth buying.
        */
       birdBuild.setXYZW(
         k,
-        rngRange(rng, 0.9, 1.16),
-        rngRange(rng, 0.88, 1.12),
-        rngRange(rng, 0.92, 1.14),
+        rngRange(rng, 0.9, 1.16) * flockPlume.build[0],
+        rngRange(rng, 0.88, 1.12) * flockPlume.build[1],
+        rngRange(rng, 0.92, 1.14) * flockPlume.build[2],
         0
       );
       birdMark.setXYZW(k, 1, 1, 1, 0);
@@ -1144,6 +1646,130 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       });
     }
     flocks.push(flock);
+  }
+
+  /**
+   * ==== MACAW PAIRS =========================================================
+   *
+   * The one bird everybody pictures, and the reason it is worth its own block
+   * is that a macaw is not a flock animal in the way everything else up here
+   * is. They fly in PAIRS — bonded for life, and they stay side by side across
+   * miles of forest — high, fast, dead straight, and screaming. Seeing two
+   * scarlet birds cross a gap in the canopy is one of the two or three images
+   * the word "Amazon" reduces to.
+   *
+   * IT REUSES THE FLOCK MACHINERY EXACTLY AND ADDS NOTHING. Same InstancedMesh,
+   * same material, same vertex shader, same orbit branch — a macaw is six more
+   * slots in a buffer that is already uploaded and already drawn. There is no
+   * new code path in the shader at all: everything below is attribute values.
+   *
+   *   STRAIGHT FLIGHT OUT OF A CIRCLE. `aFlight.x` is the orbit radius and
+   *   `aFlight.y` the angular speed, so linear speed is their product. The
+   *   flocks run 26-58 m at 0.055-0.115, i.e. 1.4-6.7 m/s of gentle wheeling.
+   *   A macaw pair gets a much bigger radius AND a higher angular speed —
+   *   about 11 m/s, which is a real macaw's cruise — and a big radius is what
+   *   makes the visible arc nearly a straight line. They cross the sky rather
+   *   than circling in it.
+   *
+   *   `aFlight.w` IS THE BANK, AND IT IS NEARLY ZERO. The comment in
+   *   shading.js says a bird that circles flat is an aeroplane, which is true
+   *   of a wheeling flock and false here: a macaw in transit holds level and
+   *   beats steadily, and banking it would undo the straightness the radius
+   *   just bought.
+   *
+   *   THE PAIR IS THE POINT. Both birds of a pair share one centre, one radius
+   *   and one speed, and differ only by a tiny phase offset — so they hold
+   *   station on each other forever instead of drifting apart the way the
+   *   flock birds deliberately do. That constant few-metre gap is what reads as
+   *   "a pair" rather than "two birds".
+   *
+   * THEY FLY HIGHER THAN ANYTHING ELSE and that is what makes them visible at
+   * all. Per `forest-hides-everything-under-40m`, this canopy hides everything
+   * past forty metres — the only exception is the sky. At 54-76 m of lift these
+   * are always against it.
+   */
+  for (let m = 0; m < MACAW_PAIRS; m++) {
+    /**
+     * Scarlet, and it is painted rather than dealt from the voice roster.
+     *
+     * Every other bird up here takes its colours from `plumageOf` so that the
+     * thing you see agrees with the thing you hear. A macaw is the one case
+     * where that would lose: the roster's plumage is tuned for birds seen at
+     * three metres in shade, and this bird is a silhouette at seventy metres
+     * against a bright sky, where the only thing that survives is raw
+     * saturation. Per `plumage-multipliers-are-linear`, a ratio that looks
+     * right in sRGB renders as washed grey — so these are near-primary values
+     * chosen for what comes out the far end, not for what reads well in a
+     * table.
+     */
+    const scarlet = m % 2 === 0;
+    const cr = scarlet ? 1.55 : 0.32;
+    const cg = scarlet ? 0.24 : 0.62;
+    const cb = scarlet ? 0.16 : 1.5;
+
+    const a = rng() * TAU;
+    // The centre sits near the player, so the ring passes over rather than
+    // orbiting somewhere on the horizon. Same reasoning as `overClearing`.
+    const cx = Math.cos(a) * rngRange(rng, 0, 26);
+    const cz = Math.sin(a) * rngRange(rng, 0, 26);
+    const lift = rngRange(rng, 54, 76);
+    const cy = heightAt(cx, cz) + lift;
+    const ringR = rngRange(rng, 88, 132);
+    // ringR * speed is the cruise. 110 x 0.1 is 11 m/s.
+    const speed = (11 / ringR) * (rng() < 0.5 ? -1 : 1) * rngRange(rng, 0.9, 1.12);
+    const phase = rng() * TAU;
+    /**
+     * REGISTERED AS A FLOCK OF TWO, so the existing recentring moves them.
+     *
+     * This was very nearly the bug that shipped. `flocks` is what the follow
+     * routine below walks, and a pair seeded straight into the buffers without
+     * being pushed onto that list would be nailed to the world coordinates it
+     * was born at — so a player who walked two hundred metres would leave the
+     * macaws behind permanently and never see one again. Everything about the
+     * pair is already in the right shape for it; it just has to be on the list.
+     */
+    const pair = { a, r: Math.hypot(cx, cz), lift, birds: [] };
+    for (let b = 0; b < 2; b++) {
+      const k = FLOCK_BIRDS - MACAW_BIRDS + m * 2 + b;
+      birdFlight.setXYZW(
+        k,
+        // A few metres apart across the ring, so one flies very slightly
+        // outside the other — which is how a real pair sits.
+        ringR + (b === 0 ? -1.6 : 1.6),
+        speed,
+        // The phase offset IS the spacing along the track. 0.02 rad on a 110 m
+        // ring is about 2.2 m of separation, held forever.
+        phase + (b === 0 ? 0 : 0.02) * Math.sign(speed),
+        0.12
+      );
+      birdBeat.setXYZW(
+        k,
+        rng() * TAU,
+        // A deeper, much slower wingbeat than a small bird's. A macaw's beat is
+        // heavy and unhurried and it is half of how you identify one in the air.
+        rngRange(rng, 0.22, 0.3),
+        rngRange(rng, 3.2, 4.1),
+        1
+      );
+      birdHome.setXYZ(k, cx, cy + (b === 0 ? 0 : rngRange(rng, -1.2, 1.2)), cz);
+      birdTint.setXYZ(k, cr, cg, cb);
+      /**
+       * BIG. The build channels are span, body and sweep — a macaw is nearly a
+       * metre of bird with a very long tail, so the span goes up hard and the
+       * sweep with it. At seventy metres this is the difference between a speck
+       * and a shape.
+       */
+      birdBuild.setXYZW(k, rngRange(rng, 1.85, 2.05), rngRange(rng, 1.5, 1.7), 1.7, 0);
+      birdMark.setXYZW(k, 1, 1, 1, 0);
+      birds.setMatrixAt(k, _m.identity());
+      pair.birds.push({
+        k,
+        dx: birdHome.getX(k) - cx,
+        dy: birdHome.getY(k) - cy,
+        dz: birdHome.getZ(k) - cz,
+      });
+    }
+    flocks.push(pair);
   }
 
   /**
@@ -1254,6 +1880,62 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     return false;
   }
 
+  /**
+   * CAN THIS BIRD ACTUALLY BE SEEN FROM THERE, and it is the missing half of
+   * every distance test in this file.
+   *
+   * The reported symptom is the one thing twenty-six perching birds on real
+   * branches at real bough height were still not fixing: "I always hear birds
+   * around me but when I turn to look I can never spot them." Every previous
+   * pass answered it with RANGE — the roster came in from a 26-95 m band to
+   * 12-58, songs are metered by proximity, the birds got bigger and brighter —
+   * and range is genuinely most of it. It is not all of it, because in a wood
+   * the thing between you and a bird twenty metres away is usually a tree.
+   *
+   * A trunk is a cylinder and the collider grid already knows where every one
+   * of them is, so a sight line is four `trunks.near` queries: walk the segment
+   * from the listener to the bird and ask whether anything with a radius is
+   * sitting on it. That is not a real occlusion test — it ignores canopy, the
+   * understorey and the bird's height — and it does not need to be. It answers
+   * the only question anybody is asking, which is IS THERE A TREE IN THE WAY,
+   * and that single fact is what separates "I heard something and found it"
+   * from "I heard something and there was nothing there".
+   *
+   * FOUR SAMPLES, NOT A MARCH. The grid query already has a radius on it, so
+   * each sample sweeps a disc rather than testing a point, and a trunk wide
+   * enough to hide a bird is wide enough to be caught by a sample 25% of the
+   * way along a segment. Marching in metres would cost twenty queries to be
+   * right about a case — a thin sapling exactly between you and a toucan —
+   * where being wrong is one deferred song.
+   *
+   * It is called when a sing timer expires and at no other time: about two
+   * thirds of a call per second across the whole roster, against a grid lookup
+   * that the perch picker already does several of per re-seat.
+   */
+  function clearLine(from, to) {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    for (let i = 1; i <= 4; i++) {
+      const k = i / 5;
+      // The near end matters more than the far one — a trunk two metres in
+      // front of your face hides everything behind it — but a uniform walk is
+      // one multiply and the asymmetry is already in the geometry: samples
+      // bunch up in angle near the bird, which is where the bird is.
+      const t = trunks.near(from.x + dx * k, from.z + dz * k, 1.1);
+      if (t) return false;
+    }
+    return true;
+  }
+
+  /**
+   * How far a percher will bother to check whether you can see it.
+   *
+   * Forty-four metres, which is a little past the roughly forty this forest
+   * lets you see through at eye level. Beyond it the sight line is not the
+   * limiting factor and there is nothing to work out — the answer is no.
+   */
+  const SIGHT_RANGE = 44;
+
   const perchers = [];
   /**
    * Whether the roster has been placed in trees that actually exist yet. See the
@@ -1281,14 +1963,19 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * thing and quietly costs you three species a session: twenty-six uniform
    * draws from sixteen leaves `16 * (15/16)^26` — almost exactly three — with no
    * percher at all, and a species with no percher can only ever reach the player
-   * as a distant phrase from beyond the trees. Sixteen contours were written to
-   * be told apart, and the ones that go missing are missing for the whole
-   * session, silently, differently each time.
+   * as a distant phrase from beyond the trees. Every contour in that table was
+   * written to be told apart, and the ones that go missing are missing for the
+   * whole session, silently, differently each time.
    *
-   * So the first sixteen cards are the roster and the remaining ten are drawn at
+   * So the first cards ARE the roster and any remaining seats are drawn at
    * random, then the deck is shuffled so the extras are not all at the end. It
    * guarantees one of everything, keeps the doubling-up that makes a wood feel
    * unplanned, and costs one array of twenty-six integers at load.
+   *
+   * Both loops are written against the roster and the seat count rather than
+   * against either number, so a table that grows past PERCHERS degrades the
+   * only way it can — some species miss out this session — instead of
+   * overrunning. It has grown twice already.
    *
    * Fisher-Yates off the fauna rng, which is its own stream (`:fauna`) — so the
    * reordering cannot move a tree, and two players in a seeded world still deal
@@ -1342,10 +2029,20 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       /** Wing spread, 0 folded to 1 open. */
       open: 0.04,
       /**
+       * SECONDS OF SONG LEFT TO PERFORM, and it is the whole of the visual
+       * half of "I can hear them and I can never spot one".
+       *
+       * Set from what `wildlife.song` returns — see the sing block below — so
+       * it is non-zero only while a phrase this bird asked for is actually
+       * sounding. A bird that sang and stood still through it was the last
+       * thing in this file still behaving like a loudspeaker in a tree.
+       */
+      show: 0,
+      /**
        * The species' size, then the individual's own few per cent on top.
        *
        * The spread used to be 0.72–1.05 with nothing behind it; it now runs
-       * from a 0.56 goldcrest to a 1.53 wood pigeon and the number means
+       * from a 0.63 manakin to a 1.58 toucan and the number means
        * something — which is the difference between size variety and noise.
        */
       scale: size * rngRange(rng, 0.93, 1.07),
@@ -1353,8 +2050,8 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       /**
        * Wingbeat rate, against the species' size. A small bird flaps faster:
        * roughly with the inverse cube root of mass in life, and the exponent
-       * here is tuned by eye rather than by aerodynamics. A wood pigeon
-       * hammering at a goldcrest's rate is the single most obvious thing that
+       * here is tuned by eye rather than by aerodynamics. A toucan
+       * hammering at a manakin's rate is the single most obvious thing that
        * can be wrong with a flush.
        */
       wing: Math.pow(size, -0.55),
@@ -1373,7 +2070,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * only of the song. `wildlife.js` has a `rare` weight per voice that
        * would be the honest thing to bias by, and it is not exported; twenty-six
        * uniform draws from twelve is roughly two of each, which is close enough
-       * that a wood pigeon is not a surprise and no species is missing.
+       * that a toucan is not a surprise and no species is missing.
        */
       voice,
       /** One bird in the wood is the one that starts paying attention. */
@@ -1390,8 +2087,8 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      *
      * `shade` around 1 rather than the 0.7–2.1 that used to be here: the wide
      * spread was doing the entire job of making twenty-six identical birds not
-     * look identical, and now that each one is a chaffinch or a nuthatch its
-     * job is only the small variation between two chaffinches. Left wide it
+     * look identical, and now that each one is a trogon or an aracari its
+     * job is only the small variation between two trogons. Left wide it
      * would have made half of them the wrong colour for their own species,
      * which is worse than the smudges were.
      */
@@ -1417,23 +2114,50 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * function of the orbit angle — turns that circuit into the up-and-down
    * flutter that identifies one at any distance. Big flap, slow beat, no CPU.
    */
-  const FLUTTER_SPAN = 0.13;
-  const flutterGeo = flyerGeometry({ span: FLUTTER_SPAN, body: 0.055, sweep: -0.02, girth: 1.5 });
+  /**
+   * A HAND-SIZED INSECT, which is the fact the old 0.13 was missing.
+   *
+   * Morpho menelaus runs 12 to 15 cm across and the whole reason anybody
+   * remembers one is that it is far larger than a butterfly has any business
+   * being. The base span is now the size of a middling Neotropical butterfly
+   * and the species multiplier does the rest: a sulphur at 0.86 is 9.9 cm, a
+   * morpho at 1.34 is 15.4 cm, a Caligo at 1.5 is 17 cm. Those are the real
+   * numbers for those animals.
+   */
+  const FLUTTER_SPAN = 0.115;
+  const flutterGeo = flutterGeometry({ span: FLUTTER_SPAN, body: 0.052, girth: 1 });
   const flutterMat = flyerMaterial({
     name: 'butterfly',
     colour: 0xffffff,
-    wander: [5, 0.7, 5],
+    /**
+     * The fourth number is the vertical bob, and it is 0.42 rather than the 1.5
+     * the birds get. That 1.5 was hardcoded in the orbit branch and shared, so
+     * a 13 cm insect on a two-metre circuit was bouncing three metres peak to
+     * peak — through the leaf litter at the bottom of every lap and into the
+     * mid-storey at the top. 0.42 against a home 1.1–2.7 m up keeps the whole
+     * flight in the 0.7–3.8 m band where you actually meet one.
+     */
+    wander: [3, 0.6, 3, 0.42],
+    /** See the docblock on WINGS: the morpho is why this material is two-sided. */
+    twoSided: true,
+    /**
+     * 1/half-span. The wingbeat rolls the shading normal by atan(travel x this),
+     * so this is what turns 7 cm of wingtip travel into the ~50 degrees of tilt
+     * the wing is really at. Left at its 1.15 default the normal rolled four
+     * degrees and the morpho had no flash at all. See the wingbeat in shading.js.
+     */
+    hinge: 1 / (FLUTTER_SPAN * 0.5),
     /**
      * OUT ON THE WING, not on the breast — which is the whole reason the mark's
      * anchor is a per-material uniform and its reach is per-instance.
      *
-     * The wingtip sits at span·0.5 = 0.065 and the shoulder at 0.005, so an
-     * anchor at 0.055 with a reach of 0.03 is a narrow tip flash and one of
+     * The apex sits at span·0.5 = 0.0575 and the shoulder at 0.004, so an
+     * anchor at 0.05 with a reach of 0.03 is a narrow tip flash and one of
      * 0.055 is a band down the outer half. |x| in the shader means one distance
      * test marks both wings. The 1.0 weight is the honest one here: for a
      * butterfly, sideways distance IS the wing.
      */
-    mark: [0.055, 0, 0, 1.0],
+    mark: [0.05, 0, 0, 1.0],
   });
   const butterflies = new THREE.InstancedMesh(flutterGeo, flutterMat, BUTTERFLIES);
   butterflies.name = 'butterflies';
@@ -1452,60 +2176,168 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    */
   const flutterBuild = new THREE.InstancedBufferAttribute(new Float32Array(BUTTERFLIES * 4), 4);
   const flutterMark = new THREE.InstancedBufferAttribute(new Float32Array(BUTTERFLIES * 4), 4);
+  /** The underside and the mirror. Butterflies only — see WINGS and flyerMaterial. */
+  const flutterUnder = new THREE.InstancedBufferAttribute(new Float32Array(BUTTERFLIES * 4), 4);
   flutterGeo.setAttribute('aFlight', flutterFlight);
   flutterGeo.setAttribute('aBeat', flutterBeat);
   flutterGeo.setAttribute('aHome', flutterHome);
   flutterGeo.setAttribute('aTint', flutterTint);
   flutterGeo.setAttribute('aBuild', flutterBuild);
   flutterGeo.setAttribute('aMark', flutterMark);
-  for (let i = 0; i < BUTTERFLIES; i++) {
+  flutterGeo.setAttribute('aUnder', flutterUnder);
+
+  /**
+   * A STREAM OF ITS OWN, and this is the one thing in the file that is about
+   * the next person rather than about butterflies.
+   *
+   * Everything here used to draw from the shared `rng`, which means the exact
+   * number of calls the butterfly loop makes decides what colour every deer in
+   * the wood is — the beasts are seeded after it. `scripts/fauna-wired.mjs` has
+   * a documented false failure built entirely out of that coupling. Butterflies
+   * are now the layer most likely to be retuned by somebody who has never
+   * opened the herd code, so they get their own stream and can be changed
+   * freely for ever after. (Splitting it moves the herd exactly ONCE — this
+   * commit — and never again.)
+   *
+   * It is also what makes the recycler below free of consequences: it draws at
+   * run time, from here, so a butterfly being reseated cannot perturb anything
+   * else's future.
+   */
+  const flutterRng = makeRng(`${seed}:flutter`);
+
+  /**
+   * Seat one butterfly: where it lives, what species it is, how it flies.
+   *
+   * ONE FUNCTION FOR BOTH LOAD AND RECYCLE, which is the point. It is called
+   * twenty times at build with the roam anchor still at the origin — reproducing
+   * exactly the placement a fresh world has always had — and then again, one
+   * instance at a time, whenever the player walks far enough that a butterfly is
+   * no longer anywhere near them.
+   *
+   * The species is re-rolled on every seating rather than being a fact about
+   * the slot. It costs four attribute writes on a twenty-instance mesh, i.e.
+   * nothing, and it is what stops a two-kilometre walk being accompanied by the
+   * same four morphos the world happened to deal at load.
+   *
+   * The radius is drawn from sqrt so the disc fills EVENLY. Drawing r linearly
+   * is the standard mistake and it piles everything on the player, which is the
+   * exact failure the ring-seating note warns about: a uniform r puts half the
+   * butterflies inside 17 m of a 30 m disc that only holds a quarter of the area.
+   */
+  function seatFlutter(i) {
+    /**
+     * FOUR CANDIDATES, AND THE MOST OPEN ONE WINS.
+     *
+     * A morpho crossing a shaft of light is the image; the same morpho in
+     * closed shade is a dark speck, and no amount of colour work fixes that
+     * because the wing is lit by what is above it. So the seating asks the
+     * trunk index how far the nearest tree is and keeps the airiest of four
+     * throws — a cheap, honest proxy for a canopy gap, since a gap in this
+     * forest IS an absence of trunks and the light shafts are drawn through
+     * exactly those holes.
+     *
+     * FOUR AND NOT TWENTY. This is a preference, not a filter, and the
+     * difference matters: a hard "must be in a gap" test would fail in closed
+     * wood and either loop until it gave up or pile every butterfly into the one
+     * clearing, which is the trap the ring-seating note describes. Best-of-four
+     * shifts the distribution toward the light and still puts one over the leaf
+     * litter now and then, which is also true of real ones.
+     *
+     * `12` is the search radius, not a distance to beat: `near` returns null
+     * when there is no trunk within it, and null is the best possible answer —
+     * that is open sky.
+     */
     let x = 0;
     let z = 0;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const a = rng() * TAU;
-      const r = 6 + Math.pow(rng(), 0.6) * 74;
-      x = Math.cos(a) * r;
-      z = Math.sin(a) * r;
-      if (standable(x, z)) break;
+    let best = -1;
+    for (let t = 0; t < 4; t++) {
+      const a = flutterRng() * TAU;
+      const r = Math.sqrt(
+        FLUTTER_NEAR * FLUTTER_NEAR +
+          flutterRng() * (FLUTTER_FAR * FLUTTER_FAR - FLUTTER_NEAR * FLUTTER_NEAR)
+      );
+      const cx = roamX + Math.cos(a) * r;
+      const cz = roamZ + Math.sin(a) * r;
+      const near = trunks.near(cx, cz, 12);
+      const open = near === null ? 999 : Math.hypot(near.x - cx, near.z - cz);
+      if (open <= best) continue;
+      best = open;
+      x = cx;
+      z = cz;
     }
-    flutterFlight.setXYZW(i, rngRange(rng, 1.1, 3.4), rngRange(rng, 0.5, 1.1) * (rng() < 0.5 ? -1 : 1), rng() * TAU, 0.1);
+
     /**
-     * 0.9 of the wing's own half-span, and ~2 Hz: a butterfly claps its wings
-     * almost shut.
+     * THE MORPHOS ARE DEALT, THE REST ARE ROLLED.
      *
-     * `aBeat.y` is a METRE offset in the shared flyer shader (see shading.js —
-     * it displaces the wingtip directly, the same term a bird's 0.13-0.2 uses
-     * against its 0.31 m half-span). A bare `0.9` here was that fraction
-     * mistaken for the metre value itself: on a 0.13 m butterfly the wingtip
-     * was swinging through most of a metre, fourteen times its own wingspan,
-     * every beat. Scaling it against FLUTTER_SPAN keeps the "almost shut"
-     * amplitude but in the butterfly's own units.
+     * A weighted roll over eight instances has enormous variance, and the first
+     * build of this proved it: at a 37% weight the seeded world dealt ONE morpho
+     * and three julias, so the one butterfly the entire pass exists for was
+     * almost absent from the world that every screenshot and every benchmark in
+     * this repo is pinned to. Weighting harder does not fix that, it just moves
+     * where the bad rolls are.
+     *
+     * So the first MORPHO_SLOTS slots ARE morphos, always, everywhere, and the
+     * rest draw from the pigment species. It is the same argument as the
+     * perchers' roster being dealt so that all sixteen voices are present: when
+     * a population is small enough to count, a distribution is a wish and a deal
+     * is a fact. The slot keeps its role across recycling, so the mix is stable
+     * as you walk while the individuals are not.
      */
-    // A species, weighted. See WINGS.
-    let pick = rng() * WINGS_TOTAL;
     let kind = WINGS[0];
-    for (const k of WINGS) {
-      pick -= k.w;
-      if (pick <= 0) {
-        kind = k;
-        break;
+    if (i >= MORPHO_SLOTS) {
+      let pick = flutterRng() * PIGMENT_TOTAL;
+      kind = PIGMENT[0];
+      for (const k of PIGMENT) {
+        pick -= k.w;
+        if (pick <= 0) {
+          kind = k;
+          break;
+        }
       }
     }
+
+    flutterFlight.setXYZW(
+      i,
+      rngRange(flutterRng, 0.9, 2.8),
+      rngRange(flutterRng, 0.45, 0.95) * (flutterRng() < 0.5 ? -1 : 1),
+      flutterRng() * TAU,
+      0.1
+    );
+    /**
+     * `aBeat.y` is a METRE offset in the shared flyer shader — it displaces the
+     * wingtip directly, the same term a bird's 0.13–0.2 uses against its 0.31 m
+     * half-span. A bare fraction here was that mistaken for the metre value
+     * itself once already, and it swung the wingtip through fourteen times the
+     * insect's own wingspan every beat. `kind.beat[0]` is the fraction of the
+     * species' own half-span, so it stays "claps its wings nearly shut" in the
+     * butterfly's units whatever size the butterfly is.
+     *
+     * The rate is the species too, and it separates them at a glance without
+     * anybody having to see a colour: a heliconius is famously slow and floppy
+     * (~6 Hz here), a sulphur is a fast erratic flicker (~11.5), and the
+     * morpho's slow deep beat is exactly what gives the blink time to register.
+     * A single 10–15 for all of them made every butterfly in the wood a moth.
+     */
     flutterBeat.setXYZW(
       i,
-      rng() * TAU,
-      0.9 * FLUTTER_SPAN * 0.5,
-      rngRange(rng, 10, 15),
-      // Size is now the species and then a few per cent of the individual,
-      // which puts a common blue at two-thirds the wingspan of a peacock.
-      kind.size * rngRange(rng, 0.86, 1.16)
+      flutterRng() * TAU,
+      kind.beat[0] * FLUTTER_SPAN * 0.5 * kind.size,
+      kind.beat[1] * rngRange(flutterRng, 0.9, 1.12),
+      kind.size * rngRange(flutterRng, 0.88, 1.12)
     );
-    flutterHome.setXYZ(i, x, heightAt(x, z) + rngRange(rng, 0.6, 2.4), z);
-    // Butterflies are the one thing here allowed a real colour — they are the
-    // only saturated object in a wood made of greens and browns, which is
-    // exactly why finding one is worth anything. The lift is what keeps them
-    // reading as lit from behind rather than as painted cards.
-    const lift = rngRange(rng, 0.88, 1.32);
+    flutterHome.setXYZ(i, x, heightAt(x, z) + rngRange(flutterRng, 1.1, 2.7), z);
+    /**
+     * A NARROW LIFT, 0.92–1.1, where it used to be 0.88–1.32.
+     *
+     * The wide spread was doing the whole job of making twenty identical
+     * marigolds not look identical, and it is the wrong tool now that each one
+     * is a named species: at 1.32 a morpho's blue clips toward cyan and at 0.88
+     * a postman's scarlet bar goes maroon, which is two different butterflies
+     * rather than two individuals of one. Same argument, same fix, as the
+     * birds' `shade` range. It stays non-zero because a butterfly caught from
+     * below against the sky genuinely is brighter than one over the litter.
+     */
+    const lift = rngRange(flutterRng, 0.92, 1.1);
     flutterTint.setXYZ(i, kind.coat[0] * lift, kind.coat[1] * lift, kind.coat[2] * lift);
     flutterBuild.setXYZW(i, kind.build[0], kind.build[1], kind.build[2], 1);
     flutterMark.setXYZW(
@@ -1513,12 +2345,64 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       kind.mark[0] * lift,
       kind.mark[1] * lift,
       kind.mark[2] * lift,
-      kind.reach * rngRange(rng, 0.85, 1.15)
+      kind.reach * rngRange(flutterRng, 0.88, 1.12)
     );
+    flutterUnder.setXYZW(i, kind.under[0], kind.under[1], kind.under[2], kind.flash);
+  }
+
+  for (let i = 0; i < BUTTERFLIES; i++) {
+    seatFlutter(i);
     butterflies.setMatrixAt(i, _m.identity());
   }
+  const flutterAttrs = [
+    flutterFlight,
+    flutterBeat,
+    flutterHome,
+    flutterTint,
+    flutterBuild,
+    flutterMark,
+    flutterUnder,
+  ];
+  for (const a of flutterAttrs) a.needsUpdate = true;
   butterflies.instanceMatrix.needsUpdate = true;
   group.add(butterflies);
+
+  /**
+   * Butterflies follow you, one at a time.
+   *
+   * THE OTHER LAYERS DO THIS TWO OTHER WAYS AND NEITHER FITS. The flocks jump
+   * their whole centre at once every 190 m, which is invisible when a flock is
+   * eighty metres up and would be a row of insects teleporting in your face at
+   * this range. The beasts recycle individually on a frustum-and-peer-cone test,
+   * which is the right shape but far more machinery than a 13 cm object that
+   * has no state, makes no sound and cannot be interacted with needs.
+   *
+   * So: twenty distance tests, and any butterfly further away than FLUTTER_DROP
+   * is reseated somewhere in the near annulus. The gap between DROP and FAR is
+   * the hysteresis and the invisibility both — see the constants.
+   *
+   * DERIVED PER CLIENT, ON PURPOSE, and it does not violate host authority.
+   * The rule in this file is that anything with STATE is simulated by the host
+   * and broadcast; the things every client derives for itself are the ones whose
+   * answer is a fact about the local observer — draw culling, audio loudness,
+   * the flocks' centre. A butterfly is entirely in that second class: its whole
+   * flight is a closed form of `uTime`, its position is a pure function of a home
+   * and a clock every client shares, and there is nothing about it another player
+   * could ever disagree with you about. Making it travel would be eight numbers
+   * a tick to tell you where an insect you cannot touch is.
+   */
+  function followFlutters(x, z) {
+    let moved = false;
+    for (let i = 0; i < BUTTERFLIES; i++) {
+      const dx = flutterHome.getX(i) - x;
+      const dz = flutterHome.getZ(i) - z;
+      if (dx * dx + dz * dz < FLUTTER_DROP * FLUTTER_DROP) continue;
+      seatFlutter(i);
+      moved = true;
+    }
+    if (!moved) return;
+    for (const a of flutterAttrs) a.needsUpdate = true;
+  }
 
   // ---- beasts -------------------------------------------------------------
   const herds = [];
@@ -1904,9 +2788,56 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   const shaftGroup = scene.getObjectByName('shafts');
   const columns = [];
   if (shaftGroup) {
+    /**
+     * THE SHAFTS ARE ONE INSTANCED MESH NOW, AND READING `children` FOR THEIR
+     * PLACES SILENTLY PUTS EVERY MIDGE COLUMN ON THE WORLD ORIGIN.
+     *
+     * This loop used to walk 25 separate Meshes and take each one's
+     * `position`. The sun shafts were instanced into a single InstancedMesh —
+     * one draw call instead of 25, which is what paid for the lattice getting
+     * denser — and the per-shaft transform moved out of `mesh.position` and
+     * into `instanceMatrix`. So `children` became a list of ONE, whose
+     * `position` is (0, 0, 0) because that is where an InstancedMesh sits when
+     * its instances carry the transforms.
+     *
+     * The failure was not a crash and not an empty swarm. It was 880 midges
+     * dealt round a column list that had gone from 25 entries to 1-plus-11
+     * padding, so every column carried roughly twice the insects it was
+     * designed for AND one of them sat on the origin — eight metres from where
+     * the player spawns. Additive sprites overlapping at that density sum to
+     * white, so it read as two hard blobs of confetti hanging in the clearing,
+     * and it looked like a bug in the particle system rather than a bug in an
+     * address.
+     *
+     * Read the instance matrices instead. Taking a PREFIX is safe and is the
+     * reason the count below is a slice rather than a filter: the shaft cells
+     * are sorted nearest-first at build time, so the first N are the closest N.
+     * Twenty-four keeps the per-column density the comment below is written
+     * about, and keeps `columns.length` above the 12-column floor, which means
+     * the padding loop still draws no random numbers and the fauna RNG stream
+     * is bit-for-bit what it was.
+     */
+    const MIDGE_COLUMNS = 24;
+    const _m = new THREE.Matrix4();
+    const _p = new THREE.Vector3();
     for (const mesh of shaftGroup.children) {
       const params = mesh.geometry?.parameters;
       if (!params) continue;
+      if (mesh.isInstancedMesh) {
+        const n = Math.min(mesh.count, MIDGE_COLUMNS);
+        for (let i = 0; i < n; i++) {
+          mesh.getMatrixAt(i, _m);
+          _p.setFromMatrixPosition(_m);
+          columns.push({
+            x: _p.x,
+            y: _p.y + params.height * 0.28,
+            z: _p.z,
+            r: Math.min(1.0, Math.max(0.32, (params.radiusBottom ?? 2) * 0.2)),
+            h: 0.85,
+          });
+        }
+        continue;
+      }
       columns.push({
         x: mesh.position.x,
         y: mesh.position.y + params.height * 0.28,
@@ -1990,6 +2921,79 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   swarm.frustumCulled = false;
   swarm.renderOrder = 5;
   group.add(swarm);
+
+  /**
+   * THE SWARM FOLLOWS YOU NOW, AND UNTIL THIS IT WAS THE ONLY LAYER THAT DID NOT.
+   *
+   * Everything above is seeded once, in a disc of radius 6–98 m around the world
+   * ORIGIN, and was then never written again. In a world that streams outward
+   * for ever that is not a seeding strategy, it is a bug with a performance
+   * symptom: walk a hundred and twenty metres from spawn and there are no midges
+   * and no fireflies anywhere, for the rest of the session — while the draw call,
+   * the 1340 vertex-shader invocations and the transparent-queue entry are all
+   * still submitted every frame, because `frustumCulled` is false. Dusk in the
+   * deep wood had nothing in the air and nobody had noticed, because the station
+   * the suite measures and the place you spawn are both inside the disc.
+   *
+   * THE FLOCK IDIOM, NOT THE BUTTERFLY ONE. `followFlutters` reseats individuals
+   * on a 17 m radius because a butterfly is close enough that a jump would
+   * happen in your face. This is the other case, and `followFlocks`'s comment
+   * describes it exactly: move the whole cloud at once, from far enough away
+   * that no part of it is on screen. The fade in the swarm shader is 30 m for a
+   * midge and 66 m for a firefly, so a step taken at 150 m is invisible by
+   * construction rather than by taste.
+   *
+   * SLICED, because re-grounding 1340 points is 1340 `heightAt` calls and this
+   * file already prices those at ~0.29 ms per 289. Nothing is visible while the
+   * move is in progress — that is the premise of taking it at 150 m — so
+   * spending 28 frames on it costs nothing and a one-frame spike would be the
+   * only part of this a player could detect.
+   *
+   * `swarmLift` is what makes a translated cloud keep its shape: each point
+   * remembers how far above the terrain it was seeded, so re-grounding is one
+   * `heightAt` and an add, and a midge column stays a column.
+   */
+  const swarmLift = new Float32Array(SWARM);
+  for (let i = 0; i < SWARM; i++) {
+    swarmLift[i] = swarmPos[i * 3 + 1] - heightAt(swarmPos[i * 3], swarmPos[i * 3 + 2]);
+  }
+  /** How far you may walk from the cloud's centre before it is moved to you. */
+  const SWARM_STEP = 150;
+  /** Points re-grounded per frame while a move is in progress. */
+  const SWARM_SLICE = 48;
+  const swarmAnchor = { x: 0, z: 0 };
+  let swarmShiftX = 0;
+  let swarmShiftZ = 0;
+  let swarmCursor = SWARM;
+
+  function followSwarm(x, z) {
+    if (swarmCursor >= SWARM) {
+      const dx = x - swarmAnchor.x;
+      const dz = z - swarmAnchor.z;
+      if (dx * dx + dz * dz < SWARM_STEP * SWARM_STEP) return;
+      // Latch the whole translation up front, so a player who keeps walking
+      // during the sweep does not leave half the cloud behind at an anchor that
+      // has since moved again.
+      swarmShiftX = dx;
+      swarmShiftZ = dz;
+      swarmAnchor.x = x;
+      swarmAnchor.z = z;
+      swarmCursor = 0;
+    }
+    const end = Math.min(SWARM, swarmCursor + SWARM_SLICE);
+    for (let i = swarmCursor; i < end; i++) {
+      const px = swarmPos[i * 3] + swarmShiftX;
+      const pz = swarmPos[i * 3 + 2] + swarmShiftZ;
+      swarmPos[i * 3] = px;
+      swarmPos[i * 3 + 2] = pz;
+      swarmPos[i * 3 + 1] = heightAt(px, pz) + swarmLift[i];
+    }
+    const attr = swarmGeo.getAttribute('position');
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(swarmCursor * 3, (end - swarmCursor) * 3);
+    attr.needsUpdate = true;
+    swarmCursor = end;
+  }
 
   // -------------------------------------------------------------------------
   // the loop
@@ -2200,7 +3204,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * by now, and a bird that vanishes off the leaf litter while you are
        * looking at it is the teleport this file spends most of its recycler
        * avoiding. A bird being watched simply keeps its ground perch, which is a
-       * perfectly good thing for a blackbird to be doing.
+       * perfectly good thing for a tinamou to be doing.
        */
       settleFrames++;
       let ring = 0;
@@ -2288,11 +3292,15 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
           } else {
             p.state = 'flee';
             p.timer = 0;
+            // Whatever it was in the middle of saying, it has stopped. The
+            // phrase itself is already scheduled and will finish in the air,
+            // which is exactly what a flushed bird sounds like.
+            p.show = 0;
             // Away from you, upward, and biased along whatever direction it was
             // already facing — a bird does not reverse out of a bush.
             const away = Math.atan2(dx, dz) + rngRange(rng, -0.5, 0.5);
             // A heavy bird gets away faster once it is going and climbs less
-            // steeply doing it; a goldcrest flicks off the branch and is gone
+            // steeply doing it; a manakin flicks off the branch and is gone
             // vertically. Both are the species' size, once, at the launch.
             const v = rngRange(rng, 6.5, 9) * (0.82 + 0.28 * p.scale);
             p.vel.set(
@@ -2355,6 +3363,11 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
               p.yaw = heading;
               p.state = 'land';
               p.timer = 0;
+              // A bird in the air is not displaying, and the compose block's
+              // pump reads `show` in every state. A long phrase can still be
+              // sounding when the early hop this song bought fires — see the
+              // hop bid in the sing block.
+              p.show = 0;
               /**
                * `wingbeats` and NOT `flush`. A flush carries a sub-200 Hz whump,
                * an alarm note and `_startle`, which stops the entire chorus for
@@ -2378,9 +3391,123 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
 
         p.sing -= dt * (p.watcher ? 1.6 : 1);
         if (p.sing <= 0) {
+          /**
+           * THE BIRD YOU CAN SEE GETS TO SING FIRST, and this is the third and
+           * last answer to "I can hear birds and I can never spot one".
+           *
+           * The first two were range and appearance — the roster came inside
+           * the forty metres this forest lets you see through, and it stopped
+           * being twenty small brown birds. What neither of them touched is
+           * that a bird twenty metres away with a trunk in front of it is, for
+           * every purpose a player has, not there: you hear it clearly, you
+           * turn, and you are looking at bark. Do that four times in a minute
+           * and the honest conclusion is that the birds are fake.
+           *
+           * So a bird whose sight line is blocked, or which is beyond seeing
+           * range anyway, DEFERS about half the time — it does not sing now, it
+           * waits a few seconds and asks again. Nothing is silenced and nothing
+           * is teleported; what changes is which of twenty-six candidates
+           * spends the token, and the effect compounds with the leaky bucket in
+           * `wildlife.js` rather than fighting it. The bucket decides how much
+           * song there is; this decides who.
+           *
+           * IT IS A MULTIPLIER ON THE INTERVAL AND NOT A COIN FLIP, AND THE
+           * FIRST VERSION WAS THE COIN FLIP. That version deferred an
+           * unfindable bird 45% of the time and had it try again in four to
+           * twelve seconds, which sounds like a strong bias and is arithmetically
+           * almost nothing: expected extra wait is 0.82 firings × 8 s ≈ 6 s on a
+           * forty-second timer, a 14% rate reduction. Measured over four
+           * seventy-five-second runs it moved the share of near bird sounds
+           * coming from a bird in sight to 68, 82, 69 and 68 per cent against a
+           * control of 68 and 69 — which is to say it did nothing that thirty
+           * events could distinguish from noise.
+           *
+           * A multiplier does not need a sample to be believed. 0.55 against
+           * 1.45 is a bird you can see singing two and two thirds times as often
+           * as one you cannot, every time.
+           *
+           * THE TWO NUMBERS ARE NORMALISED ON RATE AND NOT ON INTERVAL, AND THE
+           * FIRST PAIR WAS NORMALISED ON THE WRONG ONE. They were 0.45 and 1.2,
+           * chosen so that the MEAN INTERVAL across a roster about 28% findable
+           * came out at 0.99 — which looks neutral and is not, because a rate is
+           * `E[1/T]` and an interval is `E[T]`, and Jensen's inequality says the
+           * first is strictly larger. The actual demand went up by
+           * `0.28/0.45 + 0.72/1.2 = 1.22`, and the wood duly measured 45 phrases
+           * a minute against 36 before — a fifth more audio work than the change
+           * was supposed to cost, every minute, for ever.
+           *
+           * 0.55 and 1.45 give `0.28/0.55 + 0.72/1.45 = 1.006`. Same ratio
+           * between the two kinds of bird, same distribution, and the wood asks
+           * for what it asked for before. It matters because the leaky bucket in
+           * `wildlife.js` is no longer the binding constraint — measured, the
+           * wood emits about 36 of the 39 phrases a minute it asks for — so
+           * demand added here is not throttled away somewhere else, it is real
+           * oscillators and a real HRTF panner per phrase.
+           *
+           * AND THE BIAS IS NOT TOTAL. A forest where every audible bird is in
+           * your line of sight is a stage set, and the distant chorus and the
+           * answering bird in `wildlife.js` are both built on the opposite
+           * principle: a voice from somewhere you cannot see is most of what
+           * makes the place feel bigger than you. This moves the balance; it
+           * does not pick a side.
+           */
+          const findable = dist < SIGHT_RANGE && clearLine(camera.position, p.pos);
           // Only sing where you might hear it. A song scheduled at 140 m is
           // audio nodes spent on silence.
-          if (dist < 62) wildlife?.song(p.pos, p.voice, { answer: true });
+          if (dist < 62) {
+            const sung = wildlife?.song(p.pos, p.voice, { answer: true });
+            /**
+             * IT PERFORMS FOR EXACTLY AS LONG AS IT IS SOUNDING.
+             *
+             * `song` returns the phrase or null — null when the leaky bucket
+             * refused it — and the length is rolled per rendition inside
+             * `_phrase`, so both facts have to come back from the audio rather
+             * than be guessed here. A bird miming to a refused token is the
+             * one thing worse than a bird standing still.
+             *
+             * Capped at seven seconds because a musician wren streams for up to
+             * twenty and no animal displays continuously for twenty seconds;
+             * it sings on and stops throwing itself about.
+             */
+            if (sung) {
+              p.show = Math.min(sung.dur, 7);
+              /**
+               * AND THEN IT MOVES, WHICH IS WHAT ACTUALLY MAKES YOU FIND ONE.
+               *
+               * Colour is worth less in here than it looks on paper: at
+               * twenty-five metres, in canopy shadow, a toucan is sixty pixels.
+               * MOTION at twenty-five metres is unmissable, because peripheral
+               * vision is built for nothing else — and this file already has
+               * the perfect motion in it, the voluntary hop, doing nothing but
+               * firing on a 22-72 s timer that has never once known where you
+               * were looking.
+               *
+               * So a bird that has just sung NEAR you and is OUT OF YOUR VIEW
+               * brings its next hop forward to a second or four. The sequence
+               * that produces is the entire point of this pass: a song off to
+               * your left, you turn toward it, and a bird crosses a gap in
+               * front of you. Nothing was scripted and nothing teleported — it
+               * flies the whole way, on its own schedule, a little early.
+               *
+               * `unseen` and not `!unseen`, which is the opposite of every
+               * other use of it in this file. Everywhere else the check hides a
+               * recycle; here it is asking WHETHER YOU STILL HAVE TO TURN,
+               * because a bird already in frame does not need to announce
+               * itself and a bird that hops the instant you look at it is a bird
+               * reacting to you.
+               *
+               * Half the time, so it stays a coincidence you noticed rather
+               * than a rule you learn — and only inside thirty metres, which is
+               * the same 25-30 m gate the landing song has and for the same
+               * reason: every early hop costs `wingbeats` and a bid at a
+               * fixed-rate bucket, and bids that lose are the reason somebody
+               * else's bid lost.
+               */
+              if (dist < 30 && unseen(p.pos, 2) && rng() < 0.5) {
+                p.hop = Math.min(p.hop, rngRange(rng, 1.6, 4.5));
+              }
+            }
+          }
           /**
            * 16–70 s, up from 5–26, AND THE POINT IS NOT THAT IT IS QUIETER.
            *
@@ -2407,17 +3534,81 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
            * player hears barely moves, because the bucket in wildlife.js was
            * already refusing most of the demand.
            */
-          p.sing = rngRange(rng, 16, 70) * (p.hen ? 2.3 : 1);
+          /**
+           * AND NEARER BIRDS ASK MORE OFTEN, which is the half of the argument
+           * above that was never actually implemented.
+           *
+           * The reasoning was that a fixed low rate distributes song by
+           * proximity rather than by lottery — but the timer itself did not
+           * know how far away the bird was, so all it really did was reduce
+           * demand evenly and leave the distribution to the bucket. Measured,
+           * the wood came out at 68 bird sounds a minute with only 11 of them
+           * inside 30 m and NONE inside 10, which is a chorus happening
+           * somewhere else. That is the shape of "I don't hear bird songs":
+           * plenty of song, nearly all of it at the range where the distance
+           * low-pass and the wet tail have taken it apart.
+           *
+           * Scaled so a bird at your elbow asks about twice as often as one at
+           * the 62 m audibility edge. The mean is close to unchanged, so this
+           * is the same amount of birdsong yet again — moved inward, where you
+           * can hear what it actually is.
+           */
+          const near = 0.55 + 0.75 * clamp01(dist / 62);
+          // And the bird you can actually see asks two and two thirds times as
+          // often as the one behind a trunk, at the same TOTAL rate. See the
+          // block above `findable`.
+          p.sing =
+            rngRange(rng, 16, 70) * (p.hen ? 2.3 : 1) * near * (findable ? 0.55 : 1.45);
         }
-        // Sitting still, wings folded, with a shuffle you can only see close up.
-        p.open = damp(p.open, 0.04, 0.001, dt);
-        birdBeat.setXYZW(
-          p.slot,
-          p.beat,
-          0.02 + 0.03 * Math.max(0, Math.sin(elapsed * 1.7 + p.beat * 3)),
-          3.0 * p.wing,
-          p.scale
-        );
+        /**
+         * SITTING STILL — OR SINGING, WHICH LOOKS COMPLETELY DIFFERENT.
+         *
+         * `p.show` is seconds of phrase left, handed back by `wildlife.song`
+         * above. While it runs the bird does the three things a small bird
+         * actually does while singing, and every one of them is a number that
+         * was already being written to this attribute every frame:
+         *
+         *   THE WINGS PART AND SHIVER. Spread goes from 0.04 to about 0.18,
+         *   which through the shader's `mix(0.13, 1.0, rrOpen)` is a silhouette
+         *   over half as wide again, with a fast small flick on top of it. It
+         *   is deliberately well short of the 1.0 a launch uses — a singing
+         *   bird quivers its wings, it does not hold them out.
+         *
+         *   THE BEAT SPEEDS UP AND DEEPENS. Three times the idle shuffle's
+         *   amplitude at three times its rate.
+         *
+         *   IT PUMPS AND TURNS, which is the compose block at the bottom of the
+         *   loop: a centimetre or two of vertical throw on the body and a few
+         *   degrees of yaw, both off the bird's own phase so no two do it
+         *   together.
+         *
+         * WHY THIS IS WORTH ANYTHING AT ALL, given that a bird at twenty-five
+         * metres is sixty pixels: because motion at the edge of vision is the
+         * one thing that survives being sixty pixels. A colour has to be
+         * looked at. A movement is what makes you look.
+         */
+        if (p.show > 0) {
+          p.show -= dt;
+          const flick = Math.sin(elapsed * 9.5 + p.beat * 2.7);
+          p.open = damp(p.open, 0.18 + 0.05 * flick, 0.02, dt);
+          birdBeat.setXYZW(
+            p.slot,
+            p.beat,
+            0.055 + 0.045 * Math.abs(flick),
+            9.0 * p.wing,
+            p.scale
+          );
+        } else {
+          // Wings folded, with a shuffle you can only see close up.
+          p.open = damp(p.open, 0.04, 0.001, dt);
+          birdBeat.setXYZW(
+            p.slot,
+            p.beat,
+            0.02 + 0.03 * Math.max(0, Math.sin(elapsed * 1.7 + p.beat * 3)),
+            3.0 * p.wing,
+            p.scale
+          );
+        }
       } else if (p.state === 'flee') {
         p.timer += dt;
         // Gravity and drag, and a slow curve away: a small bird's escape is a
@@ -2432,7 +3623,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         p.open = damp(p.open, 1, 1e-8, dt);
         // `p.wing` on the RATE only. The amplitude is in metres at the tip and
         // the shader already shrinks it by the species' span, so scaling it
-        // here as well would give a wood pigeon a wingbeat you could not see.
+        // here as well would give a toucan a wingbeat you could not see.
         birdBeat.setXYZW(
           p.slot,
           p.beat,
@@ -2467,7 +3658,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
          * FALLING, and not merely low. One in five perchers is on the ground —
          * see `pickPerch` — and a bird that launches from the leaf litter is
          * below head height for the first half second BY DEFINITION. Testing
-         * height alone ended its escape on the frame it began and the blackbirds
+         * height alone ended its escape on the frame it began and the tinamous
          * never got off the floor; the escape is over when it is coming back
          * DOWN through head height, which is what the two extra terms say.
          */
@@ -2591,7 +3782,22 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       // slot is the wing spread there rather than an angular speed.
       birdFlight.setXYZW(p.slot, 0, p.open, 0, 0);
       _v.copy(p.pos);
-      _e.set(0, p.yaw, 0);
+      /**
+       * The pump and the turn, for a bird in the middle of a phrase. See the
+       * display block above.
+       *
+       * Written HERE rather than into `p.pos` and `p.yaw`, which is not
+       * tidiness: those two are the bird's actual state and everything else in
+       * this loop reads them — the startle distance, the perch it is flying
+       * back to, the `unseen` test. A wobble integrated into them would drift,
+       * and a bird that had sung a few times would have walked off its branch.
+       */
+      let yaw = p.yaw;
+      if (p.show > 0) {
+        _v.y += 0.014 * p.scale * Math.sin(elapsed * 7.4 + p.beat * 2.3);
+        yaw += 0.17 * Math.sin(elapsed * 2.1 + p.beat);
+      }
+      _e.set(0, yaw, 0);
       _q.setFromEuler(_e);
       _scale.setScalar(1);
       birds.setMatrixAt(p.slot, _m.compose(_v, _q, _scale));
@@ -2787,7 +3993,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
             const hard = reactDist < fleeR * (m.nerve > 1.15 ? 0.95 : 0.6);
             m.state = hard ? 'bolt' : 'walk';
             m.timer = hard ? rngRange(rng, 2.2, 4.5) : rngRange(rng, 3, 6);
-            if (hard && herd.name === 'squirrel') {
+            if (hard && herd.name === 'capuchin') {
               m.trunk = trunks.near(m.pos.x, m.pos.z, 22);
             }
             fleeFrom(m, eye, spec.territory * (hard ? 3.2 : 1.6));
@@ -3357,6 +4563,36 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       roamX = camera.position.x;
       roamZ = camera.position.z;
       followFlocks(camera.position.x, camera.position.z);
+
+      /**
+       * NO BUTTERFLIES UNDERGROUND, and this is a draw call rather than a
+       * nicety.
+       *
+       * `heightAt` is the surface, and the caves are carved below it, so an eye
+       * three metres under the height field is inside the hill. Butterflies are
+       * seated against `heightAt` and would therefore be flying in a neat swarm
+       * through solid rock above your head, visible through nothing but
+       * occasionally through a cave mouth. Setting `count` to zero drops the
+       * whole mesh out of the frame — the underground frame is the cheapest one
+       * in the world at 0.60 ms precisely because every layer that has nothing
+       * to say down there says nothing, and this is one of them.
+       *
+       * It also skips the reseating, so a long walk through a cave does not
+       * drag twenty butterflies along inside the ceiling.
+       */
+      const under = camera.position.y < heightAt(camera.position.x, camera.position.z) - 3;
+      butterflies.count = under ? 0 : BUTTERFLIES;
+      if (!under) followFlutters(camera.position.x, camera.position.z);
+      /**
+       * Same underground reasoning as the butterflies above, and the same two
+       * effects: the cloud is seated against `heightAt`, so down here it is a
+       * sheet of midges in the rock over your head, and skipping the follow
+       * stops a long cave walk dragging it along inside the ceiling. `visible`
+       * rather than a count write because this is a `Points` cloud with no
+       * count to drop, and false is what keeps it out of `projectObject`.
+       */
+      swarm.visible = !under;
+      if (!under) followSwarm(camera.position.x, camera.position.z);
 
       _proj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       _frustum.setFromProjectionMatrix(_proj);

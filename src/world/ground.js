@@ -129,6 +129,20 @@ const TRIP_SLACK = 2.5;
  */
 const SHADOW_REACH = 66;
 
+/**
+ * HOW MANY CHUNKS MAY BE WAITING FOR THEIR FIRST SUBMISSION AT ONCE.
+ *
+ * See `_prime`. The list only grows when chunks are landing on frames where the
+ * ground is not being drawn at all — which happens for exactly one reason, a
+ * body buried in rock with `occludeWorld` holding the wood out of the render —
+ * and a player can stay down there for as long as they like. Twelve is more
+ * than the streamer can produce in the time it takes to walk out of a passage;
+ * past that the oldest are let go and pay for themselves on first sight, which
+ * is the behaviour this whole mechanism replaces and is therefore safe to fall
+ * back to.
+ */
+const PRIME_BACKLOG = 12;
+
 /** Squared distance from a point to the nearest point of a chunk's footprint. */
 function chunkDistance2(cx, cz, px, pz) {
   const x0 = cx * CHUNK;
@@ -136,6 +150,19 @@ function chunkDistance2(cx, cz, px, pz) {
   const dx = Math.max(x0 - px, 0, px - (x0 + CHUNK));
   const dz = Math.max(z0 - pz, 0, pz - (z0 + CHUNK));
   return dx * dx + dz * dz;
+}
+
+/**
+ * Set on the mesh, not captured in a closure, so that one shared function
+ * serves every chunk and `_accept` allocates nothing extra per chunk.
+ */
+function markPrimed() {
+  this.__rrPrimed = 1;
+}
+
+function release(mesh) {
+  mesh.frustumCulled = true;
+  delete mesh.onAfterRender;
 }
 
 export class GroundField {
@@ -159,6 +186,8 @@ export class GroundField {
     this.done = [];
     /** keys wanted but not yet dispatched, refreshed every update. */
     this.queue = [];
+    /** meshes being force-submitted so their buffers upload now. See `_prime`. */
+    this.warming = [];
 
     this.built = 0;
     this.evicted = 0;
@@ -215,6 +244,10 @@ export class GroundField {
   update(camera) {
     const px = camera.position.x;
     const pz = camera.position.z;
+
+    // Before anything else, because `_accept` below adds to the list this
+    // clears and the two must not be the same frame — see `_prime`.
+    this._release();
 
     /**
      * The wanted set can only change when the camera crosses a chunk boundary,
@@ -437,6 +470,79 @@ export class GroundField {
       this._shadowDirty = true;
       this.shadowArms++;
     }
+
+    this._prime(mesh);
+  }
+
+  /**
+   * PAY FOR THE GPU UPLOAD ON THE FRAME THAT BUILT THE CHUNK, NOT ON THE FRAME
+   * THE PLAYER HAPPENED TO LOOK AT IT.
+   *
+   * A BufferGeometry costs nothing until it is DRAWN. The first time one reaches
+   * the renderer, three creates a GL buffer per attribute and `bufferData`s the
+   * lot — 416 KB for a chunk, five buffers — and that is the frame that pays.
+   * `_accept` runs one chunk per frame and nearly every chunk lands 250-380 m
+   * away, out of the frustum, so the two events are separated by however long it
+   * takes the player to turn round: instrumented over a 20 s walk, eight chunks
+   * were built and TWENTY-NINE were met, the other twenty-one having been
+   * sitting behind the camera for seconds. That is why the accept-time counter
+   * showed no correlation with hitches while the first-draw counter showed a
+   * x20-83 lift — they fire on different frames, and the expensive one was
+   * chosen by a mouse movement.
+   *
+   * The fix is to make the first submission happen HERE, on a frame that is
+   * already spending on this chunk and is capped at one chunk. `frustumCulled`
+   * off for a single frame is all it takes, and it is the same trick main.js
+   * uses behind the loading gate for the hearth and the ferry — the comment
+   * there explains it at length. The chunk is off screen, so the draw rasterises
+   * nothing: 6 561 vertices are transformed and every triangle is clipped away.
+   *
+   * MEASURED COST OF THE UPLOAD ITSELF, on this machine, by timing the five
+   * `bufferData` calls a chunk needs against a context that had never seen them:
+   * 0.1-0.3 ms typical, and 1.7 ms on one allocation in thirty when the driver
+   * had to grow its heap. Four chunks in one frame — which is what a head turn
+   * across fresh terrain produces — measured 0.3-0.7 ms of client time on top of
+   * whatever that frame was already doing. Capping it at one per frame is the
+   * point; the bytes were always going to be paid.
+   *
+   * NOT `setDrawRange(0, 0)`, which would upload the buffers with the vertex
+   * shader never running and is genuinely free. It also makes the chunk
+   * invisible for exactly one frame, and `cull-check.mjs` renders the same frame
+   * twice and diffs the pixels. Transforming six thousand vertices is cheaper
+   * than reasoning about that.
+   */
+  _prime(mesh) {
+    mesh.frustumCulled = false;
+    mesh.onAfterRender = markPrimed;
+    this.warming.push(mesh);
+    // See PRIME_BACKLOG. Oldest first, because the oldest is the one whose
+    // chance of being drawn soon is worst.
+    while (this.warming.length > PRIME_BACKLOG) release(this.warming.shift());
+  }
+
+  /**
+   * Give back the forced submission, one frame later.
+   *
+   * WHY THIS IS NOT DONE IN `onAfterRender` ITSELF. Two reasons, and the second
+   * one is the one that would have been found the hard way. The callback runs
+   * INSIDE `render`, so restoring there mutates the scene between two renders of
+   * what is supposed to be the same frame — which is exactly what
+   * `cull-check.mjs` does. And the ground is not always submitted at all: while
+   * the body is buried, `occludeWorld` takes the whole wood out of the render,
+   * and a chunk that landed then would never be primed. So the callback only
+   * RECORDS that the draw happened, and the release is a frame-boundary
+   * operation that waits for it.
+   *
+   * A mesh with no parent has been evicted while it waited; there is nothing
+   * left to prime and nothing to restore.
+   */
+  _release() {
+    for (let i = this.warming.length - 1; i >= 0; i--) {
+      const mesh = this.warming[i];
+      if (!mesh.__rrPrimed && mesh.parent) continue;
+      release(mesh);
+      this.warming.splice(i, 1);
+    }
   }
 
   /** Everything a test needs to know whether the ring has settled. */
@@ -448,6 +554,8 @@ export class GroundField {
     for (const w of this.workers) w.terminate();
     this.workers.length = 0;
     this.idle.length = 0;
+    for (const mesh of this.warming) release(mesh);
+    this.warming.length = 0;
     for (const chunk of this.chunks.values()) chunk.mesh.geometry.dispose();
     this.chunks.clear();
     this.group.clear();

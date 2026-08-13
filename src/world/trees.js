@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TAU, clamp01, makeRng, rngRange } from '../core/util.js';
-import { barkTexture, leafCluster } from './textures.js';
+import { leafCluster } from './textures.js';
+import { BAND, BARK_U, bandUV, trunkAtlas } from './tree-adorn.js';
 import { PLANT_SCALE, makeLiving, setPlantScale } from '../trip/living.js';
 
 /**
@@ -148,307 +149,676 @@ import { PLANT_SCALE, makeLiving, setPlantScale } from '../trip/living.js';
  * archetypes on flower rather than one: the blossom is the thing the eye goes
  * to, so it is the thing that must not repeat.
  */
+/**
+ * ==== THE ROSTER IS NEOTROPICAL, AND IT COST NOTHING TO MOVE IT ===========
+ *
+ * This table used to be pine, birch, oak, willow and rowan — a temperate
+ * European wood — while `wildlife.js` next door carried twenty Amazonian
+ * voices: piha, bellbird, oropendola, quetzal, potoo, toucan. The ears were in
+ * the Amazon and the eyes were in Surrey, and no amount of extra life anywhere
+ * else in the project could close a gap that big.
+ *
+ * THE FIVE SPECIES WERE RESHAPED IN PLACE RATHER THAN ADDED TO, and that is
+ * the entire reason this change is free. The rowan block below the table used
+ * to explain what a sixth species costs: nine streamed meshes, 11 MB of slab,
+ * 11 MB of canvas. Five more species would have been forty-five meshes and a
+ * hundred megabytes for a biome swap. Reshaping five entries is zero meshes,
+ * zero programs, zero memory and zero draw calls — `speciesAt` still returns
+ * five labels off the same single roll against the same ladder of thresholds,
+ * so the set of trunks in the world is bit-for-bit the one that was there.
+ *
+ * THE MAPPING IS STRUCTURAL, NOT COSMETIC. Each old species was chosen for the
+ * tropical one whose SHAPE it already had:
+ *
+ *   pine -> palm.      The only entry in the table with `levels: 1`, i.e. the
+ *                      only tree here that does not branch — which is exactly
+ *                      what a palm is. It also had `needle: true`, and the
+ *                      sprig routine in textures.js draws a shoot with a comb
+ *                      of blades down each side, which is a pinnate frond. A
+ *                      palm was already sitting in this table under another
+ *                      name; it needed a bare bole and a crown at the top.
+ *   birch -> cecropia.  The pale-trunked fast pioneer of a temperate wood, and
+ *                      cecropia is the pale-trunked fast pioneer of this one.
+ *                      Its catkin adornment is already the right shape: a
+ *                      cecropia's fruit is a bunch of hanging fingers.
+ *   oak -> kapok.       `levels: 3` and the widest bole in the table — the
+ *                      heaviest, most branched crown here. That is the
+ *                      emergent, so it is the ceiba, and its acorn slot became
+ *                      the woody seed pod.
+ *   willow -> fig.      `droop: 0.85`, the highest in the table, and keyed to
+ *                      wet ground. Hanging is a strangler fig's aerial roots.
+ *   rowan -> brownea.   The small flowering tree that comes up where the canopy
+ *                      opens. It stays exactly that; only the flower turns from
+ *                      cream to scarlet.
+ *
+ * THE GREENS ALL MOVED DARKER AND DEEPER, and that is the second half of the
+ * biome. A temperate canopy in summer is a pale yellow-green; a rainforest
+ * canopy is close to black-green with a hard specular sheen on it, and the
+ * light that reaches the floor has been through three layers of it. Every tint
+ * palette below dropped roughly fifteen points of lightness and gained
+ * saturation. This is free — a tint is an instance colour, and a darker one
+ * costs the same multiply.
+ *
+ * ONE THING GOT MORE EXPENSIVE AND IT WAS PAID FOR IN THE SAME EDIT. The kapok
+ * is an emergent, so it is taller than the oak it replaces (18-29 m against
+ * 11-18). Height is a pure scale on an already-built geometry — the ring and
+ * side counts do not move, so it is not one triangle more — but a taller tree
+ * covers more screen. It is paid for by the palm, which took `branchStart` from
+ * 0.2 to 0.86: nineteen of its twenty fronds used to be strung down the whole
+ * length of the bole and are now packed into the top seventh of it, which is
+ * both what a palm is and a large net reduction in rasterised canopy area over
+ * the commonest tree in the world.
+ */
 const SPECIES = {
-  pine: {
-    height: [15, 27],
-    trunkRadius: 0.34,
-    taper: 0.13,
+  /**
+   * ==== PALM: THE COMMONEST STEM IN THE FOREST ==============================
+   *
+   * This is not licence. Palms genuinely are around a third of the stems in
+   * much of Amazonia — Attalea, Euterpe, Astrocaryum, Oenocarpus — and a
+   * rainforest that has none in it reads as a jungle drawn by somebody who has
+   * only seen photographs of one. `speciesAt` gives this slot 38% of the wood,
+   * which is very close to the real figure and was not adjusted to get there.
+   *
+   * A BARE BOLE AND A CROWN ON TOP, which is the whole silhouette and the whole
+   * saving. `branchStart: 0.86` puts every frond in the top seventh of the
+   * tree; a palm has no branches at all, so the twenty "boughs" here are the
+   * twenty frond rachises radiating from one point, and `levels: 1` guarantees
+   * none of them forks. `taper: 0.74` is the other half — a palm bole is a
+   * near-parallel column, not a cone, and at the pine's old 0.13 the top of
+   * this tree came to a point like a pencil.
+   *
+   * THE FROND IS THE SPRIG ROUTINE AND IT NEEDED ONE NUMBER CHANGED. The comb
+   * of needles down a bowed shoot is already a pinnate leaf; what makes it a
+   * palm rather than a conifer is that the blades are long and few instead of
+   * short and dense. `length` 0.32 against the pine's 0.26 is close to the
+   * ceiling the LIMIT block in textures.js warns about (past ~1.3x the scatter
+   * collapses onto the middle of the card) and is deliberately just under it.
+   */
+  palm: {
+    height: [16, 27],
     /**
-     * A SHORTER BOUGH ON THE SAME TRUNK — the pine's crown, pulled in.
+     * ==== STATURE: THE CHEAPEST CUBIC METRE IN THIS FILE ======================
      *
-     * Pine has `levels: 1`, so all twenty-four boughs are terminal and there is
-     * no second tier to hang anything on; it also had the largest crown in the
-     * forest and the emptiest card. Every other lever costs pixels. This one
-     * does not: the same cards at the same size, over a crown 18% narrower,
-     * which is 1.8x the cards per cubic metre for nothing. A pine that is
-     * slightly narrower than it was is also simply a better pine — the species
-     * is a spire.
+     * Measured on the build before this pass, per archetype, as triangle area
+     * bucketed by object-space height: only 4.4% of a palm's leaf area and
+     * 12.8% of a cecropia's sits between 2 m and 12 m. Weighted by each
+     * species' share of the wood, 87% of all the foliage in this forest is
+     * above twelve metres. That single number is the whole of the report about
+     * the empty band, and it says something specific: the band is not empty
+     * because the trees lack detail, it is empty because every tree in the
+     * table is TALL. `branchStart` 0.86 on a 16-27 m palm puts the lowest frond
+     * at 13 m no matter what else is done to it.
+     *
+     * A rainforest is not a canopy over a void. It is four or five layers, and
+     * the one at 3-10 m — the understorey of young palms and saplings waiting
+     * for a gap — is the layer this world had none of.
+     *
+     * `stature` multiplies the drawn height, so an archetype can be a 7 m
+     * understorey palm rather than a small copy of a 24 m one. IT IS FREE, and
+     * more than free: leaf card area goes as the square of height, so the short
+     * archetypes cost a QUARTER of what they replace. Nothing else here buys
+     * mass in the band at a negative price, and it is what pays for the clump
+     * crowns below, which are the one genuinely expensive thing added.
+     *
+     * It is a multiplier rather than a wider `height` range because the two are
+     * not the same draw: widening [16, 27] to [7, 27] draws three numbers out of
+     * one distribution and can easily give three tall palms. Height and stature
+     * are independent, so a species reliably gets a spread of BOTH — and the
+     * kapok, which must stay emergent, simply does not carry this key.
      */
-    branchStart: 0.2,
-    branches: 24,
-    branchLength: [0.17, 0.34],
-    droop: 0.35,
+    stature: [0.4, 1.06],
+    // Slender. A 20 m Attalea is under half a metre through, where the pine
+    // this replaces was 0.34 at the base of a flared bole.
+    trunkRadius: 0.25,
+    // Near-parallel: the crownshaft is barely narrower than the foot.
+    taper: 0.74,
+    branchStart: 0.86,
+    branches: 20,
+    // A frond is 3-4 m on a 20 m palm, so a tenth to a sixth of the height.
+    // The pine's 0.17-0.34 would have given this tree eight-metre fronds.
+    branchLength: [0.1, 0.18],
+    // Arching. A palm crown is a shuttlecock: the outer fronds fall almost to
+    // the horizontal and the inner ones stand up.
+    droop: 0.55,
     levels: 1,
-    leafPerBranch: 9,
+    leafPerBranch: 10,
     leafOnBough: 0,
-    leafSize: [2.0, 3.4],
-    bark: { hue: 22, sat: 26, light: 15 },
-    leaf: { hue: 128, sat: 30, light: 21, needle: true, count: 110, length: 0.26, width: 0.14 },
-    tint: [0x93b391, 0x6f9a76, 0xa8bd95],
+    leafSize: [1.9, 3.1],
+    // Grey-brown and ringed with old frond scars. Lighter than the pine's bark
+    // because a palm bole catches what little light gets down here and is one
+    // of the few pale verticals in the frame.
+    bark: { hue: 34, sat: 13, light: 31 },
     /**
-     * A conifer stand is genuinely two or three different-coloured trees, and
-     * that is not artistic licence — the blue-grey of a spruce beside the
-     * yellow-green of a pine is the most reliably visible colour difference in a
-     * temperate wood. Cones on the third: pine has `levels: 1`, so every one of
-     * its twenty-four boughs is terminal and carries seven cards, which makes it
-     * the species where a card-borne detail is most evenly spread through the
-     * crown.
-     */
-    variants: [
-      { tint: [0x6f9a76, 0x7ea88a, 0x5c8a6e, 0x8ab396, 0x67947f] },
-      {
-        leaf: { hue: 146, sat: 24, light: 20, count: 122 },
-        tint: [0x9db8a4, 0xa8bd95, 0x8fae9c, 0xb2c4a8, 0x93b391],
-      },
-      {
-        // Small: a pine cone is 8 cm against a 4 cm needle bundle, and `base`
-        // here is the SPRIG length rather than a needle, so 0.52 of it lands the
-        // cone at about three and a half needles long, which is right. 0.42 was
-        // the first try and it disappeared into the comb — a conifer card is the
-        // busiest texture in the wood and a mark has to beat the needles.
-        leaf: {
-          hue: 120,
-          count: 108,
-          adorn: { kind: 'cone', count: 6, span: 0.52, hue: 22, sat: 42, light: 28 },
-        },
-        tint: [0x87a878, 0x7d9e6f, 0x9bb488, 0x6f9364, 0x93ad7e],
-      },
-    ],
-  },
-  birch: {
-    height: [12, 19],
-    trunkRadius: 0.21,
-    taper: 0.3,
-    branchStart: 0.46,
-    branches: 11,
-    branchLength: [0.24, 0.44],
-    droop: -0.15,
-    levels: 2,
-    leafPerBranch: 8,
-    leafOnBough: 2,
-    leafSize: [1.9, 3.0],
-    bark: { hue: 42, sat: 12, light: 52 },
-    leaf: { hue: 84, sat: 46, light: 38, count: 185, length: 0.16, width: 0.875 },
-    tint: [0xd8e3b6, 0xc4dfa2, 0xe6e6ae],
-    /**
-     * Birch is the species that turns first and hardest, and it is 35% of the
-     * wood — so one archetype in three going yellow is the biggest single lever
-     * on "the forest is all one green" that exists here.
+     * NO LIANAS AND NO EPIPHYTES, AND THAT IS A REAL BOTANICAL FACT RATHER
+     * THAN A BUDGET DECISION — though it is also the budget decision, because
+     * this is 38% of the wood and giving it vines would have cost more than
+     * the other four species combined.
      *
-     * DRAWN AT hue 70, NOT AT 46. Gold in the texture AND gold in the tint is a
-     * tree the colour of a traffic cone standing in July, which is the paintbox
-     * the brief warned about. The canvas moves fourteen degrees toward yellow
-     * and the tint palette does the rest, so what comes out is a birch on the
-     * turn rather than a birch on fire — and because the tint is per instance,
-     * no two of them turn by the same amount.
+     * Palms shed. A palm has no branches for a vine to hang from and its bole
+     * drops its old frond bases, so anything that starts climbing one falls off
+     * with the next frond. A stand of clean bare palm boles among festooned
+     * broadleaves is what the real forest looks like, and it is also what makes
+     * the festooned ones read as festooned — if everything is draped, nothing
+     * is.
+     */
+    lianas: 0,
+    epiphytes: 0,
+    /**
+     * STILT ROOTS, AND THIS IS THE SINGLE MOST VALUABLE OBJECT ADDED IN THIS
+     * PASS, because of what it is attached to.
+     *
+     * The complaint was that the 2-12 m band is empty and every sight line down
+     * the wood is clear. Thirty-eight per cent of the stems in this forest are
+     * this entry, and the block above has just finished explaining that this
+     * entry may not carry vines — so 38% of the wood was, by design, a bare
+     * pole from the dirt to the crown. Whatever fills the band for a palm has
+     * to be something a palm actually grows.
+     *
+     * A palm grows this. Socratea exorrhiza, Iriartea, Euterpe: a cone of
+     * finger-thick roots leaving the bole a metre or two up and reaching the
+     * ground a metre out, so the tree appears to be standing on a tripod with
+     * daylight under it. It is one of the two or three silhouettes that say
+     * "rainforest" on sight, and nothing else in this table has it.
+     *
+     * IT ONLY REACHES 2.5 m AND THAT IS NOT THE POINT. A sight line is broken
+     * by the nearest thing that crosses it, and at eye level in a wood the
+     * nearest things are at the FOOT of the trunks in front of you. Nine roots
+     * on 38% of the stems, each splayed to 1.4 m, is a thicket of crossing
+     * diagonals across the bottom of every long view — and diagonals are what
+     * the frame had none of.
+     */
+    stilts: { count: 9, top: 2.5, reach: 1.4, thick: 0.05, spread: 0.55 },
+    /**
+     * The palm block above argues that nothing CLIMBS a palm, because the bole
+     * sheds its old frond bases and takes whatever started up it along too.
+     * That is an argument about vines, and it does not reach these: a bracket
+     * fungus is eating the bole rather than clinging to it, and the two
+     * rosettes are wedged in the fork where the stilt cone meets the trunk,
+     * which is a pocket of litter and the one place on a palm that holds
+     * anything. It also matters that this is 38% of the wood — a colour beat
+     * that skips the commonest tree is a colour beat that skips the forest.
+     */
+    adorn: { rosettes: 3, shelves: 3, glowCount: 4 },
+    glow: { colour: 0x2f7050, strength: 1.0 },
+    /**
+     * CLUMPING, WHICH IS THE PART THAT ACTUALLY REACHES THE BAND.
+     *
+     * Most of the commonest Amazonian palms — açaí above all, and Bactris,
+     * Oenocarpus, Astrocaryum — are caespitose: one root mass throws up four or
+     * five stems of different ages, so what you walk past is a clump of boles
+     * of four different heights with four crowns stacked between 4 m and 20 m.
+     * A single stem per palm is the one thing about this species that was
+     * botanically wrong, and correcting it puts foliage in the empty band on a
+     * third of the trees in the world.
+     *
+     * THE CROWNS ARE CUT DOWN HARD AND THAT IS A COST DECISION, not a shape
+     * one. A sucker's crown is the only expensive thing in this whole pass:
+     * swept wood is nearly free here, and leaf cards are alpha-tested area that
+     * costs per pixel — and these particular cards land LOW, i.e. near the eye,
+     * i.e. covering a lot of screen. So a sucker gets 8 fronds of 5 cards at
+     * 0.6 size against the parent's 20 of 10 at 1.0, which is about a seventh
+     * of the parent's rasterised area for a crown that reads as a whole palm.
+     */
+    clump: { count: 3, min: 1, at: [0.16, 0.44], offset: [0.7, 1.6], crowns: 8, leaves: 5, size: 0.6 },
+    leaf: { hue: 134, sat: 40, light: 22, needle: true, count: 104, length: 0.32, width: 0.1 },
+    tint: [0x5c7f5a, 0x486b48, 0x6b8c62],
+    /**
+     * Three palms, and they are three genera rather than three moods. The
+     * variation the eye wants from a palm stand is "that one is a different
+     * palm", because that is the variation a real one has — the crowns differ
+     * far more than the boles do.
      */
     variants: [
-      { tint: [0xd8e3b6, 0xc4dfa2, 0xe6e6ae, 0xcfe0b4, 0xbdd899] },
+      // Deep and blue-green: the shade-tolerant understory palm.
+      { tint: [0x4a6b4c, 0x557a56, 0x3f5f44, 0x5f8460, 0x466851] },
+      {
+        // Taller, yellower, thinner-bladed: the ones that reach the light.
+        leaf: { hue: 118, sat: 34, light: 27, count: 96 },
+        tint: [0x6f8f5e, 0x7a9968, 0x648556, 0x849f72, 0x5d7e52],
+      },
       {
         /**
-         * Birch catkins hang in threes off the twig ends all spring.
-         *
-         * THE HARDEST OF THE FIVE TO MAKE VISIBLE, and both reasons are the
-         * birch's. Its `length` is the shortest in the table (0.16) so a truss
-         * sized off it is the smallest; and its leaves are the widest (0.875),
-         * so they cover more of the card than any other species' do. At the
-         * first values — span 0.95, a dull olive at 52/42 — the catkins were
-         * physically correct and completely invisible: forty-texel marks in a
-         * dull yellow-brown, on a yellow-green card, behind the biggest leaves
-         * in the wood. Bigger AND warmer AND more of them, because on this
-         * species none of the three is enough on its own.
+         * In fruit. A palm's inflorescence hangs in a heavy bunch out of the
+         * crownshaft, under the fronds, and it is one of the few strong warm
+         * colours in a rainforest canopy — so it is worth the paint even though
+         * this card is the busiest texture in the wood and a mark on it has to
+         * beat the comb. `span` 0.58 off a `length` of 0.32 is the same
+         * reasoning the pine cone used at 0.52: a bunch reads at about three
+         * blade-lengths and disappears under two.
          */
         leaf: {
-          adorn: { kind: 'catkin', count: 11, span: 1.25, hue: 44, sat: 64, light: 54 },
+          hue: 128,
+          count: 100,
+          adorn: { kind: 'berry', count: 7, span: 0.58, hue: 26, sat: 72, light: 44 },
         },
-        tint: [0xc9dcae, 0xd4e3b8, 0xbcd3a4, 0xdfe5bd, 0xc2d6a6],
-      },
-      {
-        leaf: { hue: 70, sat: 52, light: 41, count: 178 },
-        tint: [0xe8d489, 0xf0dd9a, 0xdcc274, 0xe3cf94, 0xd8b968],
-      },
-    ],
-  },
-  oak: {
-    height: [11, 18],
-    trunkRadius: 0.52,
-    taper: 0.42,
-    branchStart: 0.34,
-    branches: 7,
-    branchLength: [0.36, 0.6],
-    droop: 0.05,
-    levels: 3,
-    leafPerBranch: 7,
-    leafOnBough: 2,
-    leafSize: [2.4, 4.1],
-    bark: { hue: 28, sat: 20, light: 19 },
-    leaf: { hue: 96, sat: 40, light: 27, count: 172, length: 0.19, width: 0.77 },
-    tint: [0x8fae7a, 0xa9bd7e, 0x7b9d6c],
-    /**
-     * `span: 0.95` and not 0.62. At 0.62 an acorn came out 18 texels tall, which
-     * is four pixels at thirty metres — under the threshold where a mark is a
-     * mark rather than noise, and the brief is explicit that a subpixel speck is
-     * not worth the bytes. Looked at on the flat, 0.78 was still a scattering of
-     * brown dots rather than acorns. 0.95 puts a nut at 27 texels and six
-     * clusters on each of about sixty cards is three hundred and fifty to a
-     * tree, which at thirty metres is the brown speckling an oak in mast has and
-     * at five is legibly a nut in a cup.
-     */
-    variants: [
-      { tint: [0x8fae7a, 0xa9bd7e, 0x7b9d6c, 0x93b585, 0x6f9161] },
-      {
-        leaf: {
-          adorn: { kind: 'acorn', count: 6, span: 0.95, hue: 34, sat: 48, light: 46 },
-        },
-        tint: [0x8aa974, 0x9cb47e, 0x7f9e6b, 0xa4bb88, 0x86a271],
-      },
-      {
-        // The dark oak: drawn colder and dimmer and tinted the same way, because
-        // a deep shade tree is the counterweight that makes the yellow birches
-        // read as yellow rather than as the new normal.
-        leaf: { hue: 106, sat: 44, light: 22, count: 178, width: 0.82 },
-        tint: [0x62855c, 0x6d9166, 0x587a55, 0x74997a, 0x5f8a6c],
-      },
-    ],
-  },
-  willow: {
-    height: [10, 15],
-    trunkRadius: 0.4,
-    taper: 0.36,
-    branchStart: 0.4,
-    branches: 10,
-    branchLength: [0.34, 0.55],
-    droop: 0.85,
-    levels: 2,
-    leafPerBranch: 7,
-    leafOnBough: 2,
-    leafSize: [2.2, 3.6],
-    bark: { hue: 32, sat: 16, light: 24 },
-    leaf: { hue: 76, sat: 34, light: 33, count: 158, length: 0.26, width: 0.385 },
-    tint: [0xc2cf94, 0xaec288, 0xd2d8a4],
-    /**
-     * Pussy willow is nearly white and the willow lives on the stream bank in
-     * the deepest shade in the world, so it is the highest-contrast fruit
-     * treatment of the five for the least paint. `span: 0.7` off a `length` of
-     * 0.26 is the largest truss in the table in absolute texels, which is right:
-     * a willow catkin is 3 cm against a leaf 8 cm long and 6 mm wide, so it is
-     * the one place in this wood where the fruit is genuinely bigger than the
-     * leaf that carries it.
-     */
-    variants: [
-      { tint: [0xc2cf94, 0xaec288, 0xd2d8a4, 0xb8c98f, 0xccd39c] },
-      {
-        leaf: {
-          adorn: { kind: 'catkin', count: 8, span: 0.7, hue: 66, sat: 24, light: 76 },
-        },
-        tint: [0xc8d29e, 0xbccb93, 0xd6dcab, 0xc0cd98, 0xd0d6a2],
-      },
-      {
-        // Glaucous: a real willow trait — the underside of the leaf is waxy and
-        // blue, and a bank of them in the wind flickers between two colours.
-        leaf: { hue: 104, sat: 22, light: 35, count: 150 },
-        tint: [0xa9c3b0, 0xb6ccb8, 0x9bb8a6, 0xc0d2be, 0xa2bdad],
+        tint: [0x53764f, 0x5e8159, 0x486a46, 0x668a5e, 0x4f7250],
       },
     ],
   },
   /**
-   * ==== THE ROWAN: THE FIFTH SPECIES, AND THE ONE THAT IS IN FLOWER =========
+   * ==== CECROPIA: THE PALE TRUNK YOU NAVIGATE BY ============================
    *
-   * The brief asked for blossom, and blossom is worth a species of its own
-   * rather than a state on an existing one. A rowan does both jobs at once — it
-   * carries flat creamy corymbs of flower in spring and dense scarlet trusses of
-   * berry in autumn, which are the two most legible things that can be hung in a
-   * green canopy — so one addition covers both halves of the request, and the
-   * two states can be different archetypes and therefore different skeletons.
+   * A third of the wood, and it does the job the birch did: it is the one tree
+   * whose TRUNK you can see from a distance. Everything else here is a dark
+   * column in a dark room. Cecropia bark is chalk-white to pale grey and the
+   * tree grows in every gap and along every bank, so a stand of them is a set
+   * of white verticals in the middle distance — which, per the note in
+   * `forest-hides-everything-under-40m`, is one of the very few things that
+   * survives forty metres of this forest.
    *
-   * WHAT THE FIFTH SPECIES ACTUALLY COSTS, because a species is nine streamed
-   * meshes and this project does not add draw calls without saying so.
+   * CANDELABRA, NOT A CROWN. `droop: -0.25` and `branchStart: 0.58` give the
+   * species its actual habit: a clean pole, then a few thick branches that go
+   * UP and out at a wide angle, each ending in one rosette of enormous leaves.
+   * `branches: 9` is deliberately sparse — a cecropia has a countable number of
+   * limbs and you can see the sky between them, which is exactly the openness
+   * a pioneer standing in a light gap should have.
    *
-   *   IT ADDS NO TREES, AND THAT IS CHECKED RATHER THAN ASSERTED. `speciesAt`
-   *   RE-LABELS trees the wood was already going to plant — it consumes the same
-   *   single roll it always did, at the same point in the same stream — so the
-   *   set of trunks is bit-for-bit the one that was there before. authored-check
-   *   counts 65 143 guaranteed-resident instances at the spawn point both before
-   *   and after, over 53 layers and then 62.
-   *
-   *   IT ADDS NINE MESHES — trunk, far trunk and canopy times three archetypes —
-   *   so 53 streamed meshes become 62 and `perf:gpu` reads 142 draws where it
-   *   read 151. An empty layer is not a draw call at all: `packSlab` sets
-   *   `mesh.visible = false` at zero instances, which is why the three willow
-   *   layers cost nothing at a station with eighteen willows in it.
-   *
-   *   AND IT TAKES 0.73 M TRIANGLES OFF THE FRAME, which was not the plan and is
-   *   the best thing about it. A rowan is 9 boughs over 2 levels on an 8–14 m
-   *   bole; the oaks it displaces are 7 boughs over THREE levels on an 11–18 m
-   *   one, and are among the heaviest trunk geometries in the table. Trunks are
-   *   89% of the world's triangles, so swapping a tenth of the oaks for rowans
-   *   is worth 13.36 M -> 12.63 M sober and 12.19 M -> 11.57 M at ego death,
-   *   measured A/B/A. Nine draw calls for five and a half per cent of the
-   *   geometry is a trade this frame takes every time.
-   *
-   *   IT COSTS MEMORY: nine slabs at TREE_CAPACITY is 11.2 MB and the eleven
-   *   extra canopy canvases are another 11. endless-check reads 132.6 MB of heap
-   *   before and 159–169 after depending on where the sample lands relative to a
-   *   collection — and, which is the number that matters, unchanged end to end
-   *   over a 2 km walk. It is allocation, not a leak.
-   *
-   * A ROWAN IS A SMALL TREE, and that is the second reason to add one rather
-   * than to bloom an oak. Its 8–14 m against the pine's 15–27 widens the size
-   * range of the wood at the species level, which is half of what "different
-   * sizes" asks for; the other half is the instance scale in scatter.js.
+   * THE LEAVES ARE THE BIGGEST IN THE TABLE AND THERE ARE THE FEWEST OF THEM.
+   * A cecropia leaf is a 60 cm palmate hand; the tree carries maybe forty of
+   * them in total. `leafSize` up to 4.0 with `leafPerBranch: 7` is that shape,
+   * and it is roughly cost-neutral against the birch — bigger cards, fewer of
+   * them, and `count: 118` on the canvas draws each card as a few big hands
+   * instead of two hundred small leaves, which is the free lever.
    */
-  rowan: {
-    height: [8, 14],
-    trunkRadius: 0.19,
-    taper: 0.36,
-    branchStart: 0.38,
+  cecropia: {
+    height: [13, 21],
+    // See the palm's block. A pioneer is the one tree that is genuinely present
+    // at every size at once, because it is the thing filling every gap at every
+    // stage — so the species that most wants a range of statures is this one.
+    stature: [0.45, 1.08],
+    // Cecropias sucker hard from a cut or a fallen stem, and a clump of three
+    // poles of different heights out of one base is the commonest form they
+    // take in disturbed ground, which is where they all are.
+    clump: { count: 2, min: 0, at: [0.2, 0.5], offset: [0.5, 1.2], crowns: 5, leaves: 5, size: 0.55 },
+    trunkRadius: 0.2,
+    // Straight and hardly tapered — the classic bamboo-like cecropia pole.
+    taper: 0.46,
+    branchStart: 0.58,
     branches: 9,
-    branchLength: [0.32, 0.54],
-    // Negative droop is an upswept branch. A rowan holds its crown open and up,
-    // which is what lets you see into it — and a flowering tree whose flowers
-    // are hidden under its own canopy is a waste of the paint.
-    droop: -0.12,
+    branchLength: [0.22, 0.4],
+    droop: -0.25,
+    levels: 2,
+    leafPerBranch: 7,
+    leafOnBough: 2,
+    leafSize: [2.6, 4.0],
+    // The palest bark in the world by a wide margin, and that is the point.
+    bark: { hue: 44, sat: 7, light: 58 },
+    /**
+     * Almost clean, and for the best reason in this file: a cecropia houses
+     * colonies of Azteca ants in its hollow stem and they strip anything that
+     * tries to grow on it. It is one of the few genuinely bare-trunked trees in
+     * a forest where everything else is covered — which is lucky, because it is
+     * also the tree whose PALE TRUNK is the one thing visible at forty metres,
+     * and draping it would have deleted the only long-range landmark the wood
+     * has. Two vines rather than none so it is not conspicuously exempt.
+     */
+    /**
+     * FIVE RATHER THAN TWO, AND EVERY ONE OF THEM TIED TO A BOUGH TIP.
+     *
+     * The paragraph above is still right that a draped cecropia would delete
+     * the only landmark this forest has past forty metres — but it was
+     * answering the wrong question. What it protects is the BOLE, and a liana
+     * anchored at `from.q` hangs from the far end of a limb, two to four metres
+     * out from the bole and clear of it all the way down. The pale vertical
+     * survives intact and the air beside it fills up.
+     *
+     * That distinction is worth five rather than two because of the arithmetic
+     * in the liana block below: a cecropia's vines cost more of the frame than
+     * a kapok's, since there are 8393 of them resident against 4721. This is
+     * therefore the most expensive count in the table and also the one that
+     * buys the most, because this species branches at 0.58 of 13-21 m — its
+     * lowest limb is 8 to 12 m up, so a strand falling from it lands squarely
+     * across the 2-12 m band and nothing else here does that as reliably.
+     */
+    lianas: 5,
+    lianaFromTip: 0.85,
+    epiphytes: 3,
+    /**
+     * Cecropia genuinely stands on prop roots — a low cone of them, not the
+     * palm's tall tripod — and on a pole this clean they are most of what
+     * happens between the litter and the first limb.
+     */
+    stilts: { count: 6, top: 1.5, reach: 0.8, thick: 0.045, spread: 0.4 },
+    // Sparse, and NO GLOW: this species' bark is drawn at 58% lightness, so the
+    // emissive-from-map separation that keeps the fungus glowing and the bark
+    // dark is only threefold here instead of tenfold. See tree-adorn.js.
+    adorn: { rosettes: 1, shelves: 2, glowCount: 0 },
+    leaf: { hue: 96, sat: 36, light: 34, count: 118, length: 0.25, width: 0.95 },
+    tint: [0x9ab884, 0x86a874, 0xa8c092],
+    variants: [
+      { tint: [0x8fae7e, 0x9cba88, 0x7f9f70, 0xa5c092, 0x88a878] },
+      {
+        /**
+         * In fruit. A cecropia's fruit is a bunch of pale green fingers hanging
+         * where the leaf stalks meet the branch, and the catkin routine draws
+         * exactly that. Warmer and lighter than the leaf it hangs against,
+         * because the birch note below this one is right about why the first
+         * attempt at a catkin was invisible: physically correct and dull, on a
+         * card that is already the same colour, is nothing.
+         */
+        leaf: {
+          adorn: { kind: 'catkin', count: 9, span: 1.15, hue: 62, sat: 40, light: 62 },
+        },
+        tint: [0x93b17e, 0x9fbc8a, 0x87a674, 0xa8c294, 0x8dad7c],
+      },
+      {
+        /**
+         * THE SILVER UNDERSIDE, WHICH IS THE THING PEOPLE ACTUALLY NOTICE.
+         *
+         * A cecropia leaf is dark green above and near-white with felt
+         * underneath, and because the leaves are held flat and the wind turns
+         * them, a cecropia in a breeze FLASHES. The leaf cards here are
+         * double-sided and randomly tilted, so a pale, desaturated variant with
+         * the canopy tint pulled toward neutral reproduces the effect for free:
+         * a third of the cecropias in any view are the light ones, and because
+         * `living.js` moves every card on its own flex weight, the stand
+         * shimmers rather than changing colour together.
+         */
+        leaf: { hue: 88, sat: 18, light: 52, count: 112 },
+        tint: [0xc4cdb4, 0xd0d7c0, 0xb6c2a6, 0xcad2ba, 0xbcc7ac],
+      },
+    ],
+  },
+  /**
+   * ==== KAPOK: THE EMERGENT =================================================
+   *
+   * The tree that comes out of the roof. A ceiba stands twenty metres clear of
+   * a canopy that is itself forty up, and it is the single most recognisable
+   * object in an Amazonian landscape — a grey column with a flat, wide, almost
+   * horizontal crown floating above everything else.
+   *
+   * IT INHERITS THE OAK'S SKELETON BECAUSE THE OAK WAS ALREADY THE HEAVY ONE.
+   * `levels: 3` is the deepest branching in the table and `trunkRadius` was
+   * already the widest; both of those are what an emergent needs and neither is
+   * a change. What changed is height, `droop` and the bark.
+   *
+   * `droop: -0.05` IS THE WHOLE SILHOUETTE. The oak's 0.05 was a very slightly
+   * falling bough; a hair the other side of zero is a very slightly RISING one,
+   * and combined with the third level of branching it produces the flat-topped,
+   * layered, tabular crown that separates a ceiba from every other tree here.
+   * It is one character of diff and it does more than anything else in the row.
+   *
+   * ON THE HEIGHT, WHICH IS THE ONE COST IN THIS TABLE. 18-29 m against the
+   * oak's 11-18 is not one extra triangle — the geometry is built at a fixed
+   * nine rings and seven sides and then scaled — but it is more screen. It is
+   * affordable for two reasons: this species is 18.5% of the wood, the smallest
+   * share of the four majors; and the extra height goes into a crown that is by
+   * definition ABOVE the canopy, i.e. against sky, at long range, through fog,
+   * where a leaf card is cheap. The palm's `branchStart` change pays for it
+   * several times over.
+   */
+  kapok: {
+    height: [18, 29],
+    // Enormous. A real ceiba bole is three metres through; this is as far as
+    // the number can go before `stumpCollider`'s 0.8 m contract with fauna.js
+    // starts mis-filing the biggest trees in the wood as something other than
+    // trees. See the block on that function in scatter.js.
+    trunkRadius: 0.7,
+    taper: 0.3,
+    branchStart: 0.52,
+    branches: 7,
+    branchLength: [0.4, 0.66],
+    droop: -0.05,
+    levels: 3,
+    leafPerBranch: 7,
+    leafOnBough: 2,
+    leafSize: [2.5, 4.3],
+    /**
+     * GREY-GREEN, WHICH IS NOT A STYLISATION. A young ceiba's bark is
+     * photosynthetic and genuinely green-grey, and an old one weathers to pale
+     * smooth grey. At `sat: 11` this reads as grey in shade and picks up a
+     * green cast in the shafts, which is the correct behaviour and is why the
+     * hue is set to a green rather than to the brown every other bark here uses.
+     */
+    bark: { hue: 96, sat: 11, light: 33 },
+    /**
+     * THE MOST HEAVILY LADEN TREE IN THE WOOD, which is what an emergent is: a
+     * whole hanging garden held above the canopy, with a curtain of woody vine
+     * dropping thirty metres out of it to the floor. This is the species where
+     * the feature earns its triangles — the vines are long here because the
+     * boughs they hang from are 15 m up, so they cross the entire frame from
+     * top to bottom and are the strongest vertical in the world.
+     *
+     * FIVE RATHER THAN SEVEN since the strands learned to meander and loop, and
+     * that is a gain rather than a cut — see the cost paragraph in the liana
+     * block below, which is also where the arithmetic for this number is.
+     */
+    lianas: 8,
+    epiphytes: 9,
+    /**
+     * THE BUTTRESS, WHICH IS THE OTHER SILHOUETTE EVERYONE KNOWS.
+     *
+     * A ceiba does not meet the ground, it FANS into it: six or eight vertical
+     * walls of wood three or four metres tall running out from the bole, tall
+     * enough to stand between and thin enough to see light through the gap. The
+     * `ROOT_FLARE` rings already here are a swelling of the bole, which is a
+     * different object and reads at two metres, not at twelve.
+     *
+     * WHY IT IS WORTH IT ON 18.5% OF THE WOOD, the smallest share of the four
+     * majors: because it is on the BIGGEST object in the wood. A kapok is
+     * 18-29 m and the widest bole in the table, so it is the tree the eye picks
+     * out of any view, and its foot is currently a plain tube entering the
+     * dirt. Six plates 2.6 m out is also 2.6 m of ground around every kapok that
+     * you cannot see through or walk through, which is exactly the interruption
+     * the long sight lines are missing.
+     *
+     * `squash` 0.17 against a plate half-width of 0.55 m is a fin about 19 cm
+     * thick and 1.1 m across — see the block on `sweep` for why the thin axis
+     * has to be pinned to the circumference rather than left to the frame.
+     */
+    buttress: { count: 6, top: 4.2, reach: 2.6, plate: 0.55, squash: 0.17 },
+    // The most heavily laden tree in the wood, at its foot as well as in its
+    // crown: the pockets between six buttresses are where an Amazonian forest
+    // keeps its bromeliads, its ferns and its rot.
+    adorn: { rosettes: 7, shelves: 4, glowCount: 5 },
+    glow: { colour: 0x2b6b58, strength: 1.0 },
+    leaf: { hue: 106, sat: 44, light: 24, count: 176, length: 0.19, width: 0.74 },
+    tint: [0x6b8a5e, 0x5c7a52, 0x7a986a],
+    variants: [
+      { tint: [0x62825a, 0x6e8f64, 0x55744f, 0x789b6c, 0x5d8060] },
+      {
+        /**
+         * In pod. A kapok's fruit is a woody capsule the size of a fist that
+         * splits and lets out the floss the tree is named for. The cone routine
+         * draws a scaled woody ovoid, which is the same object; `span: 0.9` is
+         * larger than the pine cone's 0.52 because a pod is genuinely bigger
+         * relative to the leaf beside it than a cone is relative to a needle.
+         */
+        leaf: {
+          adorn: { kind: 'cone', count: 5, span: 0.9, hue: 30, sat: 34, light: 40 },
+        },
+        tint: [0x66865c, 0x718f66, 0x5a7a52, 0x7a9a6e, 0x628459],
+      },
+      {
+        /**
+         * IN FLOWER, AND LEAFLESS, WHICH IS THE REAL BEHAVIOUR AND THE BEST
+         * THING IN THIS TABLE.
+         *
+         * A ceiba is deciduous in the dry season and it flowers on BARE wood —
+         * so for a few weeks the biggest tree in the forest is a grey skeleton
+         * covered in creamy flowers, standing above a canopy that is still
+         * completely green. There is nothing else available here that gives a
+         * single tree that much contrast against its own background.
+         *
+         * `count: 54` is the mechanism and it is the free lever from the note at
+         * the top of the file used backwards. Dropping what is DRAWN on the card
+         * from 176 marks to 54 does not change one triangle or one card; it
+         * makes the canopy texture mostly transparent, so this archetype's
+         * crown is a scatter of flowers on visible branch structure rather than
+         * a mass of leaves. The tint goes nearly neutral for the same reason the
+         * rowan's did: a cream petal under a green instance colour is a green
+         * petal.
+         */
+        leaf: {
+          hue: 84,
+          sat: 22,
+          light: 46,
+          count: 54,
+          adorn: { kind: 'blossom', count: 12, span: 0.95, hue: 42, sat: 30, light: 90 },
+        },
+        tint: [0xd8d4c4, 0xd0ccbc, 0xdedac8, 0xcbc7b8, 0xd5d1c0],
+      },
+    ],
+  },
+  /**
+   * ==== FIG: THE ONE ON THE WET GROUND ======================================
+   *
+   * Keyed to `wet > 0.32`, so this is the tree on the stream bank, exactly
+   * where the willow was. It keeps the willow's `droop: 0.85` — the highest in
+   * the table by a factor of two — because on a willow that number was weeping
+   * withies and on a fig it is AERIAL ROOTS, and the two read almost
+   * identically at any distance: long thin wood falling straight down out of a
+   * crown. A strangler fig on a bank with a curtain of roots into the water is
+   * one of the images the word "Amazon" actually means.
+   *
+   * DARK AND GLOSSY. `leaf.light: 30` on a hue of 108 is the deepest green in
+   * the table; a fig leaf is thick, waxy and nearly black in shade, and this is
+   * the species that gets the least light of the five because of where it
+   * grows. The tints go with it — this is the one entry whose palette is
+   * allowed to be genuinely dark, because it is always seen against water or
+   * against the pale cecropias behind it, and it needs to be the hole in the
+   * middle of that.
+   */
+  fig: {
+    height: [12, 19],
+    // Wider than the willow's 0.4. A strangler's trunk is a fused basket of
+    // roots and it is fat for its height.
+    trunkRadius: 0.46,
+    taper: 0.38,
+    branchStart: 0.36,
+    branches: 11,
+    branchLength: [0.34, 0.56],
+    droop: 0.85,
     levels: 2,
     leafPerBranch: 8,
     leafOnBough: 2,
-    leafSize: [1.7, 2.8],
-    // Smooth pale grey, nearly unfissured. The bark routine's lenticels do most
-    // of the work at this lightness, which is correct: a rowan's trunk is
-    // marked with them rather than cracked.
-    bark: { hue: 30, sat: 9, light: 43 },
-    leaf: { hue: 92, sat: 40, light: 34, count: 170, length: 0.17, width: 0.66 },
-    tint: [0xc6cdae, 0xd0d4b6, 0xbcc6a4],
+    leafSize: [2.2, 3.6],
+    bark: { hue: 30, sat: 10, light: 27 },
     /**
-     * THE TINTS HERE ARE NEARLY NEUTRAL, AND THAT IS THE WHOLE TRICK.
+     * On a fig these are not lianas, they are the tree's OWN aerial roots, and
+     * they are the reason this species kept the willow's droop of 0.85. Thick,
+     * many, and dropping straight — a strangler on a bank with a curtain of
+     * roots into the water is one of the images the word "Amazon" means. Same
+     * geometry, different botany.
      *
-     * The instance colour MULTIPLIES the texel, so a white petal under the green
-     * tint the other species use comes out pale green — i.e. the blossom would
-     * be a slightly brighter patch of canopy, which is not blossom. Painting the
-     * true colour into the canvas and tinting near-neutral is what keeps white
-     * white and scarlet scarlet. The leaves are drawn a few points lighter than
-     * the other broadleaves to pay for the tint no longer lifting them.
-     *
-     * The price is that a rowan varies less from tree to tree than an oak does.
-     * It is the right way round: the variation the eye wants from a rowan is
-     * "that one is in flower and that one is in berry", not "that one is a
-     * slightly different green".
+     * SIX RATHER THAN EIGHT, for the reason the kapok's went 7 -> 5. This is
+     * the one species where the loop is arguably wrong botany — an aerial root
+     * grows down and does not swag back up — and it is kept anyway, because
+     * two thirds of these strands are still plain falls and this tree needs to
+     * read as festooned from the far bank rather than pass a botany exam.
      */
+    lianas: 9,
+    epiphytes: 6,
+    // A strangler's foot is the one place both forms occur together: a fused
+    // basket of roots that is part buttress and part prop, standing on and over
+    // whatever it grew on. It is under 1% of the wood, so both are free here.
+    buttress: { count: 5, top: 3.0, reach: 1.9, plate: 0.4, squash: 0.2 },
+    adorn: { rosettes: 6, shelves: 3, glowCount: 5 },
+    glow: { colour: 0x2a6b5e, strength: 1.0 },
+    stilts: { count: 7, top: 3.2, reach: 1.7, thick: 0.07, spread: 0.5 },
+    leaf: { hue: 108, sat: 40, light: 30, count: 178, length: 0.2, width: 0.62 },
+    tint: [0x53704a, 0x475f42, 0x627f55],
+    variants: [
+      { tint: [0x4c684a, 0x567455, 0x415c40, 0x5f7d58, 0x496a52] },
+      {
+        /**
+         * In fig. Figs grow in bunches straight out of the trunk and the older
+         * wood — not at the tips — and they are the single most important food
+         * source in this forest, which is why the toucans and aracaris in
+         * `wildlife.js` exist. Scarlet on near-black is the highest-contrast
+         * pairing anywhere in this table.
+         */
+        leaf: {
+          adorn: { kind: 'berry', count: 9, span: 0.76, hue: 8, sat: 76, light: 42 },
+        },
+        tint: [0x506c4c, 0x5a7856, 0x456044, 0x628055, 0x4d6e50],
+      },
+      {
+        // The young leaf flush. A fig puts out new leaves in a copper-pink
+        // wave, all at once, over the whole crown — so this archetype is not a
+        // dimmer version of the others, it is a different colour of tree.
+        leaf: { hue: 44, sat: 38, light: 38, count: 172 },
+        tint: [0xa88a6e, 0xb59578, 0x9b7e64, 0xc0a184, 0xa48870],
+      },
+    ],
+  },
+  /**
+   * ==== BROWNEA: THE SMALL TREE IN THE GAP ==================================
+   *
+   * The rowan's job, unchanged, in a different genus. `speciesAt` still gates
+   * this on `density < 0.7` — i.e. only where the canopy is broken — and every
+   * word of the reasoning in that file still applies: a pioneer comes up in a
+   * light gap and not under a closed roof, and a flowering tree is worth the
+   * paint only where it can be seen against sky.
+   *
+   * WHAT CHANGED IS THE COLOUR OF THE FLOWER AND IT IS A LARGE CHANGE. A rowan
+   * carries flat cream corymbs. A brownea — rose of Venezuela — carries a
+   * scarlet ball the size of a fist, hanging under the leaves in the understory
+   * gloom, and it is the brightest thing at eye level in a rainforest. Cream
+   * against green is a pale patch; scarlet against near-black green is the only
+   * genuinely saturated colour in this world that is not a bird.
+   *
+   * THE TINTS STAY NEARLY NEUTRAL and that is inherited wholesale from the
+   * rowan, for the reason its block gives: the instance colour MULTIPLIES the
+   * texel, so a scarlet petal under a green tint comes out brown. Painting the
+   * true colour into the canvas and tinting near-neutral is what keeps scarlet
+   * scarlet. Two of the three archetypes carry flower for the same reason the
+   * rowan's did — the blossom is what the eye goes to, so it is the thing that
+   * must not repeat.
+   */
+  brownea: {
+    height: [7, 13],
+    trunkRadius: 0.17,
+    taper: 0.38,
+    branchStart: 0.34,
+    branches: 9,
+    branchLength: [0.32, 0.54],
+    // Held open and up, so the flowers are not hidden under the tree's own
+    // canopy. Same reasoning as the rowan's -0.12.
+    droop: -0.08,
+    levels: 2,
+    leafPerBranch: 8,
+    leafOnBough: 2,
+    leafSize: [1.7, 2.9],
+    bark: { hue: 28, sat: 13, light: 36 },
+    // A small tree in a light gap, so it carries little: a vine needs something
+    // tall to climb and this is 7-13 m. The epiphytes are moss and small ferns
+    // on the lower limbs, which is what a shaded understory tree actually gets.
+    lianas: 4,
+    epiphytes: 5,
+    // The small tree in the gap already carries the only saturated colour in
+    // this world that is not a bird. Giving it bromeliads too is not repetition
+    // — the scarlet is 10 m up in the crown and these are at chest height.
+    adorn: { rosettes: 4, shelves: 2, glowCount: 4 },
+    glow: { colour: 0x306e4e, strength: 1.0 },
+    leaf: { hue: 102, sat: 40, light: 31, count: 174, length: 0.18, width: 0.68 },
+    tint: [0xc2c8ac, 0xccd0b4, 0xb8bfa2],
     variants: [
       {
+        // In full flower. `sat: 88` is the most saturated number in this file
+        // and it is on the smallest tree in it, in the darkest place it grows.
         leaf: {
-          adorn: { kind: 'blossom', count: 10, span: 0.9, hue: 44, sat: 26, light: 93 },
+          adorn: { kind: 'blossom', count: 9, span: 0.94, hue: 6, sat: 88, light: 52 },
         },
-        tint: [0xd6d2c2, 0xcfcdbe, 0xdcd8c6, 0xc9c8ba, 0xd8d4c0],
+        tint: [0xd0ccbc, 0xc9c6b6, 0xd6d2c0, 0xc3c1b2, 0xd2ceba],
       },
       {
+        // In pod. A brownea is a legume; the fruit is a flat brown pod.
         leaf: {
-          adorn: { kind: 'berry', count: 8, span: 0.82, hue: 14, sat: 84, light: 47 },
+          adorn: { kind: 'catkin', count: 7, span: 0.8, hue: 26, sat: 44, light: 34 },
         },
-        tint: [0xd2cdba, 0xc7c6b4, 0xd9d2c0, 0xcdc9b6, 0xd4cebc],
+        tint: [0xc6c9b0, 0xbdc2a8, 0xcfd1b8, 0xc1c5ac, 0xc9ccb4],
       },
       {
-        // Coming into flower: fewer, smaller trusses on a greener canvas, so the
-        // three rowans in a view are not the same tree three times. This is the
-        // archetype that pays for the atlas not existing — see the variants note
-        // above — and four trusses against ten is what makes it read as a
-        // different tree rather than as the same one dimmed.
+        // Coming into flower: fewer, smaller heads on a greener canvas, so the
+        // three browneas in a view are not the same tree three times.
         leaf: {
-          hue: 88,
-          light: 32,
-          count: 174,
-          adorn: { kind: 'blossom', count: 4, span: 0.72, hue: 40, sat: 22, light: 90 },
+          hue: 98,
+          light: 29,
+          count: 178,
+          adorn: { kind: 'blossom', count: 4, span: 0.74, hue: 10, sat: 80, light: 48 },
         },
-        tint: [0xc6cdae, 0xd0d4b6, 0xbcc6a4, 0xcad1b2, 0xb6c19e],
+        tint: [0xbcc4a6, 0xc6cdae, 0xb2baa0, 0xc0c8aa, 0xaeb69c],
       },
     ],
   },
@@ -498,7 +868,47 @@ export const SPECIES_NAMES = Object.keys(SPECIES);
  * seven triangles, so this is not a cost decision; the reason it is optional is
  * that a branch tip is 1–4 cm across and never worth even that.
  */
-function sweep(points, radii, flexes, phase, radial = 6, { capStart = false, capEnd = false } = {}) {
+/**
+ * `squash` AND `ref` EXIST FOR ONE OBJECT: A BUTTRESS.
+ *
+ * A ceiba's buttress is not a root, it is a PLATE — a thin vertical fin two or
+ * three metres tall running from the bole out to the ground, and the thing that
+ * makes it read is that it is wide in one axis and narrow in the other. Swept
+ * round, at any radius that is tall enough to see, it is a fat pipe leaning on
+ * the tree, which is a prop and not a buttress.
+ *
+ * So the cross-section may be an ellipse: `squash` scales the frame's NORMAL
+ * axis, leaving the binormal at full radius. That is useless on its own,
+ * because the frame this function builds is derived from the tangent and lands
+ * wherever it lands — the flat of the plate would face a different direction on
+ * every fin. `ref` pins it.
+ *
+ * PASS THE CIRCUMFERENTIAL AXIS, i.e. the one perpendicular to the vertical
+ * plane the fin lives in, and not the fin's own outward radial. Both would give
+ * the right ellipse; only this one is numerically safe. A buttress path runs
+ * outward and downward, so near the ground its tangent is very nearly the
+ * radial and `tangent × radial` collapses — the frame would spin through the
+ * widest part of the plate. The circumferential axis is perpendicular to the
+ * whole path by construction, so the cross product never degenerates. With that
+ * reference, binormal comes out inside the radial-vertical plane (the plate's
+ * wide axis) and normal comes out along the circumference (the thin one).
+ *
+ * THE NORMALS HAVE TO BE RE-DERIVED AND THIS IS THE PART THAT IS EASY TO MISS.
+ * For a point at (a·cos, b·sin) in the (normal, binormal) basis, the outward
+ * normal is (b·cos, a·sin) normalised — NOT (cos, sin). At a squash of 0.22 the
+ * difference is a factor of four along one axis, so keeping the circular normal
+ * lights a plate as though it were the pipe it is not: the flat faces come out
+ * dark and the thin edges come out bright, which is the exact inverse of what a
+ * fin does and reads as a smeared cylinder.
+ */
+function sweep(
+  points,
+  radii,
+  flexes,
+  phase,
+  radial = 6,
+  { capStart = false, capEnd = false, ref: refAxis = null, squash = 1, uvAt = null } = {}
+) {
   const rings = points.length;
   const ringVerts = rings * (radial + 1);
   // One centre, plus a rim that repeats the seam vertex so the fan can be
@@ -526,7 +936,10 @@ function sweep(points, radii, flexes, phase, radial = 6, { capStart = false, cap
     else tangent.subVectors(p, points[i - 1]).normalize();
     // Parallel-ish transport: pick whichever reference axis is least aligned
     // with the tangent, so a branch that turns straight up does not flip.
-    const ref = Math.abs(tangent.y) > 0.92 ? alt : up;
+    // A caller-supplied `ref` overrides it unless it is nearly parallel to the
+    // tangent, where the cross product would collapse and the frame spin.
+    let ref = Math.abs(tangent.y) > 0.92 ? alt : up;
+    if (refAxis && Math.abs(tangent.dot(refAxis)) < 0.9) ref = refAxis;
     binormal.crossVectors(tangent, ref).normalize();
     normal.crossVectors(binormal, tangent).normalize();
     if (i > 0) running += p.distanceTo(points[i - 1]);
@@ -535,18 +948,37 @@ function sweep(points, radii, flexes, phase, radial = 6, { capStart = false, cap
       const a = (j / radial) * TAU;
       const cos = Math.cos(a);
       const sin = Math.sin(a);
-      const nx = normal.x * cos + binormal.x * sin;
-      const ny = normal.y * cos + binormal.y * sin;
-      const nz = normal.z * cos + binormal.z * sin;
+      const ox = normal.x * cos * squash + binormal.x * sin;
+      const oy = normal.y * cos * squash + binormal.y * sin;
+      const oz = normal.z * cos * squash + binormal.z * sin;
+      // See the block above: (cos, squash·sin) rather than (cos, sin), because
+      // the outward normal of an ellipse is not the direction of its point.
+      let nx = normal.x * cos + binormal.x * sin * squash;
+      let ny = normal.y * cos + binormal.y * sin * squash;
+      let nz = normal.z * cos + binormal.z * sin * squash;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      nx /= nl;
+      ny /= nl;
+      nz /= nl;
       const idx = i * (radial + 1) + j;
-      positions[idx * 3] = p.x + nx * radii[i];
-      positions[idx * 3 + 1] = p.y + ny * radii[i];
-      positions[idx * 3 + 2] = p.z + nz * radii[i];
+      positions[idx * 3] = p.x + ox * radii[i];
+      positions[idx * 3 + 1] = p.y + oy * radii[i];
+      positions[idx * 3 + 2] = p.z + oz * radii[i];
       normals[idx * 3] = nx;
       normals[idx * 3 + 1] = ny;
       normals[idx * 3 + 2] = nz;
-      uvs[idx * 2] = j / radial;
-      uvs[idx * 2 + 1] = running * 0.35;
+      /**
+       * `BARK_U` is why the trunk texture is twice as wide as its tile: the
+       * bark occupies the left half of the canvas and the right tenth is the
+       * colour strip the adornments sample. See tree-adorn.js. Scaling u here
+       * rather than repeating the texture keeps the tile exactly one turn
+       * around the circumference, which is what it always was.
+       *
+       * `uvAt` pins every vertex of a sweep to one point of that strip, which
+       * is how a swept tube comes out scarlet instead of woody.
+       */
+      uvs[idx * 2] = uvAt ? uvAt[0] : (j / radial) * BARK_U;
+      uvs[idx * 2 + 1] = uvAt ? uvAt[1] : running * 0.35;
       flex[idx] = flexes[i];
       phases[idx] = phase;
     }
@@ -585,8 +1017,8 @@ function sweep(points, radii, flexes, phase, radial = 6, { capStart = false, cap
       normals[w * 3] = end.t.x * facing;
       normals[w * 3 + 1] = end.t.y * facing;
       normals[w * 3 + 2] = end.t.z * facing;
-      uvs[w * 2] = u;
-      uvs[w * 2 + 1] = v;
+      uvs[w * 2] = uvAt ? uvAt[0] : u * BARK_U;
+      uvs[w * 2 + 1] = uvAt ? uvAt[1] : v;
       flex[w] = end.flex;
       phases[w] = phase;
       return w++;
@@ -601,9 +1033,9 @@ function sweep(points, radii, flexes, phase, radial = 6, { capStart = false, cap
       // strip's u runs 0..1 around the circumference, and fanning that into a
       // centre smears the grain into a star.
       put(
-        end.p.x + (end.n.x * cos + end.b.x * sin) * end.r,
-        end.p.y + (end.n.y * cos + end.b.y * sin) * end.r,
-        end.p.z + (end.n.z * cos + end.b.z * sin) * end.r,
+        end.p.x + (end.n.x * cos * squash + end.b.x * sin) * end.r,
+        end.p.y + (end.n.y * cos * squash + end.b.y * sin) * end.r,
+        end.p.z + (end.n.z * cos * squash + end.b.z * sin) * end.r,
         0.5 + cos * 0.5,
         0.5 + sin * 0.5
       );
@@ -840,7 +1272,29 @@ const FAR_BRANCHES = 8;
 export function growTree(seed, speciesName) {
   const spec = SPECIES[speciesName];
   const rng = makeRng(seed);
-  const height = rngRange(rng, spec.height[0], spec.height[1]);
+  const stature = spec.stature ? rngRange(rng, spec.stature[0], spec.stature[1]) : 1;
+  const height = rngRange(rng, spec.height[0], spec.height[1]) * stature;
+  /**
+   * THE LEAVES HAVE TO COME DOWN WITH THE TREE, and forgetting it was visible
+   * from thirty metres.
+   *
+   * `leafSize` is in METRES, not in fractions of the tree, because until now
+   * every tree of a species was roughly one size — so a stature of 0.45 gave a
+   * six-metre cecropia still carrying four-metre leaf cards, and the deep-wood
+   * station came back full of enormous flat plates hanging in mid-air with a
+   * sapling under them. It reads as scenery in the wrong scale, which is
+   * exactly what it is.
+   *
+   * Softened rather than proportional, because a young plant genuinely does
+   * carry leaves large for its size — this is most of what a seedling looks
+   * like. A quarter of the size is kept fixed and three quarters follows the
+   * tree, so a 0.45 archetype gets 59% leaves rather than 45%.
+   *
+   * It is also the third time `stature` has paid for itself: card area goes as
+   * the square of this, so the short archetypes cost about a third of what the
+   * tall ones do rather than the two thirds height alone would have given.
+   */
+  const leafScale = 0.25 + 0.75 * stature;
   const trunkParts = [];
   /**
    * The same tree with its detail thrown away, for everything past 200 m.
@@ -870,13 +1324,71 @@ export function growTree(seed, speciesName) {
   const leafParts = [];
   const canopyCentre = new THREE.Vector3(0, height * 0.72, 0);
 
+  /**
+   * ==== PERSONALITY: THE THREE ARCHETYPES ARE NOW THREE TREES ===============
+   *
+   * The report was "every trunk is the same diameter and the same perfectly
+   * vertical line", and taken literally that is false — `height` varies, `lean`
+   * varies, and the scatter scales each instance 0.50-1.48. Taken as what the
+   * eye actually sees it is exact, and the reason is that all three of those
+   * are SIMILARITY transforms. Scaling a tree by 1.3 gives a tree 30% taller
+   * that is 30% fatter in the same proportion, so its outline against the
+   * canopy is the identical outline drawn larger. A stand of those is one tree
+   * printed at several sizes, which is precisely what a plantation looks like.
+   *
+   * What changes an outline is a change of RATIO, and there was none anywhere:
+   * `trunkRadius` is a species constant, so every palm in the world is exactly
+   * as slender for its height as every other palm.
+   *
+   * These four draws break that. `girth` is the important one — it moves the
+   * bole's thickness independently of the tree's height, so one archetype of a
+   * species is a thick short-looking column and another is a whip. `leanScale`
+   * roughly triples the top of the old lean range, `sway` gives the bole its
+   * own amount of wander rather than a fixed one, and `branchLow` slides where
+   * the crown starts, which is the other half of a silhouette.
+   *
+   * DRAWN FIRST, AND WHY THAT IS SAFE HERE. The note on `trunkPhase` below
+   * forbids adding draws to this stream, but what it is protecting is the
+   * authored scatter's own stream in scatter.js, which is a different generator
+   * — this one is seeded per archetype from `${seed}:${name}:${a}`. Nothing
+   * outside this function reads it, and `authored-check.mjs` hashes instance
+   * TRANSFORMS, not vertices. So the archetypes' shapes may move; where the
+   * trunks stand may not, and this cannot touch that.
+   */
+  /**
+   * `girth` HAS A CEILING THAT DEPENDS ON THE SPECIES, and it is a physics
+   * contract rather than taste.
+   *
+   * `stumpCollider` in scatter.js gives every trunk a collision radius of
+   * `max(0.82, 0.62 * instanceScale)` — a number that knows nothing about how
+   * wide the bole actually is. The kapok entry already records that its 0.70 m
+   * radius is as far as that number can be pushed; multiplying it by 1.44 would
+   * put a metre of visible bark outside the cylinder the body stops at, and you
+   * would walk into the side of the biggest tree in the wood.
+   *
+   * So the ceiling is whatever keeps the base radius under the collider, and it
+   * only bites on the two fat species: kapok clamps to 1.17 and fig to 1.44,
+   * which is the unrestricted value anyway. The FLOOR is untouched — a thin
+   * kapok is free and is most of what this draw is for, because the variation
+   * the eye wants from a stand is that not all of them are the big one.
+   */
+  const girth = rngRange(rng, 0.68, Math.min(1.44, 0.82 / spec.trunkRadius));
+  // Up to about twice the old ceiling and not three times: at 2.9 the top of a
+  // 20 m bole is five metres off its own foot, which past a certain angle stops
+  // reading as a tree that grew toward the light and starts reading as a tree
+  // that is falling over — and because this is drawn per ARCHETYPE, a view with
+  // three of them in it gets three at the same angle.
+  const leanScale = rngRange(rng, 0.35, 2.0);
+  const sway = rngRange(rng, 0.5, 2.3);
+  const branchLow = rngRange(rng, -0.09, 0.05);
+
   // ---- trunk --------------------------------------------------------------
   const trunkRings = 9;
   const trunkPoints = [];
   const trunkRadii = [];
   const trunkFlex = [];
   const leanDir = rng() * TAU;
-  const lean = rngRange(rng, 0.02, 0.09);
+  const lean = rngRange(rng, 0.02, 0.09) * leanScale;
   for (let i = 0; i < trunkRings; i++) {
     const t = i / (trunkRings - 1);
     // A trunk is never straight. A slow sway plus a small random walk gives the
@@ -884,17 +1396,32 @@ export function growTree(seed, speciesName) {
     const bend = Math.pow(t, 1.6) * height * lean;
     trunkPoints.push(
       new THREE.Vector3(
-        Math.cos(leanDir) * bend + Math.sin(t * 5.1 + rng()) * 0.14 * height * 0.06,
+        Math.cos(leanDir) * bend + Math.sin(t * 5.1 + rng()) * 0.14 * height * 0.06 * sway,
         t * height,
-        Math.sin(leanDir) * bend + Math.cos(t * 4.3 + rng()) * 0.14 * height * 0.06
+        Math.sin(leanDir) * bend + Math.cos(t * 4.3 + rng()) * 0.14 * height * 0.06 * sway
       )
     );
     // Root flare: the bottom fifth widens quickly, which is a strong cue that
     // the tree is growing out of the ground rather than resting on it.
     const flare = 1 + Math.pow(Math.max(0, 1 - t * 5), 2.2) * 0.85;
-    trunkRadii.push(spec.trunkRadius * (1 - t * (1 - spec.taper)) * flare);
+    trunkRadii.push(spec.trunkRadius * girth * (1 - t * (1 - spec.taper)) * flare);
     trunkFlex.push(Math.pow(t, 2.4) * 0.55);
   }
+  /**
+   * THE CROWN CENTRE FOLLOWS THE BOLE, which it did not have to before because
+   * the bole barely moved.
+   *
+   * `canopyCentre` is what every leaf card's normal points away from and what
+   * `normaliseCore` measures the crown's rim against, and it was pinned at the
+   * origin — fine at the old lean of at most 0.09, where the top of a 20 m tree
+   * is 1.8 m off axis. `leanScale` takes that to 5 m, and a centre 5 m out of
+   * the middle of its own crown puts one flank of every leaning tree at core 0
+   * and the other at core 1: half the canopy lit as deep interior, half as rim,
+   * along a straight line. Reading it off the trunk top costs nothing and is
+   * more correct than the constant was even before the lean was widened.
+   */
+  canopyCentre.x = trunkPoints[trunkRings - 1].x * 0.72;
+  canopyCentre.z = trunkPoints[trunkRings - 1].z * 0.72;
   /**
    * The phase is drawn ONCE and reused by both versions.
    *
@@ -966,11 +1493,172 @@ export function growTree(seed, speciesName) {
     return trunkPoints[i0].clone().lerp(trunkPoints[i1], idx - i0);
   };
 
+  /**
+   * ==== THE FOOT OF THE TREE ================================================
+   *
+   * Buttresses, stilt roots and clump stems, in that order, all of them swept
+   * tube going into `trunkParts` and none of them into `farParts`.
+   *
+   * WHY THIS IS THE CHEAPEST PART OF THE PASS AND THE MOST VISIBLE. The measured
+   * split on this build is that trunks are 73% of the frame's triangles and 8%
+   * of its marginal cost, while leaf cards cost twenty-one times more per
+   * triangle because they are alpha-tested and pay per PIXEL. Everything in
+   * this block is trunk: a buttress is 40 triangles, a stilt root 32, and a
+   * kapok's six plus a palm's nine come to well under a thousand between them,
+   * against the 2160-5940 the bole and boughs already cost. The whole block is
+   * inside the noise of the cheap layer, and it is the layer that occupies the
+   * bottom three metres of every frame.
+   *
+   * NONE OF IT REACHES THE FAR GEOMETRY, for the reason the liana block gives:
+   * past 170 m a fifteen-metre tree is 83 px tall, so a 5 cm root is a fifth of
+   * a pixel and a buttress is two. Adding them there would double the cost of
+   * the only tree layer that is genuinely expensive per triangle.
+   */
+  const trunkAt = (y) => pointOnTrunk(y / height);
+
+  const but = spec.buttress;
+  if (but) {
+    const spin = rng() * TAU;
+    for (let i = 0; i < but.count; i++) {
+      const a = spin + (i / but.count) * TAU + rngRange(rng, -0.2, 0.2);
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      const top = but.top * rngRange(rng, 0.7, 1.18);
+      const reach = but.reach * rngRange(rng, 0.76, 1.22);
+      const plate = but.plate * rngRange(rng, 0.78, 1.24);
+      const hug = baseRadius * 0.8;
+      const rings = 6;
+      const pts = [];
+      const radii = [];
+      const flexes = [];
+      for (let k = 0; k < rings; k++) {
+        const s = k / (rings - 1);
+        /**
+         * A QUARTER CIRCLE, and the two exponents are what make it a buttress
+         * rather than a prop. The path leaves the bole going straight DOWN and
+         * arrives at the ground going straight OUT, so `sweep`'s frame rotates
+         * a right angle along it — and because the plate's wide axis is the
+         * binormal, the fin is a radial flange where it meets the trunk and a
+         * long ground ridge where it lands, which is the two halves of the
+         * real object. A straight line between the same endpoints gets neither.
+         */
+        const th = s * Math.PI * 0.5;
+        const horiz = hug + (reach - hug) * Math.pow(Math.sin(th), 1.3);
+        const y = -0.32 + (top + 0.32) * Math.pow(Math.cos(th), 0.85);
+        const on = trunkAt(y);
+        pts.push(new THREE.Vector3(on.x + dx * horiz, y, on.z + dz * horiz));
+        radii.push(plate * (0.34 + 0.66 * Math.pow(s, 0.55)));
+        // Zero all the way: this is the part of the tree holding the ground.
+        flexes.push(0);
+      }
+      /**
+       * FOUR SIDES, WHICH IS NOT A BUDGET — IT IS THE RIGHT NUMBER. At radial 4
+       * the ring lands at 0°, 90°, 180°, 270°, i.e. exactly on both ends of the
+       * squashed axis and both ends of the full one, so the cross-section is a
+       * lozenge with a sharp edge top and bottom and its full width across the
+       * middle. That is a blade. Six sides would sample neither extreme and
+       * round the edge off into the pipe this is trying not to be.
+       */
+      trunkParts.push(
+        sweep(pts, radii, flexes, trunkPhase, 4, {
+          ref: new THREE.Vector3(-dz, 0, dx),
+          squash: but.squash,
+        })
+      );
+    }
+  }
+
+  const st = spec.stilts;
+  if (st) {
+    const spin = rng() * TAU;
+    for (let i = 0; i < st.count; i++) {
+      const a = spin + (i / st.count) * TAU + rngRange(rng, -0.26, 0.26);
+      const top = st.top * rngRange(rng, 0.55, 1.15);
+      const reach = st.reach * rngRange(rng, 0.55, 1.3);
+      // A stilt root does not leave the bole along a radius and arrive along
+      // the same one; it corkscrews. Without this the cone is a set of coplanar
+      // spokes and reads as a tent frame.
+      const twist = rngRange(rng, -st.spread, st.spread);
+      const thick = st.thick * rngRange(rng, 0.72, 1.4);
+      const rings = 5;
+      const pts = [];
+      const radii = [];
+      const flexes = [];
+      for (let k = 0; k < rings; k++) {
+        const s = k / (rings - 1);
+        // Cubed-ish, so the root leaves the trunk almost vertically and only
+        // swings out near the ground. Linear gives a straight guy-rope.
+        const e = Math.pow(s, 1.55);
+        const hug = baseRadius * 0.7;
+        const horiz = hug + (reach - hug) * e;
+        const y = top * (1 - s) - 0.34 * s;
+        const c = a + twist * e;
+        const on = trunkAt(Math.max(0, y));
+        pts.push(new THREE.Vector3(on.x + Math.cos(c) * horiz, y, on.z + Math.sin(c) * horiz));
+        radii.push(thick * (0.85 + 0.5 * s));
+        flexes.push(0);
+      }
+      trunkParts.push(sweep(pts, radii, flexes, trunkPhase, 4));
+    }
+  }
+
+  /**
+   * CLUMP STEMS. See the note in the palm entry for why this species needed
+   * them; the mechanism is general because a cecropia suckers too and a
+   * strangler is literally several fused stems.
+   *
+   * The stem is built here and its CROWN is pushed into the branch queue below,
+   * because the queue is where foliage gets hung and there is no reason to have
+   * a second copy of that code. The entries carry `leafCount` and `sizeScale`
+   * so a sucker's crown can be cut down to a seventh of the parent's rasterised
+   * area without touching the species numbers.
+   */
+  const clumpTops = [];
+  const cl = spec.clump;
+  if (cl) {
+    const want = (cl.min ?? 0) + Math.floor(rng() * (cl.count + 1 - (cl.min ?? 0)));
+    for (let i = 0; i < want; i++) {
+      const a = rng() * TAU;
+      const off = rngRange(rng, cl.offset[0], cl.offset[1]);
+      const h = height * rngRange(rng, cl.at[0], cl.at[1]);
+      const outLean = rngRange(rng, 0.03, 0.13);
+      const phase = rng();
+      const rings = 6;
+      const pts = [];
+      const radii = [];
+      const flexes = [];
+      // Proportional to how much shorter this stem is: a young palm is not a
+      // scaled parent, but it is close enough and it keeps the clump reading as
+      // one plant of several ages rather than as three unrelated trees.
+      const rad = spec.trunkRadius * girth * (0.42 + 0.58 * (h / height));
+      for (let k = 0; k < rings; k++) {
+        const t = k / (rings - 1);
+        const bend = Math.pow(t, 1.6) * h * outLean;
+        pts.push(
+          new THREE.Vector3(
+            baseX + Math.cos(a) * (off + bend),
+            t * h - 0.5 * (1 - t),
+            baseZ + Math.sin(a) * (off + bend)
+          )
+        );
+        radii.push(rad * (1 - t * (1 - spec.taper)) * (1 + Math.pow(Math.max(0, 1 - t * 4), 2) * 0.5));
+        flexes.push(Math.pow(t, 2.4) * 0.55);
+      }
+      trunkParts.push(sweep(pts, radii, flexes, phase, 6, { capStart: true, capEnd: true }));
+      clumpTops.push({ p: pts[rings - 1], h, rad: rad * spec.taper, phase });
+    }
+  }
+
   // ---- branches -----------------------------------------------------------
   const farStride = Math.max(1, Math.round(spec.branches / FAR_BRANCHES));
   const queue = [];
+  // `branchLow` slides where the crown starts by up to nine per cent of the
+  // tree, which on a cecropia is a metre and a half of bare pole gained or
+  // lost. Clamped off zero so a species whose whole character is a clean bole
+  // cannot accidentally sprout one at the ground.
+  const branchStart = clamp01(spec.branchStart + branchLow);
   for (let i = 0; i < spec.branches; i++) {
-    const t = spec.branchStart + (1 - spec.branchStart) * Math.pow(i / spec.branches, 0.82);
+    const t = branchStart + (1 - branchStart) * Math.pow(i / spec.branches, 0.82);
     const jitter = rngRange(rng, -0.03, 0.03);
     const origin = pointOnTrunk(t + jitter);
     // Golden-angle phyllotaxis around the trunk, so branches never line up.
@@ -991,6 +1679,40 @@ export function growTree(seed, speciesName) {
       order: i,
     });
   }
+
+  /**
+   * The clump stems' crowns, radiating from the top of each sucker.
+   *
+   * `depth: spec.levels - 1` makes every one of them TERMINAL, so it hangs its
+   * foliage and forks no further. That is both the botany (a sucker is young
+   * and has not branched yet) and the budget: letting a kapok's clump stem
+   * recurse to three levels would grow a second whole tree at half scale, and
+   * the whole point of these is that they are cheap crowns low down.
+   *
+   * `order: -1` keeps them out of the far silhouette — `-1 % farStride` is -1
+   * and never 0 — which is the same decision the rest of the foot block makes.
+   */
+  for (const stem of clumpTops) {
+    for (let i = 0; i < cl.crowns; i++) {
+      const angle = i * 2.39996 + rngRange(rng, -0.4, 0.4);
+      const up = 0.18 - spec.droop * 0.9;
+      const dir = new THREE.Vector3(Math.cos(angle), up, Math.sin(angle)).normalize();
+      queue.push({
+        origin: stem.p.clone(),
+        dir,
+        len: stem.h * rngRange(rng, spec.branchLength[0], spec.branchLength[1]) * 1.15,
+        radius: stem.rad * 0.5 + 0.015,
+        depth: Math.max(0, spec.levels - 1),
+        flexFrom: 0.42,
+        order: -1,
+        leafCount: cl.leaves,
+        sizeScale: cl.size,
+      });
+    }
+  }
+
+  /** Where the trunk's own boughs are, for the lianas and epiphytes. */
+  const boughs = [];
 
   while (queue.length) {
     const b = queue.shift();
@@ -1037,6 +1759,35 @@ export function growTree(seed, speciesName) {
     if (b.depth === 0 && b.order % farStride === 0) {
       farParts.push(sweep(everyOther(pts), everyOther(radii), everyOther(flexes), phase, 3));
     }
+    /**
+     * Remember where this bough is, for the lianas and epiphytes below.
+     *
+     * Collected here rather than recomputed afterwards because the bough's
+     * points have already been bent, drooped and jittered by the block above —
+     * reproducing that arithmetic a second time is exactly the kind of
+     * duplicate that drifts. Only the trunk's OWN boughs (depth 0) are
+     * recorded: a secondary branch is a third the length of its parent and
+     * sits inside the crown, and a vine hanging off one would be a vine
+     * hanging inside a canopy where nobody can see it.
+     */
+    if (b.depth === 0) {
+      const at = Math.round((rings - 1) * 0.62);
+      /**
+       * TWO points, not one, and the second is what makes a hanging LOOP
+       * possible. A swag needs two anchors and both of them have to be on the
+       * SAME bough: two anchors on different boughs is a chord across the crown
+       * and about half of those chords pass straight through the bole, which is
+       * a vine threaded through solid wood. Along one limb the strand can only
+       * ever hang in front of or below it.
+       */
+      boughs.push({
+        p: pts[at].clone(),
+        flex: flexes[at],
+        r: radii[at],
+        q: pts[rings - 1].clone(),
+        qFlex: flexes[rings - 1],
+      });
+    }
 
     /**
      * Hang foliage on this bough.
@@ -1061,7 +1812,7 @@ export function growTree(seed, speciesName) {
         pos.y -= droop * b.len * along * along;
         pos.x += bendX(along) - bendX(0);
         pos.z += bendZ(along) - bendZ(0);
-        const size = rngRange(rng, spec.leafSize[0], spec.leafSize[1]) * sizeScale;
+        const size = rngRange(rng, spec.leafSize[0], spec.leafSize[1]) * leafScale * sizeScale;
         leafParts.push(
           leafCard(
             canopyCentre,
@@ -1126,14 +1877,647 @@ export function growTree(seed, speciesName) {
         0.35,
         0.95,
         0.18,
-        0.8,
+        0.8 * (b.sizeScale ?? 1),
         // The bough's own flex ramp, plus a little: a leaf hanging off a limb
         // whips further than the limb does.
         (along) => Math.min(1, b.flexFrom + (1 - b.flexFrom) * Math.pow(clamp01(along), 1.5) + 0.15)
       );
     } else {
       // Terminal branch: hang the bulk of the foliage here.
-      hang(spec.leafPerBranch, 0.45, 1.08, 0.35, 1, (along) => 0.72 + 0.28 * clamp01(along));
+      hang(
+        b.leafCount ?? spec.leafPerBranch,
+        0.45,
+        1.08,
+        0.35,
+        b.sizeScale ?? 1,
+        (along) => 0.72 + 0.28 * clamp01(along)
+      );
+    }
+  }
+
+  /**
+   * ==== LIANAS AND EPIPHYTES, BAKED INTO THE ARCHETYPE ======================
+   *
+   * The brief asked for hanging vines and for bromeliads on the branches, and
+   * the obvious implementation of both — a scatter layer, instanced per tree —
+   * is the one this project cannot afford. A new streamed layer is an
+   * InstancedMesh and a draw call in every resident sector, and there are
+   * eighty-odd sectors resident at any moment.
+   *
+   * SO THEY ARE PART OF THE TREE. `growTree` already returns two merged
+   * geometries that get instanced a few hundred times each; adding wood to
+   * `trunkParts` and cards to `leafParts` costs triangles inside meshes that
+   * are already being drawn and adds NOTHING else — no draw call, no material,
+   * no program, no instance, no memory beyond the vertices themselves. It also
+   * means the vines inherit the whole rig for free: `aFlex` is written per
+   * vertex here exactly as it is for a branch, so a liana sways in the wind and
+   * breathes on the trip without one line of code being aware it exists.
+   *
+   * THE PRICE IS THAT ALL TREES OF ONE ARCHETYPE SHARE THEIR VINES. That is
+   * the same price the skeleton already pays — see the variants block at the
+   * top of this file — and it is paid in the same currency: there are three
+   * archetypes per species, the scatter picks one per tree, and each is grown
+   * from its own seed, so the wood has fifteen distinct arrangements of vine
+   * rather than one. At the density lianas actually appear that is plenty,
+   * because you never see two trees of the same archetype from an angle that
+   * lets you compare their vines.
+   *
+   * THEY ARE ON THE TRUNK MATERIAL, WHICH IS WHY THEY ARE WOODY VINES RATHER
+   * THAN LEAFY ONES. A liana IS a woody stem — a rope of wood hanging out of
+   * the canopy with its foliage forty metres up where you cannot see it — so
+   * the bark texture is the correct one and the epiphyte cards below carry all
+   * the green.
+   */
+  /**
+   * ==== WHY THE FIRST VERSION OF THIS READ AS BRANCHES ======================
+   *
+   * The complaint was "the vines from the trees look like branches", and it was
+   * exactly right. The old strand was six rings from a bough to the floor with
+   * ONE quadratic drift of up to half a metre across as much as twenty-five —
+   * i.e. a straight line to within two per cent — swept at a radius that grew
+   * from 0.022 to 0.069 down its length. Every one of those three properties is
+   * a description of a branch:
+   *
+   *   A SINGLE SLOW ARC IS WHAT A BOUGH IS. The block above says so in as many
+   *   words: a bough is "ONE slow arc rather than the old 3.4-cycle wiggle".
+   *   Giving the vine the same curve as the limb it hangs off meant the only
+   *   thing separating them was which way up they were, and half the boughs on
+   *   the fig (droop 0.85) point down anyway.
+   *
+   *   IT GOT FATTER TOWARD THE FREE END. A branch tapers 86% along its length;
+   *   this thickened by 56%. Both are monotonic profiles on a straight tube and
+   *   the eye does not read the sign of the gradient at twenty metres — it
+   *   reads "tapered pole", which is wood.
+   *
+   *   NONE OF THEM COULD DO ANYTHING WOOD CANNOT. Seven of these off one kapok,
+   *   all near-vertical, all the same length because they all ended at the same
+   *   floor, came out as a curtain of parallel rods. Parallel straight rods at
+   *   even spacing is scaffolding, and it is visible in every wide shot.
+   *
+   * SO THE FIX IS SHAPE, AND ONLY SHAPE. Nothing here costs a draw call, a
+   * material or a texture — this is still geometry merged into `trunkParts` —
+   * and the three changes are:
+   *
+   *   1. A MEANDER AT A FREQUENCY A BOUGH DOES NOT HAVE. Two sines, 1.15 and
+   *      1.75 cycles over the whole drop, on independent phases and axes. The
+   *      ring count went 6 -> 9 to carry it: the warning in the branch block
+   *      applies here word for word, and 9 rings over 1.75 cycles is five
+   *      samples per cycle, which is the floor. At six rings this wiggle would
+   *      have rendered as a zigzag and traded pipes for lightning bolts. The
+   *      frequencies were pulled down from 1.35 and 2.2 for exactly that
+   *      reason — see the cost paragraph at the end of this block, where the
+   *      rings had to come back and the sampling floor is what decided how far.
+   *
+   *   2. CONSTANT RADIUS. A liana is a rope: it is the same thickness at the
+   *      canopy as at the floor, because unlike a branch it is not holding
+   *      anything up. What varies instead is a slow varicosity of ±14%, which
+   *      is the knotting a real one has and is NOT a taper — it goes both ways
+   *      along the strand, so there is no gradient for the eye to read as a
+   *      direction. Thinner too, 0.019-0.034 against 0.028-0.055: the old range
+   *      overlapped a kapok's branch TIPS.
+   *
+   *   3. TWO IN FIVE ARE SWAGS — a hairpin that leaves the bough, falls, and
+   *      comes back UP to a second anchor further out on the same limb. This is
+   *      the one that does the work, because it is the one shape in the frame
+   *      that wood cannot make: a branch has one free end and a swag has none.
+   *      One of these in a view is enough to tell the eye what all the strands
+   *      beside it are, which is why the split is by count rather than by
+   *      species — the fig and the kapok get two or three each.
+   *
+   *
+   * ==== WHAT IT COST, AND WHERE IT WAS PAID FROM ============================
+   *
+   * A strand went from 40 triangles to 64 (a fall) or 80 (a swag), so at the
+   * original counts this put 2.9 M triangles into a 77 M resident ring — and
+   * `perf:bench` duly failed every scenario on the ±2.5% triangle gate at
+   * +2.6% to +3.2%. THE INTERESTING PART IS WHICH SPECIES PAID, because it is
+   * not the one the eye blames: a kapok carries seven of these and a cecropia
+   * two, but there are 8393 cecropias resident and 4721 kapoks, so the
+   * cecropia's two vines cost MORE of the frame than the kapok's seven. A
+   * per-tree budget is the wrong unit; the unit is per-tree times share of the
+   * wood, and this table's shares run 38 / 33 / 18.5 / 10 / ~0.
+   *
+   * So the rings came back to 9 and 11 (the sampling floor above is what
+   * stopped them going lower), and the two counts that are multiplied by a
+   * large share came down: kapok 7 -> 5 and fig 8 -> 6. That is 1.0 M rather
+   * than 2.9 M, about +1.3%, inside the gate with room.
+   *
+   * FIVE IS NOT A LOSS AGAINST SEVEN AND THAT IS THE WHOLE POINT OF THE CHANGE.
+   * Seven identical rods read as one repeated object, which is why the old ones
+   * looked like scaffolding; five strands of which two are loops and three
+   * meander differently read as a tangle, because variety is what the eye
+   * counts down here and not quantity. It is the same trade the understorey's
+   * "fewer and bigger" pass made, in the same direction, for the same reason.
+   *
+   * NOTHING OF THIS REACHES THE FAR GEOMETRY. Lianas go into `trunkParts` and
+   * never into `farParts`, so past 200 m a tree has no vines at all and none of
+   * the above is being paid twice. At that range a 4 cm strand is a fifth of a
+   * pixel.
+   */
+  const lianaCount = spec.lianas ?? 0;
+  for (let i = 0; i < lianaCount && boughs.length; i++) {
+    const from = boughs[Math.floor(rng() * boughs.length)];
+    const swing = rng() * TAU;
+    const lean = rngRange(rng, 0.15, 0.5);
+    /**
+     * FOUR TO SIXTEEN CENTIMETRES THROUGH, against the 3.8-6.8 this was.
+     *
+     * The old range was chosen against a real objection — a strand as thick as
+     * a branch tip reads as a branch — and it overcorrected into a different
+     * failure, which the first pass at the empty band made obvious: at 20 m a
+     * 5 cm strand is three pixels wide, and three dark pixels crossing a
+     * background of dark trunks is not a vine, it is nothing. The band was not
+     * empty of strands, it was empty of anything the eye could resolve.
+     *
+     * IT IS FREE. Radius is not a triangle: this is the same nine or eleven
+     * rings at four sides it always was, and it changes only how many pixels
+     * each one covers. Given that trunks are 73% of the frame's triangles and
+     * 8% of its cost, widening the cheap layer is the best trade available.
+     *
+     * The branch-confusion argument survives because the other two properties
+     * that block explains — constant radius with a knot rather than a taper,
+     * and a meander no bough has — are what actually separate the two shapes.
+     * Real canopy lianas run to 20 cm and the big Bauhinia to more than that;
+     * 3.8 cm was never the honest number, it was a proxy for "not a branch".
+     */
+    const thick = rngRange(rng, 0.021, 0.08) * (spec.lianaThick ?? 1);
+    // The two meanders. Amplitude is a fraction of the strand's own length, so
+    // a short swag wanders proportionally as much as a thirty-metre fall.
+    const waveA = rngRange(rng, 0.02, 0.045);
+    const waveB = rngRange(rng, 0.012, 0.03);
+    const phaseA = rng() * TAU;
+    const phaseB = rng() * TAU;
+    const knot = rng() * TAU;
+    /**
+     * Every draw this strand makes happens HERE, unconditionally, before either
+     * branch below. The two paths do not consume the same number of numbers on
+     * their own, and this stream is shared with every liana and epiphyte after
+     * this one — so drawing inside the branches would make the shape of vine 3
+     * depend on whether vine 2 happened to be a loop, which is the kind of
+     * coupling that turns a one-line tweak into a different tree.
+     */
+    const wantSwag = rng() < 0.4;
+    const phase = rng();
+    const sagFrac = rngRange(rng, 0.35, 0.7);
+    /**
+     * `lianaFromTip` is how the cecropia gets five strands without losing the
+     * clean pale bole that is the only landmark this forest has past forty
+     * metres. `from.q` is the far END of a limb, so a strand tied there hangs
+     * two to four metres out from the trunk and never crosses it.
+     */
+    const fromTip = rng() < (spec.lianaFromTip ?? 0.5);
+    /**
+     * Drawn HERE, unconditionally, for the reason the block above this one
+     * gives: the two paths below consume different numbers of randoms on their
+     * own, and this stream is shared with every strand after this one.
+     */
+    const foliage = [];
+    for (let n = 0; n < 2; n++) {
+      foliage.push({
+        at: rngRange(rng, 0.42, 0.94),
+        size: rngRange(rng, spec.leafSize[0], spec.leafSize[1]) * leafScale * 0.55,
+        tilt: { x: rngRange(rng, -1.2, 1.2), y: rng() * TAU, z: rngRange(rng, -1.2, 1.2) },
+        off: new THREE.Vector3(rngRange(rng, -0.4, 0.4), rngRange(rng, -0.3, 0.1), rngRange(rng, -0.4, 0.4)),
+      });
+    }
+
+    const pts = [];
+    const radii = [];
+    const flexes = [];
+    /** Constant, with a slow knot in it that goes both ways. See (2) above. */
+    const fatten = (t) => thick * (1 + 0.14 * Math.sin(t * 4.6 + knot));
+
+    /**
+     * A SWAG NEEDS ROOM AND MOST BOUGHS DO NOT HAVE IT. `p` and `q` are 0.62
+     * and 1.0 along the limb, so on a brownea's two-metre bough they are 0.75 m
+     * apart and the loop is a hairpin you cannot see round; under a metre it is
+     * indistinguishable from a fold in the bark. Falling through to a plain
+     * strand is the right failure — the small trees are the ones whose two
+     * lianas are supposed to be inconspicuous.
+     */
+    const span = from.p.distanceTo(from.q);
+    if (wantSwag && span > 1.0) {
+      /**
+       * How far it sags. Bounded BELOW the anchor's own height so a swag on a
+       * low bough cannot dip into the dirt, and never more than nine metres
+       * because past that it stops reading as a loop and reads as two strands
+       * that happen to meet.
+       */
+      const low = Math.min(from.p.y, from.q.y);
+      const sag = Math.min(9, Math.max(1.2, low * sagFrac));
+      const rings = 11;
+      for (let k = 0; k < rings; k++) {
+        const t = k / (rings - 1);
+        const p = from.p.clone().lerp(from.q, t);
+        // sin, not a parabola: a hanging chain leaves both anchors going
+        // steeply DOWN and flattens at the bottom, and a parabola through the
+        // same three points leaves them at a shallow angle. That angle at the
+        // anchor is the whole difference between a rope over a branch and a
+        // rubber band stretched between two nails.
+        p.y -= sag * Math.pow(Math.sin(Math.PI * t), 0.62);
+        p.x += Math.sin(t * TAU * 1.15 + phaseA) * span * waveA * 2.4;
+        p.z += Math.cos(t * TAU * 1.75 + phaseB) * span * waveB * 2.4;
+        pts.push(p);
+        radii.push(fatten(t));
+        /**
+         * Clamped at BOTH ends and free in the middle, which is the opposite of
+         * the fall below and of a branch. Getting this wrong is not subtle: a
+         * loop whose flex ramps one way pivots about one anchor in the wind and
+         * tears itself off the other.
+         */
+        const base = from.flex + (from.qFlex - from.flex) * t;
+        flexes.push(Math.min(1, base + (1 - base) * Math.pow(Math.sin(Math.PI * t), 0.7) + 0.08));
+      }
+    } else {
+      /**
+       * A HANGING ROPE. It stops at 0.35 rather than at 0 because the instance
+       * scale runs 0.50-1.48 and the tree is sunk 0.25 m — a vine that ended
+       * exactly at the origin would disappear into the dirt on the small ones
+       * and float on the large. Ending it short means the worst case is a vine
+       * that stops a little above the litter, which is what a real one does
+       * anyway: they are browsed and broken off at the bottom.
+       */
+      const anchor = fromTip ? from.q : from.p;
+      const drop = anchor.y - 0.35;
+      if (drop < 1.5) continue;
+      const rings = 9;
+      for (let k = 0; k < rings; k++) {
+        const t = k / (rings - 1);
+        pts.push(
+          new THREE.Vector3(
+            anchor.x +
+              Math.cos(swing) * lean * t * t +
+              Math.sin(t * TAU * 1.15 + phaseA) * drop * waveA,
+            anchor.y - drop * t,
+            anchor.z +
+              Math.sin(swing) * lean * t * t +
+              Math.cos(t * TAU * 1.75 + phaseB) * drop * waveB
+          )
+        );
+        radii.push(fatten(t));
+        /**
+         * FLEX RISES DOWNWARD, which is the opposite of a branch and is the
+         * whole reason this looks like a rope. A bough is clamped at the trunk
+         * and free at the tip, so its flex rises outward; a vine is clamped at
+         * the TOP and free at the BOTTOM, so the far end from the anchor is the
+         * bottom. Getting this backwards gives a vine that is rigid where it
+         * hangs and whips where it is tied on.
+         */
+        flexes.push(Math.min(1, from.flex + (1 - from.flex) * Math.pow(t, 0.8) + 0.1));
+      }
+    }
+    // Four sides. A vine is 4 cm thick and never fills more than a couple of
+    // pixels across; the note on FAR_BRANCHES applies with more force here.
+    trunkParts.push(sweep(pts, radii, flexes, phase, 4));
+
+    /**
+     * ==== LEAVES ON THE ROPE, WHICH IS THE MID-STOREY ========================
+     *
+     * The block above is right that a liana is a bare woody stem with its
+     * foliage forty metres up — for a MATURE canopy liana. It is not right
+     * about the thing the eye is missing, which is green between two and twelve
+     * metres. Every strand in a real forest has something growing on it at that
+     * height: the vine's own lower shoots, a philodendron that climbed it, moss
+     * with a fern in the moss.
+     *
+     * TWO CARDS PER STRAND, AND THEY ARE THE ONLY EXPENSIVE THING IN THIS PASS.
+     * Everything else added here is swept tube at 8% marginal cost; these are
+     * alpha-tested leaf cards at 21x that per triangle, and worse, they land
+     * LOW — which means close to the eye, which means many more pixels each
+     * than a card in a crown fifteen metres up. Two rather than four, and 0.55
+     * of the species leaf size rather than full, is the whole of the restraint:
+     * with the counts in the table that is 10 on a cecropia, 16 on a kapok, 18
+     * on a fig, against crowns of 150-200. Roughly 8% more cards on the two
+     * species that carry the wood.
+     *
+     * They take the STRAND's flex, not a leaf's, so a clump of vine foliage
+     * swings with the rope it is tied to instead of fluttering on its own.
+     */
+    for (const f of foliage) {
+      const idx = Math.min(pts.length - 1, Math.round(f.at * (pts.length - 1)));
+      leafParts.push(
+        leafCard(
+          canopyCentre,
+          pts[idx].clone().add(f.off),
+          f.size,
+          f.tilt,
+          Math.min(1, flexes[idx] + 0.06),
+          phase
+        )
+      );
+    }
+  }
+
+  /**
+   * EPIPHYTES: clumps of green sitting ON the boughs, not hanging off the tips.
+   *
+   * This is the detail that most separates a tropical tree from a temperate
+   * one at close range. Every horizontal surface in a rainforest carries
+   * something growing on it — bromeliads, orchids, ferns, moss — so a bough is
+   * not a bare pipe with leaves at the end, it is furred along its whole
+   * length.
+   *
+   * THEY ARE PLACED ON THE BOUGH ITSELF and that is deliberate rather than
+   * convenient. `normaliseCore` computes `aCore` from each card's distance to
+   * the canopy centre and the RIM is the bright end — so a card stuck on the
+   * trunk near the ground would be the furthest thing from the centre and
+   * would therefore be lit as the brightest part of the tree, which is exactly
+   * backwards for a plant living in the deepest shade the tree casts. Sitting
+   * them on the boughs keeps them inside the crown volume where `aCore` means
+   * what it is supposed to mean, and it is also where epiphytes actually grow:
+   * on the horizontal wood, not the vertical.
+   *
+   * Small and squat — 0.55 of the species leaf size — because a bromeliad is a
+   * rosette the size of a dinner plate against a bough several metres long.
+   */
+  /**
+   * ==== AND SOME OF THEM COME DOWN THE TRUNK ================================
+   *
+   * The block above argues that an epiphyte belongs on a bough because that is
+   * where `aCore` means what it is supposed to mean, and it is right about the
+   * mechanism and wrong about which way to resolve it.
+   *
+   * `aCore` is distance from the crown centre, and the RIM is the bright end,
+   * so a card stuck low on the bole comes out at core 1 and is lit as the
+   * brightest thing on the tree. The old note reads that as an artefact to be
+   * avoided — a shade plant rendered as though it were in full sun. But the
+   * complaint this pass exists to answer is that there is NO COLOUR AND NO
+   * BRIGHTNESS ANYWHERE AT EYE LEVEL, and a lit card at three metres is not a
+   * bug against that brief, it is the entire point: a bromeliad wedged in a
+   * fork genuinely is the brightest thing in the understorey, because it is the
+   * only thing down there catching a shaft.
+   *
+   * SO IT IS A REDISTRIBUTION AND NOT AN ADDITION. Roughly two in five of the
+   * cards a species already paid for move from twelve metres up to between one
+   * and seven — no extra card, no extra triangle, no extra rasterised area, and
+   * the area moves from where 87% of the foliage already was to where none of
+   * it was. It is the best-value line in this file.
+   *
+   * The height is capped at half the tree so this cannot put a rosette above
+   * the crown of a short brownea, and it is offset to the bole's SURFACE rather
+   * than its axis, or on a kapok the card would be swallowed by a bole two and
+   * a half metres through.
+   */
+  const epiCount = spec.epiphytes ?? 0;
+  for (let i = 0; i < epiCount && boughs.length; i++) {
+    const on = boughs[Math.floor(rng() * boughs.length)];
+    // Every draw happens before the branch, for the reason the liana block
+    // gives: the two placements below do not consume the same numbers and this
+    // stream is shared with everything after them.
+    const low = rng() < 0.42;
+    const y = Math.min(height * 0.5, rngRange(rng, 1.2, 7.2));
+    const around = rng() * TAU;
+    const out = rngRange(rng, 0.55, 1.0);
+    const jitter = new THREE.Vector3(
+      rngRange(rng, -0.5, 0.5),
+      rngRange(rng, -0.1, 0.34),
+      rngRange(rng, -0.5, 0.5)
+    );
+    const size = rngRange(rng, spec.leafSize[0], spec.leafSize[1]) * leafScale * 0.55;
+    const tilt = { x: rngRange(rng, -0.5, 0.5), y: rng() * TAU, z: rngRange(rng, -0.5, 0.5) };
+    const phase = rng();
+    let pos;
+    let flex;
+    if (low) {
+      const on2 = trunkAt(y);
+      const t = clamp01(y / height);
+      const r = spec.trunkRadius * girth * (1 - t * (1 - spec.taper));
+      pos = new THREE.Vector3(
+        on2.x + Math.cos(around) * (r + size * 0.24) * out,
+        y,
+        on2.z + Math.sin(around) * (r + size * 0.24) * out
+      );
+      // The bole's own flex at that height, so a rosette wedged in a fork moves
+      // with the wood it is wedged in rather than fluttering like a leaf.
+      flex = Math.pow(t, 2.4) * 0.55 + 0.04;
+    } else {
+      pos = on.p.clone().add(jitter);
+      flex = Math.min(1, on.flex + 0.08);
+    }
+    leafParts.push(leafCard(canopyCentre, pos, size, tilt, flex, phase));
+  }
+
+  /**
+   * ==== THE COLOUR AT EYE LEVEL =============================================
+   *
+   * Everything below is opaque swept tube on the BARK material, coloured by
+   * pointing its uv at one band of the colour strip described in
+   * tree-adorn.js. No card, no alpha test, no second material, no draw call —
+   * the same deal the lianas got, for the same reason.
+   *
+   * WHY IT IS GEOMETRY AND NOT A PICTURE. A bromeliad drawn on a cutout card
+   * would be a quarter of the triangles, and it would cost the trunk layer its
+   * `alphaTest`-free status: 73% of the frame's triangles are trunks and they
+   * are 8% of its marginal cost precisely because they are opaque fragments
+   * that write depth and let early-Z throw the hidden ones away. Turning the
+   * cheapest layer in the frame into an alpha-tested one to decorate it is a
+   * bad trade at any card count, so these are solids.
+   *
+   * WHERE THEY GO. Mostly on the BOLE between one and eight metres, which is
+   * the height the whole pass is about, and a few in the bough forks. The
+   * epiphyte block above moved a share of the canopy cards down here for the
+   * same reason; this is the part that brings a colour the canopy cannot.
+   */
+  const basis = (axis) => {
+    const e1 = new THREE.Vector3(1, 0, 0);
+    if (Math.abs(axis.x) > 0.85) e1.set(0, 0, 1);
+    e1.crossVectors(axis, e1).normalize();
+    const e2 = new THREE.Vector3().crossVectors(axis, e1).normalize();
+    return [e1, e2];
+  };
+
+  /**
+   * A TANK BROMELIAD: straps out and down, bracts up the middle.
+   *
+   * The rosette is what makes it read as a bromeliad rather than as a green
+   * blob — six straps radiating from one point, arcing up and then falling
+   * away, is a shape nothing else on a tree has. Each strap is swept with a
+   * flattened section (see `sweep`) so it is a blade rather than a worm, thin
+   * across the circumference of its own little rosette and wide in the plane it
+   * curves through, which is how a strap leaf is actually held.
+   */
+  const rosette = (centre, outward, size, flexV, phase, bract) => {
+    const axis = new THREE.Vector3(0, 0.78, 0).addScaledVector(outward, 0.62).normalize();
+    const [e1, e2] = basis(axis);
+    const straps = 6;
+    const spin = rng() * TAU;
+    for (let k = 0; k < straps; k++) {
+      const a = spin + (k / straps) * TAU + rngRange(rng, -0.22, 0.22);
+      const dir = e1.clone().multiplyScalar(Math.cos(a)).addScaledVector(e2, Math.sin(a));
+      const len = size * rngRange(rng, 0.8, 1.3);
+      const rings = 4;
+      const pts = [];
+      const radii = [];
+      const flexes = [];
+      for (let i = 0; i < rings; i++) {
+        const s = i / (rings - 1);
+        // Up, over and down. The negative quadratic is what puts the tip below
+        // the shoulder, which is the whole silhouette of a rosette.
+        const rise = size * (1.15 * s - 0.82 * s * s);
+        const out = len * Math.pow(s, 1.2);
+        pts.push(centre.clone().addScaledVector(axis, rise).addScaledVector(dir, out));
+        radii.push(size * 0.15 * (1 - 0.72 * s) + 0.004);
+        flexes.push(flexV);
+      }
+      trunkParts.push(
+        sweep(pts, radii, flexes, phase, 4, {
+          // Thin across the blade: perpendicular to both the rosette's axis and
+          // this strap's own direction.
+          ref: new THREE.Vector3().crossVectors(axis, dir).normalize(),
+          squash: 0.3,
+          uvAt: bandUV(BAND.strap),
+        })
+      );
+    }
+    // The bract. Short, near-vertical, and the only saturated thing down here.
+    const uv = bandUV(bract);
+    for (let k = 0; k < 3; k++) {
+      const a = rng() * TAU;
+      const dir = e1.clone().multiplyScalar(Math.cos(a)).addScaledVector(e2, Math.sin(a));
+      const rings = 3;
+      const pts = [];
+      const radii = [];
+      const flexes = [];
+      const len = size * rngRange(rng, 0.6, 0.95);
+      for (let i = 0; i < rings; i++) {
+        const s = i / (rings - 1);
+        pts.push(
+          centre
+            .clone()
+            .addScaledVector(axis, size * 0.12 + len * s)
+            .addScaledVector(dir, size * 0.22 * s * s)
+        );
+        radii.push(size * 0.115 * (1 - 0.6 * s) + 0.005);
+        flexes.push(flexV);
+      }
+      trunkParts.push(sweep(pts, radii, flexes, phase, 4, { uvAt: uv }));
+    }
+  };
+
+  /**
+   * A BRACKET FUNGUS, and the same primitive does the glowing caps at the foot.
+   *
+   * `ref` IS WORLD UP, WHICH IS THE OPPOSITE END OF THE FRAME FROM THE BUTTRESS
+   * AND GIVES THE OPPOSITE OBJECT FROM THE SAME NUMBER.
+   *
+   * `sweep` scales the NORMAL axis, and normal = (tangent x ref) x tangent. With
+   * ref up and a tangent running outward from the bole, the normal comes out
+   * vertical and the binormal horizontal — so a squash below one is thin
+   * vertically and full width across, i.e. a shelf. The buttress passes the
+   * circumferential axis instead and gets its normal along the circumference,
+   * so the identical value there is a fin standing on edge.
+   *
+   * The first version of this passed 3.4, reasoning that a bracket is "wide",
+   * and squashed the wrong axis by a factor of thirteen: every fungus in the
+   * forest came out as a metre-and-a-half orange flag standing vertically off
+   * the trunk. Which axis `squash` acts on is not guessable from the call site
+   * and has to be read off the frame.
+   */
+  const shelf = (at, outward, size, flexV, phase, band) => {
+    const rings = 4;
+    const pts = [];
+    const radii = [];
+    const flexes = [];
+    for (let i = 0; i < rings; i++) {
+      const s = i / (rings - 1);
+      pts.push(
+        at
+          .clone()
+          .addScaledVector(outward, size * 1.05 * s)
+          .add(new THREE.Vector3(0, -size * 0.3 * s * s, 0))
+      );
+      radii.push(size * (0.2 + 0.42 * Math.sin(s * Math.PI * 0.8)) + 0.004);
+      flexes.push(flexV);
+    }
+    trunkParts.push(
+      sweep(pts, radii, flexes, phase, 4, {
+        ref: new THREE.Vector3(0, 1, 0),
+        squash: 0.26,
+        uvAt: bandUV(band),
+      })
+    );
+  };
+
+  const ad = spec.adorn;
+  if (ad) {
+    /**
+     * NO CREAM. It was in this list for one round and it is the reason the
+     * glade came back with what looked like white paper stuck to every third
+     * bole: at luma 226 it is the brightest entry in the strip, and a bract is
+     * a SPIKE — a long thin near-white object at four metres reads as damage or
+     * as litter, never as a flower. Cream survives on the fungus shelf, which
+     * is a flat disc lying against the bark and is a shape the eye already
+     * expects to be pale.
+     */
+    const BRACTS = [BAND.scarlet, BAND.orange, BAND.magenta, BAND.orange];
+    for (let i = 0; i < (ad.rosettes ?? 0); i++) {
+      const onBough = rng() < 0.3 && boughs.length > 0;
+      const which = Math.floor(rng() * Math.max(1, boughs.length));
+      const y = Math.min(height * 0.55, rngRange(rng, 0.9, 7.5));
+      const around = rng() * TAU;
+      const size = rngRange(rng, 0.22, 0.4) * (0.7 + 0.3 * Math.min(1.6, height / 15));
+      const bract = BRACTS[Math.floor(rng() * BRACTS.length)];
+      const phase = rng();
+      const outward = new THREE.Vector3(Math.cos(around), 0, Math.sin(around));
+      if (onBough) {
+        const on = boughs[which];
+        rosette(on.p.clone().add(new THREE.Vector3(0, on.r * 0.6, 0)), outward, size, Math.min(1, on.flex), phase, bract);
+      } else {
+        const t = clamp01(y / height);
+        const r = spec.trunkRadius * girth * (1 - t * (1 - spec.taper));
+        const on = trunkAt(y);
+        rosette(
+          new THREE.Vector3(on.x + outward.x * r * 0.85, y, on.z + outward.z * r * 0.85),
+          outward,
+          size,
+          Math.pow(t, 2.4) * 0.55,
+          phase,
+          bract
+        );
+      }
+    }
+    for (let i = 0; i < (ad.shelves ?? 0); i++) {
+      const y = Math.min(height * 0.5, rngRange(rng, 0.5, 5.5));
+      const around = rng() * TAU;
+      const size = rngRange(rng, 0.14, 0.27);
+      const phase = rng();
+      const band = rng() < 0.86 ? BAND.ochre : BAND.cream;
+      const t = clamp01(y / height);
+      const r = spec.trunkRadius * girth * (1 - t * (1 - spec.taper));
+      const on = trunkAt(y);
+      const outward = new THREE.Vector3(Math.cos(around), 0, Math.sin(around));
+      shelf(
+        new THREE.Vector3(on.x + outward.x * r * 0.9, y, on.z + outward.z * r * 0.9),
+        outward,
+        size,
+        Math.pow(t, 2.4) * 0.55,
+        phase,
+        band
+      );
+    }
+    /**
+     * The foxfire. Small, low, and clustered at the foot of the bole where a
+     * dead buttress or a root would actually be rotting — a shelf of glowing
+     * fungus at knee height is the one thing in this world that makes its own
+     * light and is not an insect.
+     */
+    for (let i = 0; i < (ad.glowCount ?? 0); i++) {
+      const y = rngRange(rng, 0.05, 0.8);
+      const around = rng() * TAU;
+      const size = rngRange(rng, 0.04, 0.085);
+      const phase = rng();
+      const t = clamp01(y / height);
+      const r = spec.trunkRadius * girth * (1 - t * (1 - spec.taper)) * 1.2;
+      const on = trunkAt(y);
+      const outward = new THREE.Vector3(Math.cos(around), 0, Math.sin(around));
+      shelf(
+        new THREE.Vector3(on.x + outward.x * r * 0.9, y, on.z + outward.z * r * 0.9),
+        outward,
+        size,
+        0,
+        phase,
+        BAND.glow
+      );
     }
   }
 
@@ -1175,7 +2559,7 @@ export function growTree(seed, speciesName) {
  */
 export function speciesMaterials(name, archetypes = 1) {
   const spec = SPECIES[name];
-  const bark = barkTexture({ key: name, ...spec.bark, seed: `bark:${name}` });
+  const bark = trunkAtlas({ key: name, ...spec.bark, seed: `bark:${name}` });
   bark.repeat.set(1, 1);
 
   /**
@@ -1202,13 +2586,30 @@ export function speciesMaterials(name, archetypes = 1) {
    * it will not work and nothing will say so. This flag comes off in the same
    * commit or the change is a silent no-op.
    */
+  /**
+   * `emissive` ON BARK IS THE BIOLUMINESCENT FUNGUS AND NOTHING ELSE.
+   *
+   * `emissiveFromMap` modulates it by the map's own texel, so the glow band —
+   * near-white by construction — emits at full strength while the bark beside
+   * it, at 0.05-0.10 linear, emits at under a tenth of that and is invisible.
+   * The whole argument, including why the cecropia is exempt, is in the block
+   * on the glow in tree-adorn.js; the short version is that this is ADDED
+   * radiance and is never multiplied by any light term, which is the recorded
+   * bug this project has already paid for once with the fireflies.
+   *
+   * No slot is set when a species has no glow, so those materials compile
+   * exactly as they did.
+   */
   const trunkMat = makeLiving(
     new THREE.MeshLambertMaterial({
       map: bark,
       color: 0xffffff,
+      ...(spec.glow
+        ? { emissive: new THREE.Color(spec.glow.colour), emissiveIntensity: spec.glow.strength }
+        : {}),
     }),
     'plant',
-    { bark: true, receivesShadow: false }
+    { bark: true, receivesShadow: false, emissiveFromMap: !!spec.glow }
   );
 
   /**

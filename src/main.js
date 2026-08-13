@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Clock, clamp01 } from './core/util.js';
 import { buildForest } from './world/forest.js';
-import { buildAtmosphere } from './world/atmosphere.js';
+import { CAVE_BURIED, buildAtmosphere } from './world/atmosphere.js';
 import { buildSpeakers } from './world/speakers.js';
 import { aimGround } from './world/aim.js';
 import { buildFauna } from './world/fauna.js';
@@ -231,6 +231,14 @@ const caves = buildCaves(scene);
 let caveAudio = null;
 /** 0 outside, 1 deep underground. Eased, because fog and reverb ride on it. */
 let caveMix = 0;
+/**
+ * What the burial is currently hiding, or the empty string for nothing.
+ *
+ * A latch rather than a recomputation, because the visibility flags it writes
+ * have other authors and holding them true every frame would take them over.
+ * See the block that reads it.
+ */
+let caveHidden = '';
 /**
  * Scratch for the daylight handed to the cave material each frame.
  *
@@ -533,6 +541,75 @@ quality.register('particleDensity', (v) => {
 quality.register('instanceDensity', (v) => forest.culler.setDensity(v));
 
 /**
+ * TREE REACH, AND WHY IT IS THREE DISTANCES BEHIND ONE CONTROL.
+ *
+ * The knob's value is the outer reach; the near/far handover and the canopy's
+ * own reach come from this table. They cannot be independent — the near trunk
+ * and the far sweep are two packers over one payload whose bands must MEET
+ * exactly, or every distant trunk is drawn twice at two resolutions z-fighting
+ * with itself — so the pairing lives in one place and `forest.setReach`
+ * enforces it. The rows are the arms that were actually measured; see the
+ * `treeReach` block in quality.js for the millisecond table they came from.
+ *
+ * `leafReach` is shorter than `reach` on every row but the last, and that
+ * asymmetry is where the win is: the canopy is 45% of the frame at low for
+ * 3.50 M of its 16.08 M triangles, about ten times the cost per triangle of
+ * trunk. Bare trunks at the edge of sight are cheap; leaves are not.
+ */
+const REACH_TABLE = new Map([
+  [120, { lod: 60, leafReach: 90 }],
+  [180, { lod: 90, leafReach: 110 }],
+  [250, { lod: 120, leafReach: 150 }],
+  [384, { lod: 170, leafReach: 384 }],
+]);
+
+let treeReach = 384;
+let shadowsOn = true;
+
+/**
+ * `alwaysNear` IS SHADOW ARITHMETIC, SO IT FOLLOWS THE SHADOW SWITCH.
+ *
+ * 82 m is 58 m of shadow half-extent plus 6 m of anchor trail plus ~15 m of
+ * canopy lean, and inside it a bucket skips the frustum test entirely — a tree
+ * behind your head must still exist or its shadow vanishes off the ground in
+ * front of you as you turn. With the shadow map off there is no shadow to
+ * preserve, and all it does is vertex-shade trees that produce no fragments.
+ *
+ * Worth 18% of submitted triangles, and — being honest about the size of it —
+ * only about 0.1 ms on the desktop part this was measured on, at the edge of
+ * what that rig resolves. It is kept because of WHAT it removes rather than
+ * how much: pure vertex and submission work, on a frame documented vertex-bound
+ * at 67%, which is the cost class that scales worst on the weak machines this
+ * is for.
+ */
+function applyReach() {
+  const { lod, leafReach } = REACH_TABLE.get(treeReach) ?? REACH_TABLE.get(384);
+  forest.setReach(lod, treeReach, { leafReach, alwaysNear: shadowsOn ? 82 : 0 });
+}
+
+quality.register('treeReach', (v) => {
+  treeReach = REACH_TABLE.has(v) ? v : 384;
+  applyReach();
+});
+
+/**
+ * A SECOND setter on `shadows`, and it has to live down here rather than beside
+ * the first one.
+ *
+ * The registry supports several setters per knob by design, and this is the
+ * case it was designed for: the shadow map and the reach band are owned by two
+ * different subsystems that happen to agree about one fact. Putting this line
+ * in the setter at the top of the file would run it during that registration —
+ * before `shadowsOn` and `treeReach` are initialised — and a `let` in its
+ * temporal dead zone throws rather than reading undefined, so the app would
+ * fail to boot. Registered here, both bindings exist by the time it fires.
+ */
+quality.register('shadows', (on) => {
+  shadowsOn = !!on;
+  applyReach();
+});
+
+/**
  * `plantVeins` LIVED HERE — a define flip on the grass and fern materials that
  * skipped the vein block, worth 0.11 ms at the clearing at peak and 0.28 ms in
  * the canopy. The filaments themselves were removed on 2026-08-11, so every
@@ -668,6 +745,34 @@ function findInteractable() {
     // does anyway. See `Sitting.update`.
     return null;
   }
+
+  /**
+   * NOTHING BELOW THIS LINE IS REACHABLE THROUGH A MOUNTAIN, and every one of
+   * them was.
+   *
+   * All four candidates are found by HORIZONTAL distance — `seats.nearest`,
+   * `ferry.distanceTo`, `speakers.distanceTo` and the patch loop all take
+   * (x, z) and nothing else. That was exactly right while the world was a
+   * height field with one surface, because two things at the same xz within
+   * three metres were two things next to each other. A passage sixty metres
+   * under a hillside makes it false: standing in the dark you could be handed
+   * "Press E to sit", eat a mushroom growing in the sunlight above your head,
+   * or stop the record from inside a mountain — the same map-circle bug that
+   * `_resolveBrush` names in controller.js, where a bush on the hillside
+   * rustled at somebody thirty metres under it.
+   *
+   * Giving each of the four a height and testing it would be four APIs changed
+   * to answer a question none of them is really about. The question is about
+   * the BODY: there is rock over your head, so the surface is not yours to
+   * touch. One guard, one place, and `controller.roofed` is already the frame's
+   * own answer rather than a second scan — see its note in controller.js.
+   *
+   * BELOW the rod override on purpose. A rod is in your hands rather than in
+   * the world, and somebody who walked into a passage with a fish on the line
+   * should still be able to land it rather than be left holding a key that has
+   * stopped meaning anything.
+   */
+  if (controller.roofed) return null;
 
   const seat = seats.nearest(p.x, p.z);
   if (seat) {
@@ -1160,6 +1265,23 @@ function speakerMoved(index) {
 }
 
 function placeSpeaker() {
+  /**
+   * …BUT NOT FROM UNDER A HILL, and this is the other half of the `roofed`
+   * guard in `findInteractable`.
+   *
+   * `aimGround` marches against `heightAt`, which underground is the summit and
+   * is already behind you before the first sample: `above(t)` is negative from
+   * PLACE_MIN_M, the bisection converges immediately, and the cabinet is stood
+   * on the hillside three metres in front of where you are looking — thirty
+   * metres over your head, in daylight, audible and unreachable. Standing a
+   * speaker on a cave floor is a real thing to want and it is not this: it
+   * needs `caveFloorUnder` in the march, no waterline clamp, and an answer for
+   * a ray that leaves through the roof. Until then, say so and do nothing.
+   */
+  if (controller.roofed) {
+    hud.toast('No ground to stand it on down here.', 3200);
+    return;
+  }
   const index = speakers.placeNext(aimGround(controller));
   speakerMoved(index);
   /**
@@ -1297,6 +1419,15 @@ function warmAudioBuffers(ctx) {
     () => createImpulseResponse(ctx, 'forest'),
     () => createImpulseResponse(ctx, 'cave'),
     () => createImpulseResponse(ctx, 'cosmos'),
+    /**
+     * `cathedral` was the one preset missing from this list, and it is the one
+     * built on the worst frame in the session: `_buildMusic` creates it
+     * synchronously inside `tripAudio.build()`, which runs as the gate drops.
+     * That is 441 600 samples of `Math.pow` plus a 220 800-float slice on the
+     * first frame the player sees. `createImpulseResponse` caches on
+     * `preset:sampleRate`, so warming it here turns that into a cache hit.
+     */
+    () => createImpulseResponse(ctx, 'cathedral'),
     () => ambienceNoise(ctx),
     () => wildlifeNoise(ctx),
     () => caveNoise(ctx),
@@ -1528,6 +1659,37 @@ document.getElementById('enter').addEventListener('click', async () => {
   const warm = new THREE.Scene();
   for (const o of [...caveWarmupObjects(), ...videoWarmupObjects()]) warm.add(o);
 
+  /**
+   * PRE-UPLOAD THE HEARTH AND FERRY GEOMETRY BUFFERS.
+   *
+   * These objects are built at load but sit far from the spawn camera, so the
+   * `compileAsync` below frustum-culls them and their GPU buffers are not
+   * allocated until the player first walks near a fire or the ferry. That first
+   * draw is a driver-side buffer allocation that measures 5-6 ms for a mesh of
+   * a few hundred bytes — the "geometry alloc" hitches in the spikes report
+   * (×20-33 lift). Rendering them once here, behind the gate, moves that stall
+   * to load time where nobody can see it. `frustumCulled` is restored after the
+   * compile so the real draw still culls them normally.
+   */
+  const prewarmObjects = [];
+  if (gathering?.hearths) {
+    prewarmObjects.push(
+      gathering.hearths.flames,
+      gathering.hearths.embers,
+      gathering.hearths.stones,
+      gathering.hearths.logs
+    );
+  }
+  if (ferry?.group) {
+    // The ferry is a Group; its child meshes each carry their own
+    // `frustumCulled`, so the whole subtree has to be walked.
+    ferry.group.traverse((o) => {
+      if (o.isMesh || o.isPoints) prewarmObjects.push(o);
+    });
+  }
+  const prewarmCulled = prewarmObjects.map((o) => o.frustumCulled);
+  for (const o of prewarmObjects) o.frustumCulled = false;
+
   renderer.setRenderTarget(pipeline.sceneTarget);
   await Promise.race([
     Promise.all([
@@ -1536,6 +1698,9 @@ document.getElementById('enter').addEventListener('click', async () => {
     ]).catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
+  for (let i = 0; i < prewarmObjects.length; i++) {
+    prewarmObjects[i].frustumCulled = prewarmCulled[i];
+  }
   /**
    * …AND THE VARIANT THE QUALITY LADDER CAN ASK FOR LATER.
    *
@@ -1588,6 +1753,29 @@ document.getElementById('enter').addEventListener('click', async () => {
    */
   const renderThroughVariant = (enter) => {
     enter();
+    /**
+     * BIND THE HDR TARGET HERE, not once before the await further up.
+     *
+     * `outputColorSpace` is part of three's program cache key
+     * (WebGLPrograms.getProgramCacheKey): with a render target bound the
+     * encoding is `srgb-linear`, and with the default framebuffer bound it is
+     * `srgb`. Those are two different programs for the same material.
+     *
+     * The bind used to happen once, at the top of the pre-warm, and then the
+     * block awaited. The frame loop keeps running across that await and every
+     * `pipeline.render()` ends by binding null — so by the time this pass ran,
+     * the target was the canvas and every program it compiled was the `srgb`
+     * variant, which this pipeline never draws through. Measured: 35 of the 111
+     * live programs were wrong-target copies, and the pass cost 2.0 s of the
+     * 2.4 s the player waits at the gate to build them.
+     *
+     * This is the same failure as the one `prewarm-wrong-target` records, in the
+     * same file, arriving by a different route — the first pass was fixed by
+     * binding before it, and binding before an await is not binding at all.
+     * Making it an invariant OF THE PASS is what stops it coming back a third
+     * time.
+     */
+    renderer.setRenderTarget(pipeline.sceneTarget);
     return renderer.compileAsync(scene, camera).catch(() => {});
   };
   /**
@@ -1999,7 +2187,17 @@ function frame() {
   requestAnimationFrame(frame);
 
   // Held while the performance instrument owns the renderer. See `perfHold`.
-  if (__PERF__ && perfHold?.()) return;
+  if (__PERF__ && perfHold?.()) {
+    /**
+     * ...and the interval a hold spans is not a frame anybody rendered. The
+     * stats overlay no longer throws an interval away for being long — a
+     * duration filter there hid real multi-second freezes, see the header of
+     * ui/stats.js — so the one case it cannot see for itself is stated here
+     * instead of inferred from a threshold.
+     */
+    stats.discard();
+    return;
+  }
 
   /**
    * The frame-rate cap. rAF itself cannot be slowed — the browser calls every
@@ -2169,6 +2367,16 @@ function frame() {
         gust: clamp01(0.35 + 0.4 * Math.sin(tripUniforms.uWind.value.x * 0.35)),
         canopy: 0.6,
         tripLevel: director.level,
+        /**
+         * The weather, read from the layer that owns it rather than recomputed.
+         *
+         * `atmosphere.rainLevel` is a pure function of the world clock and the
+         * seed (see the weather block in atmosphere.js), so the sound and the
+         * picture cannot drift apart — and main.js does not gain a second
+         * opinion about what the weather is, which is the failure mode the day
+         * cycle already had once.
+         */
+        rain: atmosphere.rainLevel ?? 0,
       });
     }
     // The camera as well as the clock: the pair's one lamp slides along the line
@@ -2405,11 +2613,99 @@ function frame() {
     _caveSky.copy(atmosphere.hemi.color).multiplyScalar(atmosphere.hemi.intensity * 0.3);
     _caveGround.copy(atmosphere.hemi.groundColor).multiplyScalar(atmosphere.hemi.intensity * 0.3);
     caves.setDaylight(_caveSunDir, _caveSun, _caveSky, _caveGround);
-    const buried = caveMix > 0.55;
-    atmosphere.water.mesh.visible = !buried;
-    atmosphere.shafts.group.visible = !buried;
-    atmosphere.mist.layers.visible = !buried;
-    if (caves.occludeWorld(forest, caveMix, controller.caveDepth)) {
+    /**
+     * A MOUNTAIN OVER YOUR HEAD IS THE BEST OCCLUDER IN THE GAME AND THE FRAME
+     * SHOULD BE PAID FOR IT.
+     *
+     * `occludeWorld` has always taken the wood out — that is the eleven-fold
+     * one, and the ground goes with it because `groundField.group` is a child of
+     * `forest.group`. Everything else in the world was still being submitted to
+     * a camera buried inside a hillside: the sky dome, eight thousand motes, and
+     * every bird, butterfly, mammal and fish within streaming range, none of
+     * which has been visible since the mouth went out of sight.
+     *
+     * MEASURED, AND THE ANSWER IS NOT WHAT THE PARAGRAPH ABOVE WANTS IT TO BE.
+     * `scripts/cave-perf.mjs`, 224 m inside k=-1 on grove-01, at 2560x1440 on an
+     * RX 9070 XT:
+     *
+     *   shipping, underground                 0.60 ms
+     *   with the wood and ground submitted   +0.40 ms
+     *   with the water, shafts and mist      +0.10 ms
+     *   with the sky dome                     below the rig's 0.1 ms resolution
+     *   with the motes                        below the rig's 0.1 ms resolution
+     *   with the animals                      below the rig's 0.1 ms resolution
+     *   with all of it                       +0.60 ms
+     *
+     * So the wood is still the whole of it, the sky and the motes and the
+     * animals are individually unmeasurable here, and the three lines that hide
+     * them are kept on the grounds that they are obviously right rather than
+     * because they showed up — a dome the camera is inside is never frustum
+     * culled, and an additive point cloud inside a hill is fill that cannot be
+     * seen. They will matter on a machine that is not this one.
+     *
+     * THE NUMBER THAT MATTERS IS THE FIRST LINE. Six tenths of a millisecond
+     * against three and a half to five in the open wood: underground really is
+     * the cheapest place in the world, by most of an order of magnitude, and
+     * THAT is the budget the cave's rock shader and its 1.6x geometry are being
+     * paid out of.
+     *
+     * `perfUnhide` is how that script asks for exactly one of them back. It has
+     * to be read HERE rather than set from outside, because this block runs
+     * every frame and would overwrite anything the probe wrote: the same trap
+     * the fog-density knob and the day cycle both document.
+     */
+    /**
+     * WRITTEN ONLY WHEN THE ANSWER CHANGES, WHICH IS NOT FUSSINESS — IT IS THE
+     * DIFFERENCE BETWEEN HIDING SOMETHING AND OWNING IT.
+     *
+     * `visible` is a single flag with several authors. `shoal.js` turns the fish
+     * off whenever there is no water in range; `debug.layers` turns the sky and
+     * the motes off for bisection; the quality knobs reach into the same
+     * objects. A line here that assigns `true` every frame does not merely
+     * fail to hide — it OVERRIDES all of them, permanently, everywhere in the
+     * world, because this block runs after they do.
+     *
+     * That is not hypothetical. The first version of this assigned
+     * unconditionally and the perf gate caught it the same afternoon: draw calls
+     * at the spawn clearing went from 160 to 175, and the fish were being drawn
+     * in a wood four hundred metres from the river. A frame that is 9% more
+     * expensive EVERYWHERE, bought by an optimisation that only applies
+     * underground, is a bad trade at any exchange rate.
+     *
+     * So this latches. On the way in it hides; on the way out it restores once
+     * and then says nothing — which is exactly the contract `occludeWorld` has
+     * always had with the wood, and for the same reason.
+     */
+    /**
+     * The threshold is imported rather than written here, because the rain is
+     * switched at the far end — in atmosphere's own weather block, which owns
+     * `rain.points.visible` on a per-frame write this latch could not survive.
+     * Two literals would have been two things going dark at slightly different
+     * depths the first time either was tuned.
+     */
+    const buried = caveMix > CAVE_BURIED;
+    const un = caves.perfUnhide;
+    const wantHidden = buried ? un ?? 'none' : '';
+    if (wantHidden !== caveHidden) {
+      caveHidden = wantHidden;
+      const gone = (key) => buried && un !== key && un !== 'all';
+      atmosphere.water.mesh.visible = !gone('weather');
+      atmosphere.shafts.group.visible = !gone('weather');
+      atmosphere.mist.layers.visible = !gone('weather');
+      atmosphere.sky.sky.visible = !gone('sky');
+      atmosphere.motes.points.visible = !gone('motes');
+      /**
+       * The animals as one switch, and this is the one place an umbrella over
+       * `fauna.group` is right. `debug.layers` deliberately has no such umbrella
+       * — see the note there — because `only(name)` would leave a visible child
+       * under an invisible parent and report every animal layer as empty.
+       * Nothing here does `only`; it is all or none, which is what a group is
+       * for. `shoal` is separate because it is its own root object.
+       */
+      fauna.group.visible = !gone('fauna');
+      shoal.mesh.visible = !gone('fauna');
+    }
+    if (caves.occludeWorld(forest, caveMix, controller.caveDepth, un === 'forest' || un === 'all')) {
       renderer.shadowMap.needsUpdate = true;
     }
     /**
@@ -2768,6 +3064,21 @@ window.RR = {
    * thing to compare is `worldClock()` itself. See core/world-clock.js.
    */
   worldOrigin,
+  /**
+   * The three namespace itself.
+   *
+   * Exposed so a script can build the constructors it needs — a `Raycaster`
+   * above all — without one having to be reachable from some unrelated system
+   * that happens to keep one around. `scripts/sightlines.mjs` casts rays at
+   * several heights to measure how far you can see, which is the only way to
+   * settle "the mid-storey is empty" as a number rather than as an argument
+   * about screenshots; it needs a Raycaster and there is no instance of one on
+   * this surface to borrow a constructor from.
+   *
+   * This costs nothing: the namespace object already exists in the bundle and
+   * this is a reference to it, not a copy.
+   */
+  THREE,
   scene,
   camera,
   renderer,

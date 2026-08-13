@@ -127,7 +127,7 @@ for (const [name, at] of Object.entries(STATIONS)) {
   if (ONLY && !name.includes(ONLY)) continue;
   for (const level of LEVELS) {
     const info = await page.evaluate(
-      async ({ at: s, seek }) => {
+      async ({ at: s, seek, rain }) => {
         const R = window.RR;
         const raf = () => new Promise((r) => requestAnimationFrame(r));
 
@@ -191,6 +191,21 @@ for (const [name, at] of Object.entries(STATIONS)) {
         for (const m of R.atmosphere.mist.mats) {
           m.map.offset.x = 0;
         }
+        /**
+         * FORCE THE WEATHER, IF ASKED. `--rain=0.8`.
+         *
+         * The weather is a pure function of the world clock (see the block in
+         * atmosphere.js), which makes it reproducible but also means a shot of
+         * rain cannot be taken by waiting — the clock would have to land inside
+         * a burst. Overriding the uniform after the settle and before the
+         * render is the only way to photograph it on demand, and it is safe
+         * here for the same reason the wind pin above is: this script is the
+         * one place allowed to reach past the simulation.
+         */
+        if (rain !== null) {
+          R.atmosphere.rain.material.uniforms.uRain.value = rain;
+          R.atmosphere.rain.points.visible = rain > 0.02;
+        }
         R.atmosphere.follow(R.camera);
         R.renderer.shadowMap.needsUpdate = true;
         R.forest.cull(R.camera, true);
@@ -241,7 +256,7 @@ for (const [name, at] of Object.entries(STATIONS)) {
           y: Math.round(R.controller.position.y * 10) / 10,
         };
       },
-      { at, seek: level.seek }
+      { at, seek: level.seek, rain: args.rain === undefined ? null : Number(args.rain) }
     );
     const file = `${name}${level.tag}`;
     writeFileSync(`${OUT}/${file}.png`, Buffer.from(info.png.split(',')[1], 'base64'));

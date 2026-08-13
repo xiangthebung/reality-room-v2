@@ -1,5 +1,6 @@
 import { AUTHORED_PHASE } from '../../world/daylight.js';
 import { STATIONS, LEVELS, LEVERS, LEVER_BASELINE } from './stations.js';
+import { newbornWatch, drainNewborn } from './newborn.js';
 
 /**
  * THE MEASURING INSTRUMENT.
@@ -1045,6 +1046,20 @@ export function installPerfProbe(RR) {
        * new.
        */
       const seenPrograms = new Set((info.programs ?? []).map((p) => p.cacheKey));
+      /**
+       * Seeded HERE rather than at install, so the walk's first frame is not
+       * handed every geometry the arrival and the settle met. Same argument as
+       * `seenPrograms` above and as `resnap` in freezes.js.
+       */
+      const newborn = newbornWatch(renderer).log;
+      let newbornAt = newborn.length;
+      const slabGrowths = () => {
+        const g = RR.forest?.growths;
+        if (!g) return 0;
+        let n = 0;
+        for (const key in g) n += g[key];
+        return n;
+      };
 
       /**
        * THE BROWSER'S OWN ACCOUNT OF WHAT BLOCKED THE FRAME.
@@ -1120,8 +1135,25 @@ export function installPerfProbe(RR) {
             seenPrograms.add(p.cacheKey);
             fresh.push(p.name || 'unnamed');
           }
+          /**
+           * WHICH geometry, and how many bytes of it, not merely that the
+           * count moved.
+           *
+           * `geometries` above is the strongest cause this report can
+           * attribute and the least specific thing in it — see newborn.js. The
+           * counter moves on the frame a geometry is first DRAWN rather than
+           * the frame it was built, so it fires on a frame whose only visible
+           * cause is that the player turned his head, and it covers everything
+           * from a 24-vertex prop to a 1.8 MB cave mesh under one name.
+           */
+          const met = drainNewborn(newborn, newbornAt);
+          newbornAt = met.cursor;
           marks.push({
             fresh,
+            met: met.count,
+            metBytes: met.bytes,
+            metWhat: met.summary,
+            grows: slabGrowths(),
             programs: info.programs?.length ?? 0,
             geometries: info.memory.geometries,
             textures: info.memory.textures,

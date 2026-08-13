@@ -95,7 +95,33 @@ const inventory = await page.evaluate(() => {
   };
 });
 
-/** A cheap fingerprint of a layer's pose: the first few instance matrices. */
+/**
+ * A cheap fingerprint of a layer's pose: the first few instance matrices — AND,
+ * for the herds, the simulation underneath them.
+ *
+ * THE SECOND ONE IS NOT BELT AND BRACES, IT IS THE FIX FOR A FALSE FAILURE THIS
+ * CHECK PRODUCED TWICE.
+ *
+ * `updateHerd` writes a matrix only for members that pass the distance AND the
+ * FRUSTUM test, into a COMPACTED slot — so a herd whose members are all behind
+ * the spawn camera writes nothing at all, and the hash above is identical five
+ * seconds later for an animal that walked four metres. The check then reports
+ * "stationary layer(s): deer" and it is describing the camera, not the deer.
+ *
+ * It is not a rare case and it is not stable across edits. Where a herd gets
+ * seeded comes off the shared fauna rng, so ANY change anywhere in `fauna.js`
+ * that draws a different number of times reshuffles it — and the change that
+ * exposed this was two numbers in the flock-species picker, which cannot
+ * possibly affect a deer. A regression test that fails on that is worse than
+ * no test, because the next person spends an hour looking for a bug in the
+ * mammals.
+ *
+ * So the assertion splits in two. The SIMULATION must move, always, for every
+ * herd — that is the property "the animals are alive" and nothing about the
+ * camera can hide it. The BUFFER must move as well, but only when something was
+ * actually drawn, which is the property "the poses reach the GPU". Between them
+ * they catch both of the real failures the single hash was standing in for.
+ */
 const sample = () =>
   page.evaluate(() => {
     const f = window.RR.fauna;
@@ -104,6 +130,14 @@ const sample = () =>
       const a = mesh.instanceMatrix.array;
       let s = 0;
       for (let i = 0; i < Math.min(n * 16, a.length); i++) s += a[i] * (i + 1);
+      return +s.toFixed(4);
+    };
+    /** Where the herd's members actually are, drawn or not. */
+    const sim = (h) => {
+      let s = 0;
+      h.members.forEach((m, i) => {
+        s += m.pos.x * (i + 1) + m.pos.z * (i + 2) + m.yaw * (i + 3);
+      });
       return +s.toFixed(4);
     };
     const pts = (p) => {
@@ -118,6 +152,24 @@ const sample = () =>
       butterflies: grab(f.butterflies),
       swarm: pts(f.swarm),
       ...Object.fromEntries(f.herds.map((h, i) => [h.mesh?.name ?? `herd${i}`, grab(h.mesh)])),
+      // Namespaced so the loop below can tell the two kinds of key apart, and
+      // so a herd called `sim:anything` cannot collide with one.
+      ...Object.fromEntries(f.herds.map((h, i) => [`sim:${h.mesh?.name ?? `herd${i}`}`, sim(h)])),
+      // How many of each herd the draw loop actually reached this frame. A zero
+      // here is why a buffer can legitimately not move.
+      ...Object.fromEntries(f.herds.map((h, i) => [`drawn:${h.mesh?.name ?? `herd${i}`}`, h.mesh?.count ?? 0])),
+      /**
+       * The upload counter, which is the honest test of "is this layer being
+       * written" and the one the value hash kept failing to be.
+       *
+       * three bumps `version` on every `needsUpdate = true`, so this rises once
+       * a frame for any herd `updateHerd` reached — whether or not the pose
+       * CHANGED. A deer standing still in frame writes the same matrix every
+       * frame and is working perfectly; the value hash calls that dead.
+       */
+      ...Object.fromEntries(
+        f.herds.map((h, i) => [`ver:${h.mesh?.name ?? `herd${i}`}`, h.mesh?.instanceMatrix?.version ?? -1])
+      ),
       uTime: window.RR.tripUniforms?.uTime?.value ?? null,
     };
   });
@@ -142,16 +194,52 @@ console.log(`\nlayer            how it moves     rewrote buffer in ${WATCH_MS / 
 console.log('-'.repeat(56));
 const dead = [];
 for (const key of Object.keys(before)) {
-  if (key === 'uTime') continue;
+  if (key === 'uTime' || /^(sim|drawn|ver):/.test(key)) continue;
   const a = before[key];
   const b = after[key];
   const shader = SHADER_DRIVEN.has(key);
   const moved = a !== null && a !== b;
-  if (a !== null && !shader && !moved) dead.push(key);
+  /**
+   * A herd's buffer is only expected to move if the herd was DRAWN. See the
+   * block on `sample` — `updateHerd` skips the write for anything outside the
+   * frustum, so a herd behind you rewrites nothing however hard it is walking.
+   */
+  const simmed = before[`sim:${key}`] !== undefined;
+  const walked = simmed && before[`sim:${key}`] !== after[`sim:${key}`];
+  const drawn = Math.max(before[`drawn:${key}`] ?? 0, after[`drawn:${key}`] ?? 0);
+  const uploaded = simmed && after[`ver:${key}`] > before[`ver:${key}`];
+  /**
+   * TWO PROPERTIES, AND THE VALUE HASH IS NOW EVIDENCE FOR NEITHER ON ITS OWN.
+   *
+   *   ALIVE — the members' own positions changed. Nothing about the camera can
+   *   hide this, so it is a hard failure.
+   *
+   *   UPLOADED — `instanceMatrix.version` rose, i.e. `updateHerd` reached this
+   *   mesh and flagged it. A herd standing still IN FRAME writes the same
+   *   matrix every frame and is entirely healthy, which is the second way the
+   *   old hash produced a false failure.
+   *
+   * A herd with nothing in frame is exempt from the second: there is nothing to
+   * write, and the first property already proved it is running.
+   */
+  let verdict;
+  if (a === null) verdict = 'absent';
+  else if (shader) verdict = moved ? 'yes' : 'no (correct)';
+  else if (!simmed) verdict = moved ? 'yes' : 'NO';
+  else if (!walked) verdict = 'NO — not simulating';
+  else if (drawn === 0) verdict = 'walking, none in frame';
+  else if (!uploaded) verdict = 'NO — in frame and never uploaded';
+  else verdict = moved ? 'yes' : 'yes (in frame, holding still)';
+
+  if (a !== null && !shader) {
+    if (!simmed) {
+      if (!moved) dead.push(key);
+    } else if (!walked || (drawn > 0 && !uploaded)) {
+      dead.push(key);
+    }
+  }
   console.log(
-    `${key.padEnd(17)}${(shader ? 'vertex shader' : 'cpu matrices').padEnd(17)}${
-      a === null ? 'absent' : moved ? 'yes' : shader ? 'no (correct)' : 'NO'
-    }`
+    `${key.padEnd(17)}${(shader ? 'vertex shader' : 'cpu matrices').padEnd(17)}${verdict}`
   );
 }
 
