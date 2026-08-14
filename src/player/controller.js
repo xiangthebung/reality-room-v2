@@ -690,13 +690,26 @@ export class Controller {
     }
 
     /**
-     * …and out of a pillar, which is the one thing down here you go ROUND.
+     * …and out of a pillar, or out of the part of a breakdown slab you cannot
+     * climb: the two things down here you go ROUND.
      *
-     * Breakdown blocks are reported as floor and climbed. A column is a post
-     * from floor to ceiling: there is no over it, and treating one as floor
-     * would stand the player on top of a two-metre pillar with their head in the
-     * roof. Same displacement push as the trunks, and for the same reason —
-     * cancelling velocity against a pillar you are sliding past is sticky.
+     * A column is a post from floor to ceiling: there is no over it, and
+     * treating one as floor would stand the player on top of a two-metre pillar
+     * with their head in the roof.
+     *
+     * A SLAB IS THE SAME THING ON ONE SIDE AND NOT ON THE OTHER, and it only
+     * became so when the collider started answering with the drawn solid rather
+     * than a dome fitted over it. A dome ramps to nothing at its rim, so every
+     * boulder in the world was a hill and every one of them was climbed. The
+     * drawn slab has a lid over a near-vertical fracture face, the step rule
+     * above correctly refuses it, and refusing is all that rule does — so
+     * without this, walking head-on into a boulder was a dead stop with room to
+     * pass on both sides. `caveSample` publishes the lid's plan radius as a post
+     * when the body's feet are more than STEP_UP below it; the ramp side stays
+     * floor and is still walked up.
+     *
+     * Same displacement push as the trunks, and for the same reason —
+     * cancelling velocity against something you are sliding past is sticky.
      */
     if (s.postR > 0) {
       const dx = this.position.x - s.postX;

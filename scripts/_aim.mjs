@@ -4,9 +4,27 @@ import { resolve } from 'node:path';
 import { caveAxisPoint, cavesNear, setWorldSeed } from '../src/world/terrain.js';
 
 /**
- * Hand-aimed shots inside one cave, plus an optional pixel probe.
+ * ANY POSE IN ONE CAVE, WHICH `cave-tour` DELIBERATELY CANNOT GIVE YOU.
  *
- *   node aim.mjs --out=DIR --poses='[{"name":"x","ring":894,"yaw":1.2,"pitch":-0.2,"dy":0,"dx":0,"dz":0}]'
+ * The tour walks the centre line at even intervals looking down the passage,
+ * because a cave is a sequence and that is the honest way to judge one. It is
+ * the wrong instrument for a question about ONE ROOM: "can you see how big the
+ * terminal chamber is" depends entirely on which way you are facing in it, and
+ * the tour's stop 13 faces the end wall of a fifty-metre hall with its back to
+ * the only beam in it. Two frames taken from the same ring, one looking in and
+ * one looking back, said more about the lighting than the whole twelve-stop
+ * sheet did.
+ *
+ * Same idiom as `_inside.mjs` — a diagnostic, not a gate. It also dumps the
+ * cave's own plan (beams, lights, water runs, the widest ring of every passage)
+ * to `info.json` beside the shots, which is how the beam count and the still
+ * pool's ring span were measured for the light pass.
+ *
+ * A pose is {name, ring, lookRing|yaw, pitch, dx, dy, dz, path, fly, clip}.
+ * `clip` is a rectangle in screen pixels, for looking closely at one surface.
+ *
+ *   node scripts/_aim.mjs --out=.shots/x \
+ *     --poses='[{"name":"hall-back","ring":903,"lookRing":868}]'
  */
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {

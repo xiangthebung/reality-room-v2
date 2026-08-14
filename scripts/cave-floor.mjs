@@ -57,6 +57,14 @@ await page.waitForTimeout(2000);
 
 let worstHover = 0;
 let totalBad = 0;
+let totalHover = 0;
+let totalWade = 0;
+let blockN = 0;
+let blockSum = 0;
+let blockHover = 0;
+let blockWade = 0;
+let blockWorstHover = 0;
+let blockWorstWade = 0;
 for (const c of near.slice(0, CAVES)) {
   await page.evaluate(
     (s) => {
@@ -190,6 +198,7 @@ for (const c of near.slice(0, CAVES)) {
 
       const hits = [];
       let probes = 0;
+      const blocks = { n: 0, sum: 0, hover: 0, wade: 0, worstHover: 0, worstWade: 0 };
       for (let pi = 0; pi < cave.paths.length; pi++) {
         const p = cave.paths[pi];
         const n = p.x.length;
@@ -242,6 +251,30 @@ for (const c of near.slice(0, CAVES)) {
             const rock = nearestTo(x, z, s.inside > 0 ? s.floorRock : analytic, false);
             if (mesh === null) continue;
             const gap = analytic - mesh;
+            /**
+             * IS A BLOCK INVOLVED IN THIS COLUMN AT ALL, asked from BOTH sides.
+             *
+             * `onBlock` below asks only whether the ANALYTIC floor claims a
+             * block, and that misses the failure this test exists to catch: a
+             * column where a slab is drawn and the collider does not know it is
+             * a block failure, and it was being filed under "passage floor"
+             * because the analytic answer had no block in it. Asking the mesh
+             * too — is there anything in this column that is not the swept
+             * lattice — catches that direction, and the union is what the block
+             * lines of the summary count.
+             */
+            const latt = nearestTo(x, z, analytic, false);
+            const blockish =
+              (s.inside > 0 && s.floor - s.floorRock > 0.05) ||
+              (latt !== null && mesh - latt > 0.05);
+            if (blockish) {
+              blocks.n++;
+              blocks.sum += Math.abs(gap);
+              if (gap > tol) blocks.hover++;
+              else if (gap < -tol) blocks.wade++;
+              if (gap > blocks.worstHover) blocks.worstHover = gap;
+              if (gap < blocks.worstWade) blocks.worstWade = gap;
+            }
             if (Math.abs(gap) > tol) {
               hits.push({
                 pi,
@@ -268,8 +301,20 @@ for (const c of near.slice(0, CAVES)) {
         probes,
         count: hits.length,
         onBlock: hits.filter((h) => h.onBlock).length,
+        /**
+         * HOVERING AND WADING COUNTED APART, because they are not one number.
+         * Every dome the collider ever raised over a breakdown block traded one
+         * for the other at a fixed total — 243 shapes were searched and the
+         * whole Pareto front did — so a summary that prints only the total
+         * cannot tell "the fit moved along the front" from "the fit got
+         * better", and the whole point of solving the drawn solid instead of
+         * fitting a dome is that it moves the TOTAL.
+         */
+        hover: hits.filter((h) => h.gap > tol).length,
+        wade: hits.filter((h) => h.gap < -tol).length,
         worstHover: hits.length ? Math.max(0, ...hits.map((h) => h.gap)) : 0,
         worstSunk: hits.length ? Math.min(0, ...hits.map((h) => h.gap)) : 0,
+        blocks,
         top: hits.slice(0, 14),
       };
     },
@@ -280,11 +325,26 @@ for (const c of near.slice(0, CAVES)) {
     continue;
   }
   totalBad += report.count;
+  totalHover += report.hover;
+  totalWade += report.wade;
+  blockN += report.blocks.n;
+  blockSum += report.blocks.sum;
+  blockHover += report.blocks.hover;
+  blockWade += report.blocks.wade;
+  blockWorstHover = Math.max(blockWorstHover, report.blocks.worstHover);
+  blockWorstWade = Math.min(blockWorstWade, report.blocks.worstWade);
   worstHover = Math.max(worstHover, report.worstHover);
   console.log(
     `\nk=${c.k}  ${report.probes} probes  ${report.count} disagree by > ${TOL} m  ` +
-      `(${report.onBlock} of them standing on a breakdown block)  ` +
+      `(${report.hover} hovering, ${report.wade} wading; ${report.onBlock} of them standing on a breakdown block)  ` +
       `worst hover +${report.worstHover.toFixed(2)} m, worst sunk ${report.worstSunk.toFixed(2)} m`
+  );
+  const b = report.blocks;
+  console.log(
+    `   breakdown blocks: ${b.n} columns with a slab in them  ` +
+      `${b.hover} hovering / ${b.wade} wading over ${TOL} m  ` +
+      `mean |gap| ${(b.n ? b.sum / b.n : 0).toFixed(2)} m  ` +
+      `worst +${b.worstHover.toFixed(2)} / ${b.worstWade.toFixed(2)}`
   );
   for (const h of report.top) {
     console.log(
@@ -298,7 +358,14 @@ for (const c of near.slice(0, CAVES)) {
 }
 
 console.log(
-  `\n${totalBad} disagreements over ${TOL} m; worst hover +${worstHover.toFixed(2)} m` +
+  `\n${totalBad} disagreements over ${TOL} m (${totalHover} hovering, ${totalWade} wading); ` +
+    `worst hover +${worstHover.toFixed(2)} m` +
     (worstHover > 1 ? '  <-- the body stands in mid-air here' : '')
+);
+console.log(
+  `breakdown blocks alone: ${blockN} columns, ` +
+    `${blockHover} hovering + ${blockWade} wading = ${blockHover + blockWade} bad, ` +
+    `mean |gap| ${(blockN ? blockSum / blockN : 0).toFixed(2)} m, ` +
+    `worst +${blockWorstHover.toFixed(2)} / ${blockWorstWade.toFixed(2)} m`
 );
 await browser.close();

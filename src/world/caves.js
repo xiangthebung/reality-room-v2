@@ -286,7 +286,25 @@ const SHAPES = {
   canyon: { w: 0.60, t: 1.62, f: 0.74, key: 0, rough: 0.28, scal: 0.15, seep: 0.8, lo: 2.4, hi: 3.4 },
   keyhole: { w: 1.10, t: 1.10, f: 0.96, key: 1, rough: 0.19, scal: 0.7, seep: 0.5, lo: 2.9, hi: 4.1 },
   bedding: { w: 1.95, t: 0.44, f: 0.30, key: 0, rough: 0.21, scal: 0.45, seep: 0.25, lo: 3.4, hi: 5.2 },
-  room: { w: 1.42, t: 1.18, f: 0.62, key: 0, rough: 0.36, scal: 0.1, seep: 1, lo: 6.5, hi: 11, vast: 1 },
+  /**
+   * `t` OF 1.5, AND IT IS THE SHAPE THE SEEDS WITHOUT A MOUNTAIN GET.
+   *
+   * A room is what a hall becomes when `chamberFit` cannot reach HALL_MIN, so it
+   * is not merely the middle of the range — it is the largest space that exists
+   * at all on any ridge too thin to carry a chamber. At 1.18 it was 2.4 times as
+   * wide as it was tall, which is a floor with a lid on it: you read the whole
+   * volume in one glance from the doorway and there is nothing to walk toward.
+   * 1.5 is still nearly twice as wide as tall — a room is breakdown, and
+   * breakdown is a wide thing — but it puts the ceiling far enough up to be out
+   * of the near-field term at the far side, which is the one cue that says a
+   * space is bigger than a passage.
+   *
+   * It costs width for height at the same rate everything else in this table
+   * does. It is worth it here and it is not worth much more, for the reason the
+   * `hall` block gives: the return is asymptotic and the floor area is the part
+   * that stops being there.
+   */
+  room: { w: 1.42, t: 1.5, f: 0.62, key: 0, rough: 0.36, scal: 0.1, seep: 1, lo: 7, hi: 15, vast: 1 },
   /**
    * THE ONE THE PLAYER HAS NO REFERENCE FOR, AND IT IS A HEIGHT AND NOT A WIDTH.
    *
@@ -345,13 +363,35 @@ const SHAPES = {
    * climb — see the block at MAX_DIVE, which is the same argument about the same
    * failure.
    *
-   * `hi` of 19 is reached: measured across four seeds the widest ring in a cave
-   * is 17.5-20.5 m of radius, the overshoot being Catmull-Rom's between two
-   * nodes that each asked for less. It is the rock that binds and not the wish —
-   * see the block above — and on the seeds where the ridge is thin the same
-   * table produces a 4.8 m room and no hall at all.
+   * `hi` OF 26, AND THE REASON IT MOVED IS THAT IT WAS NEVER THE ROCK.
+   *
+   * "It is the rock that binds and not the wish" is what stood here, on the
+   * evidence that the widest ring measured across four seeds was 17.5-20.5 m
+   * against a wish of 19 — which is the signature of a wish being GRANTED, not
+   * of one being refused, and the 20.5 is Catmull-Rom overshooting between two
+   * nodes that each got exactly what they asked for. What was actually binding
+   * was `roofRoom`, which demanded as much mountain over the rim of a chamber as
+   * over the middle of it; the block over `roofScan` is that mistake and its
+   * arithmetic. With the requirement following the section's own dome, the same
+   * ridges hand back 26 m where they handed back 19, and this is the wish
+   * catching up with the rock rather than running ahead of it. Re-measured after
+   * the change with the old 19 still in place: every seed pinned at 19-20.5
+   * again, which is what says the ceiling was the table.
+   *
+   * At 26 m and `t` of 3.0 a hall is 70 m across and 92 m from the blocks to the
+   * roof, against a body 1.68 m to the eye. Where the ridge is thin the same
+   * table still produces a 5 m room and no hall at all, which is the property
+   * that matters: `chamberFit` is what answers, and this only says how much it
+   * is allowed to answer with.
+   *
+   * `t` OF 3.0 IS A SMALL MOVE AND KNOWN TO BE ONE. Height is asymptotic in `t`
+   * for fixed rock — 2.4 spends 75.8% of the available headroom on ceiling and
+   * 3.0 spends 77.9% — so the extra 0.6 buys 3% of ceiling and pays 18% of the
+   * width for it. It is worth exactly that much and no more: what actually made
+   * the chamber taller is the roof rule and `hi`, and raising `t` further would
+   * be trading away the floor for a number that has stopped moving.
    */
-  hall: { w: 1.35, t: 2.40, f: 0.55, key: 0, rough: 0.44, scal: 0.04, seep: 1.2, lo: 8.5, hi: 19, vast: 1 },
+  hall: { w: 1.35, t: 3.0, f: 0.55, key: 0, rough: 0.46, scal: 0.04, seep: 1.2, lo: 9, hi: 26, vast: 1 },
 };
 /** The mouth, pinned to the old constants. See SEC_WIDE. */
 const MOUTH_SHAPE = { w: SEC_WIDE, t: SEC_TALL, f: SEC_FLOOR, key: 0, rough: ROUGH, scal: 0.5, seep: 0.3 };
@@ -367,12 +407,30 @@ const MOUTH_SHAPE = { w: SEC_WIDE, t: SEC_TALL, f: SEC_FLOOR, key: 0, rough: ROU
  * hall, and the point of a hall is that it is the one section in the world you
  * cannot mistake for anything else.
  *
- * 9.5 m is a ceiling 23 m over the axis and 26 m across, which is unambiguous
+ * 9 m is a ceiling 27 m over the axis and 24 m across, which is unambiguous
  * against a passage that has been four metres wide for two hundred. Where the
  * ridge will carry one at all the walk usually gets considerably more than the
- * minimum — 17-20 m on the four seeds measured.
+ * minimum.
+ *
+ * IT WAS RAISED TO 11 WITH `t` AND THAT WAS A MISTAKE WORTH KEEPING THE RECORD
+ * OF, because it is the one change in this pass that made the world smaller.
+ * The reasoning was that the silo ratio `t / (2 * w)` had gone from 0.89 to
+ * 1.11, so the same radius was a worse silo and the floor should follow. The
+ * ratio moved and the SHAPE did not: at 9 m a hall is 27 m tall and 24 m
+ * across, which nobody would call a silo — 1.11 is nowhere near the ratio that
+ * reads as one.
+ *
+ * What raising it actually did was demote every chamber the rock would carry at
+ * 9-11 m into a room, and a room is 1.5 `t` against a hall's 3.0. Measured over
+ * eight seeds: three of them came out with no space over 25 m tall anywhere,
+ * two with nothing over 15, and the mean tallest section in the world FELL from
+ * 44.9 m to 40.9 while the maximum rose to 70.9. That is the signature of a
+ * threshold, not of a size: the seeds with deep mountain got much bigger and
+ * the seeds without lost their only chamber. Lowering it back is worth more
+ * than everything else in this block, because the cave a player gets is the one
+ * their seed gives them and not the average.
  */
-const HALL_MIN = 9.5;
+const HALL_MIN = 9;
 
 /**
  * Floor to ceiling, in metres, that every ring is guaranteed.
@@ -706,8 +764,15 @@ function* buildNodes(c, salt = 0) {
    * 110 m is still a bound rather than a target — the walk gets there only if
    * the joints and the hillside let it — and at the deepest measured node it
    * leaves 25-45 m of rock overhead, which is the budget a hall is cut out of.
+   *
+   * 135 NOW, AND IT IS STILL NOT WHAT BINDS. Measured on grove-01 k=0 the
+   * deepest node reached 80 m below the mouth against a floor of 110, so the
+   * floor has never once been the thing saying stop — the pitch envelope is.
+   * Raising it is therefore free in the ordinary case and only matters on the
+   * seed where a passage does run all the way down, which is exactly the seed
+   * where the extra rock buys the biggest chamber in the world.
    */
-  const bottom = nodes[0].y - 110;
+  const bottom = nodes[0].y - 135;
   /**
    * …and how many reaches it gets, which is a different question.
    *
@@ -717,8 +782,16 @@ function* buildNodes(c, salt = 0) {
    * where it is worth most because the pitch envelope below weights descent
    * toward the back half — the first third is the same cave it always was and
    * everything past it is somewhere the player has not been.
+   *
+   * 36-53 NOW, AND MOST OF IT IS BUYING BACK LENGTH RATHER THAN ADDING IT. The
+   * reaches below are shorter and the walk holds its joint less often, which is
+   * what "more twists and turns" means in this generator — but both of those cut
+   * metres per node, so at 28-41 the passage would have come out shorter than
+   * the one it replaced. Roughly a third more nodes against roughly a fifth less
+   * distance each is a passage of about the same length with half again as many
+   * corners in it, which is the trade that was wanted.
    */
-  const count = 28 + Math.floor(rng() * 14);
+  const count = 32 + Math.floor(rng() * 15);
 
   /**
    * THE JOINT SET, WHICH IS WHY A CAVE MAP LOOKS LIKE A STREET GRID.
@@ -731,7 +804,7 @@ function* buildNodes(c, salt = 0) {
    * right angle. Every survey you have ever seen looks like lightning for this
    * reason and for no other.
    *
-   * Two joint bearings and their reciprocals, the first pinned to the heading
+   * THREE joint bearings and their reciprocals, the first pinned to the heading
    * the gully hands over so the entrance does not immediately fight the terrain.
    * Each node either continues on its current joint — most of the time, and with
    * a longer step, because that is what a straight reach IS — or snaps to
@@ -743,9 +816,21 @@ function* buildNodes(c, salt = 0) {
    * is past them. A worm shows you forty metres of identical tube; a joint walk
    * shows you a wall, and the space only exists once you have committed to
    * walking to it.
+   *
+   * THE THIRD SET IS WHAT MAKES A CORNER UNPREDICTABLE, and the case for it is
+   * the same geology the second one came from — limestone has "two or three
+   * fracture directions" and this file only ever gave it two. With two, every
+   * corner in a cave is the same corner: there is exactly one bearing that is
+   * neither where you are pointing nor a reversal, so the moment the walk leaves
+   * its joint you already know the angle, and after three of them the player
+   * knows it too. A third bearing gives every corner two possible answers, and
+   * because it is drawn SHALLOWER than the second — 0.42-0.85 rad against
+   * 0.95-1.55 — the two are different in kind rather than merely in sign: one is
+   * a turn you take, the other is a bend you follow round.
    */
   const jointB = heading + rngRange(rng, 0.95, 1.55) * (rng() < 0.5 ? -1 : 1);
-  const joints = [heading, heading + Math.PI, jointB, jointB + Math.PI];
+  const jointC = heading + rngRange(rng, 0.42, 0.85) * (rng() < 0.5 ? -1 : 1);
+  const joints = [heading, heading + Math.PI, jointB, jointB + Math.PI, jointC, jointC + Math.PI];
   let joint = 0;
 
   /**
@@ -763,26 +848,129 @@ function* buildNodes(c, salt = 0) {
   /** Set when the walk has run out of mountain. See the dive limit below. */
   let cliffed = false;
 
+  /**
+   * EVERYWHERE THE PASSAGE ALREADY IS, at a resolution the clash test can use.
+   *
+   * One bead per node and one at the midpoint of every reach, each carrying the
+   * half-width of the widest section it stands for — so a bead is a sphere the
+   * new reach must stay outside of. Built as the walk goes rather than derived
+   * afterwards, because the test runs inside the attempt loop and rebuilding a
+   * list of a hundred entries six times a node would be the only allocation in
+   * this function.
+   *
+   * The mouth nodes are in it: the tube is not allowed to run back into its own
+   * doorway either, and that is the one crossing a player would certainly find.
+   */
+  const beads = [];
+  /** Metres of centre line walked so far, carried on every bead. */
+  let walked = 0;
+  const bead = (a, b) => {
+    /**
+     * 1.15 FOR THE SPLINE'S OWN OVERSHOOT, AND IT IS NOT A SAFETY FACTOR.
+     *
+     * `resample` runs Catmull-Rom over the RADIUS as well as the position, and
+     * Catmull-Rom is interpolating rather than convex — so the fattest ring
+     * between two nodes is fatter than either of them. Measured at 26.6 m
+     * between two 19 m nodes. A clash test that quotes node radii is therefore
+     * testing a passage narrower than the one that will be drawn, by up to a
+     * seventh, everywhere. `terminusFit` has always padded its chamber for this;
+     * the walk did not, and the difference showed up as ring pairs a hundred
+     * metres apart along the line sitting seven metres apart in space with every
+     * node centre legitimately clear.
+     */
+    const half = Math.max(a.r * a.w, b.r * b.w) * 1.15;
+    const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    beads.push({
+      x: (a.x + b.x) * 0.5,
+      y: (a.y + b.y) * 0.5,
+      z: (a.z + b.z) * 0.5,
+      half,
+      at: walked + len * 0.5,
+    });
+    walked += len;
+    beads.push({ x: b.x, y: b.y, z: b.z, half: b.r * b.w * 1.15, at: walked });
+  };
+  beads.push({ x: nodes[0].x, y: nodes[0].y, z: nodes[0].z, half: nodes[0].r * nodes[0].w * 1.15, at: 0 });
+  for (let i = 1; i < nodes.length; i++) bead(nodes[i - 1], nodes[i]);
+
   for (let i = 0; i < count && !cliffed; i++) {
     yield 'walk';
     let placed = false;
     /**
-     * Six attempts, then take the last one.
+     * Twelve attempts, then take the last one.
      *
      * The rejection is for self-intersection: two arms of the passage crossing
      * are not a junction, they are each other's back faces, and from inside it
      * reads as a hole in the wall with nothing behind it. Retrying the HEADING
      * rather than resampling the whole node keeps the walk moving forward — a
      * scheme that could reject its way into a corner would stall, and this one
-     * cannot, because after six tries it accepts.
+     * cannot, because after the last try it accepts.
+     *
+     * IT WAS SIX, AND THE LAST-TRY ESCAPE IS WHY THAT NUMBER MATTERS MORE THAN
+     * IT LOOKS. Everything below is a veto and the final attempt honours none of
+     * them, so the count is not "how hard does it try" — it is the mixture
+     * between a walk that obeys its constraints and one that ignores them. At
+     * six attempts against a joint set of three bearings and reaches under
+     * twenty metres, the vetoes were firing often enough that a large share of
+     * nodes were arriving by the escape hatch, and the escape hatch is exactly
+     * where the self-crossings come from: measured on eight seeds, 122 ring
+     * pairs per cave sharing volume against 3.5 before the walk was shortened.
+     *
+     * Twelve is not twice the cost. Each attempt is dominated by `roofScan`,
+     * seventeen `heightAt` samples, and only runs at all if the cheaper tests
+     * before it passed — and the whole point is that most nodes still place on
+     * the first or second try. What changes is the tail.
      */
-    for (let attempt = 0; attempt < 6 && !placed; attempt++) {
+    for (let attempt = 0; attempt < 12 && !placed; attempt++) {
       /**
        * Stay on the joint, or take the corner. Attempts past the first are
        * allowed to jump, which is what keeps the rejection below from stalling
        * a walk that has boxed itself in against its own earlier reaches.
        */
-      const hold = attempt === 0 ? rng() < 0.66 : false;
+      /**
+       * 0.62, DOWN FROM 0.66, AND THE SMALL MOVE IS THE POINT.
+       *
+       * The hold probability is the single strongest control on how twisty a
+       * cave is, because it is a geometric distribution: at 0.66 a reach is a
+       * mean of 2.9 nodes long, at 0.62 it is 2.6, at 0.5 it is 2.0.
+       *
+       * 0.5 WAS TRIED AND THE MOUNTAIN COULD NOT TAKE IT. Twist is not free: a
+       * passage that turns more puts more line into the same volume of rock, and
+       * past some density it starts running back through itself. Measured over
+       * eight seeds, turning went from 170 degrees per hundred metres to 335 and
+       * the number of ring pairs sharing volume went from 3.8 a cave to 45 —
+       * which is not a cosmetic fault. It is a hole in the wall with the back of
+       * another wall behind it, and it is what made two mouths of three
+       * unwalkable. The baseline's own twistiest seed, at 336 degrees, was also
+       * the only one of the eight with any crossings at all, which is the same
+       * relationship read off the old numbers.
+       *
+       * So the twist that ships is the twist the rock will carry. Between this,
+       * the third joint set and the shorter reaches it is about half again the
+       * baseline rather than double it — and the third joint set is where most
+       * of the CHARACTER came from anyway, because it is what makes a corner
+       * something other than the one corner this generator used to have.
+       */
+      /**
+       * …AND A RETRY IS NOT ALWAYS A CORNER, WHICH IS A FEEDBACK LOOP THIS WALK
+       * HAD ALL ALONG AND ONLY NOW BITES.
+       *
+       * Every attempt past the first used to snap to a different joint, on the
+       * reasoning that the straight-on answer has just been refused. That is
+       * true of the HEADING and false of the candidate: `step` is re-drawn every
+       * attempt too, so holding the joint at eleven metres is a genuinely
+       * different node from holding it at twenty-three, and it is the one that
+       * keeps the passage going where it was going.
+       *
+       * Left as it was, refusals turn into corners one for one — so a walk in a
+       * crowded piece of rock corners at every node, which puts it in a tighter
+       * piece of rock, which refuses more. grove-01's k=0 came out of that loop
+       * at 437 degrees per hundred metres against a mean of 279, and 262 m long
+       * against a mean of 855. Every third retry holding breaks the loop without
+       * weakening any of the vetoes: it is another candidate, not another
+       * acceptance.
+       */
+      const hold = attempt === 0 ? rng() < 0.62 : attempt % 3 === 0;
       let jn = joint;
       if (!hold) {
         for (let tries = 0; tries < 6; tries++) {
@@ -832,8 +1020,17 @@ function* buildNodes(c, salt = 0) {
        * place. 14-26 m puts the far wall of a straight run at the edge of what
        * the light reaches, which is the one composition this geometry can make
        * that reads as distance.
+       *
+       * 11-21 AND 7-11 NOW, WHICH GIVES UP SOME OF THAT DELIBERATELY. The
+       * composition argument is still right and it is not the only thing a reach
+       * decides: it is also how far you walk before the cave does anything, and
+       * a reach at the edge of the fog is by definition one you spend entirely
+       * looking at the same wall. The longest reaches still reach 21 m, which is
+       * about where the fog closes, so the sight line that reads as distance
+       * survives on the tail of the distribution; the mean is down by a fifth and
+       * the typical stretch stops being a corridor.
        */
-      const step = hold ? rngRange(rng, 14, 26) : rngRange(rng, 8, 13);
+      const step = hold ? rngRange(rng, 13, 24) : rngRange(rng, 8, 13);
       const h = joints[jn] + rngRange(rng, -0.13, 0.13);
       /**
        * A canyon is a stream that is cutting DOWN and a room is a floor that is
@@ -930,13 +1127,43 @@ function* buildNodes(c, salt = 0) {
        * floor too deep for its floor, and it would be the one chamber in the
        * cave that read as a mistake.
        */
+      /**
+       * …AND ALSO FROM THE PASSAGE IT HAS ALREADY CUT, WHICH IS A SECOND ROCK.
+       *
+       * `chamberFit` asks how much MOUNTAIN there is. That is not the only thing
+       * a chamber can run out of: it can also run out of untouched rock, because
+       * an arm of the same system is fifteen metres away and a thirty-five metre
+       * hall excavated over it makes two tubes that share a volume.
+       *
+       * The clash test below would catch that and REFUSE the node, and refusing
+       * is the wrong answer for the same reason it is the wrong answer for the
+       * hillside. A refusal re-rolls the type, so it does not produce a smaller
+       * chamber — it produces no chamber, and then no chamber at the next node
+       * either, because the passage is still there. Measured with refusal alone:
+       * four of eight seeds came back with nothing over 25 m tall anywhere and
+       * the mean tallest section in the world fell from 45 m to 35.
+       *
+       * So the beads cap the radius exactly as the mountain does, and the two
+       * caps are taken together. A chamber in a crowded piece of rock comes out
+       * modest, which is what a chamber in a crowded piece of rock is. Iterated
+       * for the same reason `chamberFit` is: the exemption window is itself a
+       * function of the answer, and every pass is conservative — it can only
+       * shrink.
+       */
       if (sh.vast) {
         const dl = Math.hypot(nx - x, nz - z) || 1;
-        const fit = chamberFit(nx, nz, (nx - x) / dl, (nz - z) / dl, ny, sh, r);
+        const fit = Math.min(
+          chamberFit(nx, nz, (nx - x) / dl, (nz - z) / dl, ny, sh, r),
+          beadRoom(beads, walked, nx, ny, nz, sh, r)
+        );
         if (kind === 'hall' && fit < HALL_MIN) {
           kind = 'room';
           sh = SHAPES.room;
-          r = chamberFit(nx, nz, (nx - x) / dl, (nz - z) / dl, ny, sh, rngRange(rng, sh.lo, sh.hi));
+          const wish = rngRange(rng, sh.lo, sh.hi);
+          r = Math.min(
+            chamberFit(nx, nz, (nx - x) / dl, (nz - z) / dl, ny, sh, wish),
+            beadRoom(beads, walked, nx, ny, nz, sh, wish)
+          );
         } else {
           r = fit;
         }
@@ -993,7 +1220,7 @@ function* buildNodes(c, salt = 0) {
       const roof = heightAt(nx, nz) - r * sh.t - ROOF_ROCK;
       const deepest = y - step * MAX_DIVE;
       if (roof < deepest) {
-        if (attempt < 5) continue;
+        if (attempt < 11) continue;
         cliffed = true;
         break;
       }
@@ -1028,25 +1255,186 @@ function* buildNodes(c, salt = 0) {
        * 60%, and the fraction went to 0.7 at the same time because with `rough`
        * in it the quantity is now conservative rather than optimistic.
        */
-      if (attempt < 5) {
+      /**
+       * THE NOMINAL SECTION AND NOT THE JITTERED ONE, WHICH IS THE OPPOSITE OF
+       * WHAT `chamberFit` DOES A FEW LINES UP, AND DELIBERATELY.
+       *
+       * `chamberFit` is sizing a chamber that will be DRAWN, so it has to leave
+       * room for the jitter `shaped` is about to apply or the burial meets a
+       * section bigger than the one that was verified. This is choosing a
+       * HEADING, and the cost of the two mistakes is not symmetric: too
+       * permissive costs a ring the burial narrows, too strict costs the whole
+       * direction. Padding it here was tried and vetoed a tenth of a hall's
+       * radius worth of headroom on every candidate — about ten metres on a
+       * 26 m chamber — which on three of eight seeds was the difference between
+       * a chamber and no chamber at all.
+       */
+      if (attempt < 11) {
         const tl = Math.hypot(nx - x, nz - z) || 1;
-        const shoulder = roofRoom(nx, nz, (nx - x) / tl, (nz - z) / tl, r * sh.w);
-        if (shoulder < ny + r * (sh.t + sh.rough) + ROOF_ROCK * 0.7) continue;
+        const s = roofScan(nx, nz, (nx - x) / tl, (nz - z) / tl, r * sh.w);
+        if (roofDrop(s, ny, sh, r) > -ROOF_ROCK * 0.3) continue;
       }
 
+      /**
+       * DO NOT CROSS THE PASSAGE YOU HAVE ALREADY CUT — TESTED ALONG THE REACH
+       * AND NOT AT ITS FAR END.
+       *
+       * This used to compare the candidate NODE's centre against every previous
+       * NODE's centre. Both halves of that are the same mistake: what the mesh
+       * is made of is the SPLINE between the nodes, and two reaches can pass
+       * within a metre of each other while all four of their endpoints are
+       * twenty metres apart. A node test cannot see the middle of anything.
+       *
+       * It survived for as long as the walk took 28-41 reaches of 8-26 m, which
+       * is a line that mostly goes somewhere and rarely doubles back inside its
+       * own mountain. At 36-53 reaches of 7-21 m, on three joint sets instead of
+       * two, it does double back — measured on grove-01 with the node test still
+       * in place, the number of ring pairs forty or more apart whose sections
+       * SHARE VOLUME went from 3.5 a cave to 33.
+       *
+       * What that is, from inside, is a hole in the wall with the back of
+       * another wall behind it: two arms of the same tube, each drawn
+       * single-sided and facing the other way, so the opening shows black
+       * nothing rather than a passage. It also breaks things that have no
+       * business caring about geometry — `cave-walk` steers at the furthest ring
+       * it can see and picks its candidates by horizontal distance, so a passage
+       * folded over itself hands the walker a target three hundred rings away
+       * and it stands against a wall at full speed for ever. That is what the
+       * gate actually reported: two mouths of three unwalkable, one of them
+       * three metres in.
+       *
+       * BEADS RATHER THAN A SEGMENT-SEGMENT SOLVE. The exact closest approach
+       * between two 3D segments is twenty lines of case analysis to get right
+       * and it is not what is wanted anyway: the quantity is "does this reach
+       * come near anything already cut", and the reaches are 7-21 m long against
+       * a clearance of several metres. Sampling both sides finely enough that no
+       * gap in the sampling is larger than the clearance answers the same
+       * question and cannot be got subtly wrong. The previous line contributes a
+       * bead at each end and one in the middle; the candidate is tested at four
+       * points along itself.
+       */
+      /**
+       * WHAT IS EXEMPT IS THE LINE THAT LEADS HERE, MEASURED IN THIS SECTION'S
+       * OWN SCALE.
+       *
+       * A fixed exemption of the last few beads is right for a passage and
+       * catastrophic for a chamber, which was the first version of this and is
+       * worth the paragraph. A hall's half-width is 35 m, so it demands 39.5 m
+       * of clearance from every bead — and the reach that arrives at it is
+       * 7-21 m long, so the node before last is comfortably inside its own
+       * chamber and refuses it. Measured with a five-bead exemption: three of
+       * four caves came back with nothing over 25 m tall anywhere and the
+       * tallest section in the world fell from 67 m to 22. The rejection also
+       * feeds back — every refusal re-rolls the heading and the type, so a walk
+       * that is refused everywhere coils, and grove-01's k=0 came out turning
+       * 622 degrees per hundred metres.
+       *
+       * A chamber is ALLOWED to swallow the passage that feeds it. That is what
+       * a chamber is. What it is not allowed to do is swallow an arm of the
+       * system it left forty metres ago, and the difference between those two is
+       * distance ALONG THE LINE rather than distance in space.
+       *
+       * AND THE EXEMPTION IS THE CLEARANCE ITSELF, WHICH IS THE ONLY VALUE THAT
+       * IS NOT ARBITRARY. A bead fewer metres of line behind you than the
+       * clearance you are demanding is a bead you cannot possibly have got far
+       * enough from — the line simply is not long enough — so testing it is a
+       * guaranteed refusal, and a guaranteed refusal is not a constraint, it is
+       * a walk that always reaches its sixth attempt and takes whatever it is
+       * given. That was measured, twice, from two directions: a flat twelve
+       * metre exemption is under a tube's own 12.4 m clearance and produced
+       * caves turning 512 degrees per hundred metres with 225 overlapping ring
+       * pairs — far worse than the node test it replaced — and a flat five-bead
+       * exemption starved the chambers, three of four caves coming back with
+       * nothing over 25 m tall.
+       *
+       * Plus eight metres so that a single square corner, which is what a joint
+       * walk is made of, is not itself a refusal.
+       */
+      /**
+       * …AND THE SECTION TAPERS ALONG THE REACH, which matters only for the
+       * chambers and matters enormously for them.
+       *
+       * The reach into a hall is a tube at one end and a hall at the other, and
+       * `resample` splines the radius between them — so a quarter of the way
+       * along the section is a quarter of the way from four metres to
+       * thirty-five, not thirty-five. Testing every sample at the far end's
+       * width demands a hall's clearance along the whole approach and refuses
+       * chambers that would have fitted, which is the same over-strictness the
+       * exemption above exists to avoid, arrived at from the other axis.
+       */
+      const prevHalf = nodes[nodes.length - 1].r * nodes[nodes.length - 1].w * 1.15;
+      const hereHalf = r * sh.w * 1.15;
       let clash = false;
-      for (let j = 0; j < nodes.length - 2 && !clash; j++) {
-        const n = nodes[j];
-        const dx = n.x - nx;
-        const dy = n.y - ny;
-        const dz = n.z - nz;
-        // Half-widths now differ per node, so the keep-apart distance is the two
-        // actual half-widths rather than one shared constant. A room next to a
-        // squeeze needs eleven metres of clearance; two squeezes need four.
-        const min = n.r * n.w + r * sh.w + 3.5;
-        if (dx * dx + dy * dy + dz * dz < min * min) clash = true;
+      for (let s = 1; s <= 4 && !clash; s++) {
+        const f = s / 4;
+        const px = x + (nx - x) * f;
+        const py = y + (ny - y) * f;
+        const pz = z + (nz - z) * f;
+        const halfAt = prevHalf + (hereHalf - prevHalf) * f;
+        for (let j = 0; j < beads.length; j++) {
+          const bd = beads[j];
+          /**
+           * Half-widths differ per node, so the keep-apart distance is the two
+           * actual half-widths rather than one shared constant. A room next to a
+           * squeeze needs eleven metres of clearance; two squeezes need four.
+           */
+          const min = bd.half + halfAt + 3.5;
+          // `continue`, not `break`: the beads are in order of `at` but not of
+          // `min`, so a wide bead's large exemption says nothing about the
+          // narrow ones after it. A hundred beads by four samples is arithmetic.
+          if (walked - bd.at < min + 8) continue;
+          const dx = bd.x - px;
+          const dy = bd.y - py;
+          const dz = bd.z - pz;
+          if (dx * dx + dy * dy + dz * dz < min * min) {
+            clash = true;
+            break;
+          }
+        }
       }
-      if (clash && attempt < 5) continue;
+      /**
+       * A CROSSING IS THE ONE VETO THE LAST ATTEMPT MAY NOT SIMPLY IGNORE.
+       *
+       * Every other rejection in this loop is dropped on the final try, and that
+       * is right for all of them: a node under thin rock is a ring the burial
+       * narrows, a node on a poor heading is a corner. Both are a worse cave. A
+       * node placed THROUGH the passage is not a worse cave, it is a broken one
+       * — two arms of the same tube sharing a volume, which from inside is a
+       * body in open space with two sets of walls pushing it and no way past.
+       * `cave-end` reads it off as the nearest ring alternating between two
+       * numbers a hundred rings apart, and it does not degrade gracefully: you
+       * cannot walk it at all.
+       *
+       * ENDING THE WALK THERE WAS TRIED AND IS THE WRONG PRICE. It does drive
+       * crossings to zero across eight seeds — but `prepare`'s three re-walks
+       * did not save grove-01's k=0, which came back as a hundred and
+       * fifty-metre stub, and the mean cave lost a hundred metres. Stubs are
+       * this file's documented catastrophe and they are not worth buying
+       * anything with.
+       *
+       * So the passage SQUEEZES past instead. `beadRoom` already answers "how
+       * big may a section be here", which is the same question the chambers ask
+       * of it; below the narrowest tube in the table the section is not a
+       * passage any more and only then does the walk stop. What the player gets
+       * where two arms nearly meet is a squeeze, which is what a real cave has
+       * there and is the shape `resample`'s MIN_HEAD and MIN_HALF floors exist
+       * to keep walkable.
+       */
+      if (clash) {
+        if (attempt < 11) continue;
+        const room = beadRoom(beads, walked, nx, ny, nz, sh, r);
+        if (room < SHAPES.tube.lo * 0.6) {
+          cliffed = true;
+          break;
+        }
+        r = room;
+        // A chamber ground down to corridor size is drawn as a corridor, for the
+        // reason the `vast` block above gives.
+        if (sh.vast && r < SHAPES.tube.lo) {
+          kind = 'tube';
+          sh = SHAPES.tube;
+        }
+      }
 
       heading = h;
       pitch = p;
@@ -1057,6 +1445,7 @@ function* buildNodes(c, salt = 0) {
       z = nz;
       const nd = shaped(x, y, z, r, sh, rng);
       nd.type = kind;
+      bead(nodes[nodes.length - 1], nd);
       nodes.push(nd);
       placed = true;
     }
@@ -1106,7 +1495,7 @@ function* buildNodes(c, salt = 0) {
   // The terminus search is a search — it is the one node that costs as much as
   // several — so it gets a stop of its own either side.
   yield 'walk';
-  const term = yield* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, last.r * 1.3);
+  const term = yield* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, last.r * 1.3, beads, walked);
   yield 'terminus';
   let endHead = heading;
   if (term) {
@@ -1168,11 +1557,21 @@ function* buildNodes(c, salt = 0) {
  * BACKWARD — and short enough that the whole ramp lands inside the region
  * `closeEnd` rewrites. The dome's real length is solved from the radius it has to
  * close; CAP_RINGS is its floor, about five metres, which is right for an
- * ordinary passage, and CAP_RINGS_MAX bounds a hall's at twenty-four.
+ * ordinary passage, and CAP_RINGS_MAX bounds a hall's.
+ *
+ * CAP_RINGS_MAX IS NOT A TASTE, IT IS THE BURIAL'S TAPER WRITTEN OUT. `closeEnd`
+ * has to start on rock that the backward slope limiter has not already tapered,
+ * or the cone it exists to overwrite survives in front of it — see the block
+ * there. The limiter reaches `(r - CAP_R_MAX) / TAPER` rings back, so the dome
+ * must be at least that long, and at the hall's new 26 m that is 43 rings, 31 m.
+ * It was 24 m, which was ample at 19 m of radius and would have been eleven
+ * metres short at 26 — presenting not as a short dome but as a straight-sided
+ * cone eating the back of the biggest chamber in the cave, with the floor
+ * climbing 4.7 m into it. That exact failure is on the record twice.
  */
 const CAP_LEN = 5;
 const CAP_RINGS = Math.max(4, Math.round(CAP_LEN / RING_STEP));
-const CAP_RINGS_MAX = Math.round(24 / RING_STEP);
+const CAP_RINGS_MAX = Math.round(36 / RING_STEP);
 /**
  * What the closing node's section is, as a fraction of the passage's.
  *
@@ -1287,7 +1686,7 @@ function closingNode(from, heading) {
  * an arrival, it is the passage continuing, and the honest answer there is no
  * chamber at all: the dome alone still ends the passage properly.
  */
-function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want) {
+function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want, beads = null, walked = 0) {
   const bearings = [heading];
   for (const j of joints) {
     // Never the reciprocal: that is a chamber excavated in the passage you just
@@ -1296,11 +1695,51 @@ function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want) {
     if (Math.abs(Math.abs(d) - Math.PI) < 0.6) continue;
     bearings.push(j + rngRange(rng, -0.1, 0.1));
   }
+  /**
+   * …AND TWO BEARINGS THAT ARE NOT ON A JOINT AT ALL.
+   *
+   * Everything above is the joint set, which is right for a PASSAGE — water gets
+   * in along the fractures and nowhere else. A breakdown chamber is not cut by
+   * water, it is where the roof came down, and it sits wherever the rock was
+   * weakest rather than on a bearing. Restricting the search to the joints was
+   * therefore borrowing a constraint from the wrong process, and it costs
+   * exactly where the cave is twistiest: the deep end of a passage that has
+   * turned a lot has its own line lying across most of its joints, so
+   * `beadRoom` caps every candidate and the passage ends in a taper. That is
+   * `cave-end`'s "1.02x the feed", and it appeared on one seed of six the moment
+   * the walk started turning half again as much.
+   *
+   * Half a radian off the arrival heading, both ways. Deliberately not a fine
+   * sweep: this loop is the fattest single computation in the whole build (see
+   * the note inside it), and two more bearings is a sixth more of it.
+   *
+   * These are appended after the loop rather than inside it so the `rng` draw
+   * order above is untouched — every cave in the world would move otherwise.
+   */
+  bearings.push(heading + 0.5, heading - 0.5);
   let best = null;
   for (const h of bearings) {
     const tx = Math.cos(h);
     const tz = Math.sin(h);
-    for (const step of [15, 21, 27]) {
+    /**
+     * FOUR DISTANCES RATHER THAN THREE, AND THE EXTRA ONE IS THE FAR ONE.
+     *
+     * The search is over bearing x distance x dive, and the distance is the axis
+     * that decides how much of the mountain it can see: a candidate is a
+     * chamber-sized footprint centred `step` metres ahead, so the set {15, 21,
+     * 27} could only ever look at a band twelve metres wide at the end of a
+     * six-hundred-metre passage. That was ample while the walk arrived at its
+     * deep end in a straightish line and the rock either side of that band was
+     * much the same. It is not ample now: the walk turns half again as much, so
+     * where it ends up is a more particular place, and the passage's own line is
+     * more likely to be lying across one of the three candidates.
+     *
+     * 33 m out is the one that finds rock the rest cannot, and it costs a third
+     * more of the fattest single computation in the build — which is why it is
+     * one extra distance rather than a finer sweep. Measured: it is the
+     * difference between six of six termini opening out and five.
+     */
+    for (const step of [15, 21, 27, 33]) {
       /**
        * THE FATTEST SINGLE THING IN THE WHOLE BUILD, AND IT LOOKS LIKE NOTHING.
        *
@@ -1330,11 +1769,51 @@ function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want) {
          * hall being built at a size its 2.15 `t` turns into a silo.
          */
         let kind = 'hall';
-        let r = chamberFit(cx, cz, tx, tz, cy, SHAPES.hall, SHAPES.hall.hi);
+        let r = Math.min(
+          chamberFit(cx, cz, tx, tz, cy, SHAPES.hall, SHAPES.hall.hi),
+          beadRoom(beads, walked + step, cx, cy, cz, SHAPES.hall, SHAPES.hall.hi)
+        );
         if (r < HALL_MIN) {
           kind = 'room';
-          r = chamberFit(cx, cz, tx, tz, cy, SHAPES.room, SHAPES.room.hi);
+          r = Math.min(
+            chamberFit(cx, cz, tx, tz, cy, SHAPES.room, SHAPES.room.hi),
+            beadRoom(beads, walked + step, cx, cy, cz, SHAPES.room, SHAPES.room.hi)
+          );
         }
+        /**
+         * …AND AT THE FAR END OF IT, WHICH IS WHERE THE CROSSING ACTUALLY WAS.
+         *
+         * `cx, cz` is the chamber's NEAR centre, and the terminus does not end
+         * there. `buildNodes` puts a second node `r * 0.95` further down the
+         * bearing so the far wall is somewhere you walk to, and `closeEnd` then
+         * runs a dome up to 1.3 radii beyond that — so a fifteen-metre chamber
+         * occupies thirty-five metres of bearing past the point this loop tests,
+         * with nothing checking any of it.
+         *
+         * That is the whole of the remaining fault and it has the documented
+         * signature: on check-3's k=-3 the walker's nearest ring alternated
+         * between 712 and 877, a hundred and nineteen metres apart along the
+         * line, and it stalled six metres short of the terminus at full running
+         * velocity — the passage and its own terminal chamber sharing a volume.
+         * The near centre was clear; the far half was not.
+         *
+         * `walked` advances by the offset as well, because the exemption is
+         * "how much line is there between here and that bead" and there is a
+         * chamber's half-length more of it out here.
+         */
+        const far = r * 0.95;
+        r = Math.min(
+          r,
+          beadRoom(
+            beads,
+            walked + step + far,
+            cx + tx * far,
+            cy,
+            cz + tz * far,
+            SHAPES[kind],
+            r
+          )
+        );
         if (r < want) continue;
         const sh = SHAPES[kind];
         /**
@@ -1400,6 +1879,14 @@ function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want) {
           const amin = nd.r * nd.w + 4.5 + 3;
           if (ad2 < amin * amin) clash = true;
         }
+        /**
+         * The beads are NOT tested again here, and that is deliberate: `r` was
+         * already capped by `beadRoom` above, so this candidate fits the rock
+         * the walk has left by construction. Testing it as well would be a veto
+         * on top of a solve, which is how the terminus came back as "1.02x the
+         * feed — it tapers, it does not open" on grove-01's k=-1. The loop above
+         * survives because it is about the APPROACH, which no cap can shrink.
+         */
         if (clash) continue;
         if (!best || r > best.r) best = { x: cx, y: cy, z: cz, r, kind, heading: h };
       }
@@ -1454,17 +1941,26 @@ function* terminusFit(rng, x, y, z, heading, joints, nodes, bottom, want) {
  * back of the chamber with a 2.2 m step in it, which `cave-end` caught as a body
  * jumping two metres in one frame.
  *
- * `1.15 * r / RING_STEP` rings is longer than `(r - CAP_R_MAX) / 0.35` for every
+ * `1.3 * r / RING_STEP` rings is longer than `(r - CAP_R_MAX) / 0.35` for every
  * radius the world can produce, so the dome always starts on untapered rock, and
  * rewriting `y` from the base ring's floor puts the floor back dead level across
  * the whole of it.
+ *
+ * THE FACTOR IS A SOLVED BOUND AND NOT A FEEL. Setting the two lengths equal,
+ * `k * r / RING_STEP >= (r - CAP_R_MAX) / TAPER` holds for all `r` up to
+ * `CAP_R_MAX / (1 - k * TAPER / RING_STEP)` — which at the old 1.15 is 24.9 m
+ * and at 1.3 is 29.9. The hall's own `hi` is 26 and Catmull-Rom overshoots it by
+ * about 8%, so 1.15 was inside its own bound by four metres and is now outside
+ * it by three. There is nothing gradual about crossing that line: below it the
+ * dome swallows the taper entirely, above it the taper appears in front of the
+ * dome at full length.
  *
  * THE DOME CANNOT BREACH THE HILL, and that is not an assumption. Every ring it
  * writes takes its shape from the base ring and its radius from a factor at most
  * 1, and its axis is set from the base ring's own FLOOR — so its ceiling is
  * `floor + r_i * (t + rough)` with `r_i <= r_base`, which is at or below the base
  * ring's ceiling everywhere, and the base ring has already been through the
- * burial. `roofRoom`'s rosette scales with the ring's half-width, so at a
+ * burial. `roofScan`'s rosette scales with the ring's half-width, so at a
  * chamber-sized base it has already sampled the ground the dome runs over.
  */
 function closeEnd(path) {
@@ -1472,7 +1968,7 @@ function closeEnd(path) {
   let m = CAP_RINGS;
   for (let it = 0; it < 3; it++) {
     const b = Math.max(1, n - 1 - m);
-    m = clamp(Math.round((path.r[b] * 1.15) / RING_STEP), CAP_RINGS, CAP_RINGS_MAX);
+    m = clamp(Math.round((path.r[b] * 1.3) / RING_STEP), CAP_RINGS, CAP_RINGS_MAX);
   }
   const base = Math.max(1, n - 1 - m);
   const span = n - 1 - base;
@@ -1532,11 +2028,19 @@ function closeEnd(path) {
  * before it and back down over the eight after, so the space is twenty-five
  * metres end to end and you are through it in six seconds having never stopped
  * walking. What makes a chamber is that its far wall is far enough away that
- * getting there is a decision. 0.55 back to itself gives a mean run of a bit
- * over two nodes — forty to sixty metres of hall — and every one of those nodes
- * is independently sized against the rock it is under, so a run that walks out
- * from under the mountain shrinks and then hands over to a room rather than
+ * getting there is a decision. 0.64 back to itself gives a mean run of just
+ * under three nodes — sixty to ninety metres of hall — and every one of those
+ * nodes is independently sized against the rock it is under, so a run that walks
+ * out from under the mountain shrinks and then hands over to a room rather than
  * pinching. See `chamberFit`.
+ *
+ * It was 0.55, and the reason to spend the extra is that a hall's own width has
+ * gone from 51 m to 70. The run has to grow WITH the section or it stops being a
+ * run: three nodes at 26 m of radius is a space whose far wall is beyond the
+ * chamber's own width, which is the difference between walking into somewhere
+ * and walking across it. The weight came out of the four small sections rather
+ * than out of `room`, because the exit from a chamber that matters is the one
+ * into another large space.
  */
 const TYPE_CHAIN = {
   tube: [['tube', 0.32], ['keyhole', 0.20], ['canyon', 0.17], ['bedding', 0.15], ['room', 0.12], ['hall', 0.04]],
@@ -1544,7 +2048,7 @@ const TYPE_CHAIN = {
   keyhole: [['keyhole', 0.28], ['canyon', 0.25], ['tube', 0.22], ['room', 0.11], ['bedding', 0.09], ['hall', 0.05]],
   bedding: [['bedding', 0.31], ['tube', 0.25], ['room', 0.16], ['canyon', 0.12], ['keyhole', 0.09], ['hall', 0.07]],
   room: [['tube', 0.26], ['canyon', 0.21], ['bedding', 0.19], ['keyhole', 0.16], ['hall', 0.13], ['room', 0.05]],
-  hall: [['hall', 0.55], ['room', 0.18], ['tube', 0.11], ['bedding', 0.08], ['canyon', 0.05], ['keyhole', 0.03]],
+  hall: [['hall', 0.64], ['room', 0.16], ['tube', 0.08], ['bedding', 0.06], ['canyon', 0.04], ['keyhole', 0.02]],
 };
 
 /**
@@ -1686,6 +2190,169 @@ function roofRoom(x, z, tx, tz, half) {
   return surf;
 }
 
+/* -------------------------------------------------------------------------- *
+ *  A CEILING IS A DOME, AND ASKING FOR IT AS A SLAB IS WHAT KEPT THE CHAMBERS
+ *  SMALL
+ * -------------------------------------------------------------------------- *
+ *
+ * `roofRoom` above is a MINIMUM over a rosette out to 1.15 half-widths, and
+ * every caller compared that one number against `y + r * (t + rough)` — the
+ * height of the section over its own AXIS. Read that back as a statement about
+ * rock and it says: there must be as much mountain over the rim of the chamber
+ * as there is over the middle of it. There must not. The rim of the chamber is
+ * where the wall meets the floor; the ceiling there is at the axis's own height,
+ * because that is what an ellipse is. The rule was demanding thirty metres of
+ * hillside over a point where the cave is zero metres tall.
+ *
+ * It is not a small conservatism, and it gets worse exactly where it hurts. The
+ * rosette scales with the footprint, so a chamber twice as wide reaches twice as
+ * far out for its minimum — down the flank, on a ridge — and the bigger the
+ * chamber the further from it the binding sample is taken. That is a feedback
+ * loop that can only ever settle at "small", and it is why `hall` has wished for
+ * nineteen metres of radius for its whole life and the widest ring ever measured
+ * on four seeds was nineteen metres of radius: the wish was the answer, because
+ * the rock could not grant it anywhere it was asked properly. The same argument
+ * ground `room` down to 5.1 m — see the `vast` block in SHAPES, which is this
+ * mistake caught one level up and patched rather than fixed.
+ *
+ * So the rosette is read out as three numbers — the hillside over the axis, and
+ * its minimum over two rings of the footprint — and each is compared against
+ * what the SECTION is actually doing at that offset:
+ *
+ *     need(u)  =  t * sqrt(1 - u^2)  +  rough        for u < 1
+ *     need(u)  =  rough                              for u >= 1
+ *
+ * which is `ceilAt` with the displacement added, in section units, so the two
+ * consumers below and the emitter that draws the surface are all quoting one
+ * geometry. At the outer ring there is no cave at all and the requirement
+ * collapses to the displacement — 12.6 m of hill over the axis for a nineteen
+ * metre hall, against 58 m before. That single term is where the scale comes
+ * from.
+ *
+ * THE READ IS SEPARATE FROM THE TWO QUESTIONS ASKED OF IT, and that separation
+ * is load-bearing rather than tidy. `heightAt` is the whole cost — seventeen
+ * samples, 0.010-0.012 ms — and `burySkylights` needs to ask twice about the
+ * same ring at two different axis heights: once to find out how far it must
+ * fall, and again, after the slope limiters have moved it further, to find out
+ * what radius the rock will carry it at. Scanning once and answering both from
+ * the reading is what stops the burial costing double, and it is also what makes
+ * "the walk and the burial cannot disagree" true by construction instead of by
+ * discipline. That disagreement is the documented cause of a twenty-four metre
+ * cliff between two consecutive rings.
+ */
+
+/** The rosette's rings, as fractions of the section's half-width. */
+const ROOF_RING = [0.62, 1.15];
+/** One reading: the hillside over the axis, then the minimum over each ring. */
+const _roofS = [0, 0, 0];
+
+function roofScan(x, z, tx, tz, half, out = _roofS) {
+  out[0] = heightAt(x, z);
+  for (let g = 0; g < ROOF_RING.length; g++) {
+    const d = ROOF_RING[g] * half + 0.6;
+    let lo = Infinity;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * TAU;
+      const ox = (-tz * Math.cos(a) + tx * Math.sin(a)) * d;
+      const oz = (tx * Math.cos(a) + tz * Math.sin(a)) * d;
+      const s = heightAt(x + ox, z + oz);
+      if (s < lo) lo = s;
+    }
+    out[g + 1] = lo;
+  }
+  return out;
+}
+
+/**
+ * How much rock ring `g` wants over the axis, per metre of radius.
+ *
+ * The 0.6 m pad `roofScan` adds is in METRES and the section is in radii, so it
+ * has to be folded back into `u` here rather than ignored — on a squeeze it is
+ * most of the offset and dropping it would have the innermost ring asking for a
+ * ceiling that is two thirds of the way up the wall.
+ */
+function roofNeed(g, sh, half) {
+  if (g === 0) return sh.t + sh.rough;
+  const u = ROOF_RING[g - 1] + 0.6 / Math.max(half, 1e-3);
+  return (u >= 1 ? 0 : sh.t * Math.sqrt(1 - u * u)) + sh.rough;
+}
+
+/** The largest radius a reading allows, for a section whose axis sits at `y`. */
+function roofCap(s, y, sh, half) {
+  let cap = Infinity;
+  for (let g = 0; g <= ROOF_RING.length; g++) {
+    const c = (s[g] - ROOF_ROCK - y) / roofNeed(g, sh, half);
+    if (c < cap) cap = c;
+  }
+  return cap > 0 ? cap : 0;
+}
+
+/** …and how far the axis must fall for a ring of radius `r` to be roofed. */
+function roofDrop(s, y, sh, r) {
+  const half = Math.max(r * sh.w, 1e-3);
+  let drop = -Infinity;
+  for (let g = 0; g <= ROOF_RING.length; g++) {
+    const d = y + r * roofNeed(g, sh, half) + ROOF_ROCK - s[g];
+    if (d > drop) drop = d;
+  }
+  return drop;
+}
+
+/**
+ * THE LARGEST RADIUS THAT CLEARS THE PASSAGE THE WALK HAS ALREADY CUT.
+ *
+ * The companion to `chamberFit`, and the same argument one axis over: that one
+ * asks how much MOUNTAIN there is over a point, this asks how much UNTOUCHED
+ * ROCK. A chamber can run out of either, and running out of the second is the
+ * one that produces two tubes sharing a volume — from inside, a body in open
+ * space with two sets of walls pushing it, which is a stall at full running
+ * velocity rather than anything that looks like a hole.
+ *
+ * A CAP AND NOT A VETO, which is the whole reason it is a function rather than a
+ * test. A veto re-rolls the section type, so it does not yield a smaller chamber
+ * — it yields no chamber, and then none at the next node either, because the arm
+ * it is avoiding has not moved. Measured with the veto alone: four of eight
+ * seeds came back with nothing over 25 m tall anywhere and the mean tallest
+ * section in the world fell from 45 m to 35.
+ *
+ * `beads` is the walked line sampled at every node and every midpoint, carrying
+ * the widest section it stands for; `walked` is how much line there is, so
+ * `walked - bd.at` is how far back a bead lies. The exemption is the clearance
+ * itself plus eight metres, for the reason the block in `buildNodes` gives — a
+ * bead nearer along the line than the clearance being demanded cannot possibly
+ * satisfy it, so testing it is a guaranteed refusal rather than a constraint.
+ *
+ * Iterated because that exemption is a function of the answer. Every pass can
+ * only shrink, so all three exits are conservative.
+ */
+function beadRoom(beads, walked, px, py, pz, sh, wish) {
+  if (!beads || !beads.length) return wish;
+  let cap = wish;
+  for (let it = 0; it < 3; it++) {
+    let next = cap;
+    for (let j = 0; j < beads.length; j++) {
+      const bd = beads[j];
+      if (walked - bd.at < bd.half + cap * sh.w * 1.15 + 11.5) continue;
+      const d = Math.hypot(bd.x - px, bd.y - py, bd.z - pz);
+      const allow = (d - bd.half - 3.5) / (sh.w * 1.15);
+      if (allow < next) next = allow;
+    }
+    if (next >= cap) break;
+    cap = next > 0 ? next : 0;
+  }
+  return cap;
+}
+
+/**
+ * A section with the jitter `shaped` will apply to it already spent.
+ *
+ * Sizing against the nominal section and letting the burial meet the jittered
+ * one is how you get a chamber that is fine at its nodes and pinched in the
+ * middle. Shared scratch rather than a literal because `chamberFit` runs
+ * forty-five times inside one `terminusFit`.
+ */
+const _fitSh = { w: 1, t: 1, rough: 0 };
+
 /**
  * THE BIGGEST CHAMBER THIS PIECE OF MOUNTAIN WILL ACTUALLY CARRY.
  *
@@ -1699,14 +2366,13 @@ function roofRoom(x, z, tx, tz, half) {
  * passage ENDING there, and on grove-01 that has twice meant three-hundred-metre
  * caves reported as fifteen-metre holes.
  *
- * So ask first. The burial's own test is
+ * So ask first, with the burial's own question — `roofDrop` — solved for `r`
+ * instead of checked after the fact. That is `roofCap`, and the two are two
+ * readings of the one rosette (see the block over `roofScan`) rather than two
+ * rules that have to be kept in step by hand. Two things make this more than one
+ * line:
  *
- *     y + r * (t + rough)  <=  roofRoom(footprint) - ROOF_ROCK
- *
- * and this is that inequality solved for `r` instead of checked after the fact.
- * Two things make it more than one line:
- *
- *   THE FOOTPRINT DEPENDS ON THE ANSWER. `roofRoom` samples a rosette scaled by
+ *   THE FOOTPRINT DEPENDS ON THE ANSWER. `roofScan` samples a rosette scaled by
  *   the ring's half-width, so a smaller chamber is measured over less ground and
  *   is allowed to be relatively taller — the constraint is not linear in `r`.
  *   Iterating converges in two or three passes and every exit is CONSERVATIVE:
@@ -1744,11 +2410,13 @@ function markDepth(path, mouthY) {
 }
 
 function chamberFit(x, z, tx, tz, y, sh, want) {
-  const tall = sh.t * 1.1 + sh.rough * 1.2;
+  _fitSh.w = sh.w * 1.12;
+  _fitSh.t = sh.t * 1.1;
+  _fitSh.rough = sh.rough * 1.2;
   let r = want;
   for (let it = 0; it < 4; it++) {
-    const surf = roofRoom(x, z, tx, tz, r * sh.w * 1.12);
-    const fit = Math.max(0, (surf - ROOF_ROCK - y) / tall);
+    const half = r * _fitSh.w;
+    const fit = roofCap(roofScan(x, z, tx, tz, half), y, _fitSh, half);
     if (fit >= r) break;
     r = Math.min(want, fit);
   }
@@ -1758,21 +2426,41 @@ function chamberFit(x, z, tx, tz, y, sh, want) {
 function* burySkylights(path, from) {
   const n = path.x.length;
   const want = Float64Array.from(path.y);
-  /** The headroom line — `roofRoom` minus ROOF_ROCK — kept for the cut below. */
-  const room = new Float64Array(n).fill(Infinity);
+  /**
+   * THE ROSETTE READING ITSELF, KEPT, RATHER THAN AN ANSWER DERIVED FROM IT.
+   *
+   * What used to be here was one `room` line per ring — `roofRoom` minus
+   * ROOF_ROCK — which worked because the old rule had one denominator for the
+   * whole section, so "how much rock is there" and "what radius does that allow"
+   * were the same number scaled. They are not the same number any more: the
+   * requirement now depends on where in the footprint you stand (see the block
+   * over `roofScan`), so the cap is a minimum over three terms with three
+   * different denominators and it moves when the axis moves.
+   *
+   * The radius pass below runs against `want`, which the two slope limiters have
+   * by then pushed further down than this pass did — so it has to ask the
+   * question again at a height this pass never saw. Keeping the three surface
+   * minima lets it, for the cost of three doubles a ring and no second walk over
+   * `heightAt`, which is the entire expense of this function.
+   */
+  const surf0 = new Float64Array(n);
+  const surf1 = new Float64Array(n);
+  const surf2 = new Float64Array(n);
+  /** The ring's own section, for `roofNeed`. Reused; never escapes. */
+  const shr = { w: 1, t: 1, rough: 0 };
   /**
    * THE ONE SLICE POINT IN THIS FUNCTION, AND IT IS IN THE RIGHT LOOP.
    *
    * `burySkylights` is five passes over the ring array and it is 42% of a whole
    * `prepare` — but only this first pass is expensive, because only this one
-   * calls `roofRoom`, which is nine `heightAt` samples over the passage's
+   * calls `roofScan`, which is seventeen `heightAt` samples over the passage's
    * shoulders. Measured at 0.010-0.012 ms a ring against 0.0002 for each of the
    * four slope-limiter passes that follow, so those are left whole: a nine
    * hundred ring passage runs all four of them in a fifth of a millisecond, and
    * cutting a running minimum into slices would mean carrying its accumulator
    * across frames for no gain that could be measured.
    *
-   * 48 rings is half a millisecond of `roofRoom`, which is the granularity the
+   * 48 rings is half a millisecond of `roofScan`, which is the granularity the
    * whole build is cut to. It is a work quantum and NOT a distance — see the
    * note on GOOD_RINGS for what happens in this file when those two are
    * confused — so it does not move when RING_STEP does.
@@ -1781,8 +2469,9 @@ function* burySkylights(path, from) {
   for (let i = Math.max(0, from); i < n; i++) {
     if (i % BURY_SLICE === 0) yield 'bury';
     const r = path.r[i];
-    const half = r * path.w[i];
-    const top = path.y[i] + r * (path.t[i] + path.rough[i]);
+    shr.w = path.w[i];
+    shr.t = path.t[i];
+    shr.rough = path.rough[i];
     const a = Math.max(0, i - 1);
     const b = Math.min(n - 1, i + 1);
     let tx = path.x[b] - path.x[a];
@@ -1790,9 +2479,12 @@ function* burySkylights(path, from) {
     const tl = Math.hypot(tx, tz) || 1;
     tx /= tl;
     tz /= tl;
-    const surf = roofRoom(path.x[i], path.z[i], tx, tz, half);
-    room[i] = surf - ROOF_ROCK;
-    if (top > room[i]) want[i] = path.y[i] - (top - room[i]);
+    const s = roofScan(path.x[i], path.z[i], tx, tz, r * shr.w);
+    surf0[i] = s[0];
+    surf1[i] = s[1];
+    surf2[i] = s[2];
+    const drop = roofDrop(s, path.y[i], shr, r);
+    if (drop > 0) want[i] = path.y[i] - drop;
   }
 
   /**
@@ -1859,9 +2551,22 @@ function* burySkylights(path, from) {
   const rock = new Float64Array(n);
   for (let i = 0; i < n; i++) rock[i] = path.r[i];
   for (let i = first; i < n; i++) {
-    const tall = path.t[i] + path.rough[i];
-    const fits = (room[i] - want[i]) / Math.max(tall, 0.2);
-    if (fits < rock[i]) rock[i] = Math.max(0, fits);
+    shr.w = path.w[i];
+    shr.t = path.t[i];
+    shr.rough = path.rough[i];
+    _roofS[0] = surf0[i];
+    _roofS[1] = surf1[i];
+    _roofS[2] = surf2[i];
+    /**
+     * The footprint is the one the reading was taken over, NOT the one the
+     * answer implies. A smaller radius reaches less far out and would be judged
+     * against a wider `u` — i.e. a smaller requirement — so re-deriving it from
+     * the answer would be solving the constraint against a rosette nobody
+     * sampled, in the permissive direction. Quoting the sampled footprint is
+     * conservative and is the only version that cannot invent a skylight.
+     */
+    const fits = roofCap(_roofS, want[i], shr, path.r[i] * shr.w);
+    if (fits < rock[i]) rock[i] = fits;
   }
   // 0.35 a ring is a taper you walk into rather than a doorway you meet.
   const TAPER = 0.35;
@@ -2066,6 +2771,51 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
   let y = first.y;
   let z = first.z;
 
+  /**
+   * A BRANCH HAS TO KEEP AWAY FROM ITSELF AS WELL AS FROM ITS PARENT.
+   *
+   * The clash test below has always been against the MAIN line's rings, and
+   * against nothing else — which was defensible while a branch was three to six
+   * nodes of blind lead that pinched out in twenty-five metres and could barely
+   * reach round to meet itself. A major branch is ten to sixteen nodes, walks
+   * the full type chain, and there are now up to two of them per cave; it is a
+   * passage, and every argument the main walk's own clash test rests on applies
+   * to it word for word.
+   *
+   * Measured on grove-01's k=0 with the main line's crossings already fixed:
+   * 313 ring pairs still sharing volume, all of them inside branches. Same
+   * beads, same rule, same exemption — see the block in `buildNodes`.
+   */
+  const beads = [];
+  let walked = 0;
+  const bead = (a, b) => {
+    /**
+     * 1.15 FOR THE SPLINE'S OWN OVERSHOOT, AND IT IS NOT A SAFETY FACTOR.
+     *
+     * `resample` runs Catmull-Rom over the RADIUS as well as the position, and
+     * Catmull-Rom is interpolating rather than convex — so the fattest ring
+     * between two nodes is fatter than either of them. Measured at 26.6 m
+     * between two 19 m nodes. A clash test that quotes node radii is therefore
+     * testing a passage narrower than the one that will be drawn, by up to a
+     * seventh, everywhere. `terminusFit` has always padded its chamber for this;
+     * the walk did not, and the difference showed up as ring pairs a hundred
+     * metres apart along the line sitting seven metres apart in space with every
+     * node centre legitimately clear.
+     */
+    const half = Math.max(a.r * a.w, b.r * b.w) * 1.15;
+    const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    beads.push({
+      x: (a.x + b.x) * 0.5,
+      y: (a.y + b.y) * 0.5,
+      z: (a.z + b.z) * 0.5,
+      half,
+      at: walked + len * 0.5,
+    });
+    walked += len;
+    beads.push({ x: b.x, y: b.y, z: b.z, half: b.r * b.w * 1.15, at: walked });
+  };
+  beads.push({ x: first.x, y: first.y, z: first.z, half: first.r * first.w * 1.15, at: 0 });
+
   const count = major ? 10 + Math.floor(rng() * 7) : 3 + Math.floor(rng() * 4);
   let type = type0;
   for (let i = 0; i < count; i++) {
@@ -2121,9 +2871,41 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
       const kind = major && i > 0 ? pickType(rng, type, false, 0) : type0;
       const sh = SHAPES[kind];
       const step = i === 0 ? rngRange(rng, 6, 9) : rngRange(rng, 9, 16);
-      // A major branch leans downhill like the main walk does, so taking the
-      // fork is also going deeper rather than sideways.
-      const pn = clamp(pitch + rngRange(rng, -0.16, 0.12) + (major ? -0.05 : 0), -0.4, 0.12);
+      /**
+       * A major branch leans downhill like the main walk does, so taking the
+       * fork is also going deeper rather than sideways.
+       *
+       * …AND A CHAMBER'S OWN AXIS IS LEVEL HERE TOO, WHICH THIS DID NOT KNOW.
+       *
+       * `buildNodes` has had that rule since the first hall, and the block over
+       * its own `p` is where the reasoning is: `caveSample` answers the floor
+       * from ONE ring while the drawn floor at a point is the lowest of every
+       * section that reaches it, so wherever the floor line has a gradient the
+       * two disagree by roughly (gradient x half-width). That is nothing in a
+       * four-metre passage and metres in a chamber.
+       *
+       * This function never got the rule, and it did not matter while a branch's
+       * biggest section was a `room` the burial had ground down to five metres.
+       * It matters now: `room` is sized from the rock like everything else and
+       * reaches sixteen metres of radius in a side passage, and a branch dives at
+       * up to -0.4. Measured on grove-01, a sixteen-metre chamber on a branch
+       * diving at 0.43 put the body four and a half metres UNDER the rock it can
+       * see, over a run of nine consecutive rings, and eight of the ten worst
+       * floor disagreements in the cave were in that one chamber.
+       *
+       * IT DID NOT MOVE THE TOTAL, and that is worth writing down rather than
+       * quietly leaving out: `cave-floor`'s count went from 412 to 413, because
+       * `vast` nodes in branches are rare enough that fixing them reshuffles the
+       * rng more than it fixes the metric. It is here because the rule is right
+       * and the main walk has had it for the same reason since the first hall —
+       * not because it was worth a number.
+       *
+       * Same envelope as the main walk's: near level, inheriting almost none of
+       * the dive it arrived on. The descent has not gone anywhere — it is in the
+       * passage leading to the chamber, which is where a real one is anyway.
+       */
+      const pWant = clamp(pitch + rngRange(rng, -0.16, 0.12) + (major ? -0.05 : 0), -0.4, 0.12);
+      const pn = SHAPES[kind].vast ? clamp(pitch * 0.12 + rngRange(rng, -0.07, 0.03), -0.11, 0.06) : pWant;
       const nx = x + Math.cos(h) * step * Math.cos(pn);
       const nz = z + Math.sin(h) * step * Math.cos(pn);
       let r = rngRange(rng, sh.lo, sh.hi) * (i > count - 2 ? 0.8 : 1);
@@ -2144,8 +2926,9 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
        * still goes somewhere rather than stopping at the junction.
        */
       if (attempt < tries - 1) {
-        const shoulder = roofRoom(nx, nz, ux, uz, r * sh.w);
-        if (shoulder < ny + r * (sh.t + sh.rough) + ROOF_ROCK * 0.7) continue;
+        // Nominal, not jittered — see the block on the main walk's own veto.
+        const s = roofScan(nx, nz, ux, uz, r * sh.w);
+        if (roofDrop(s, ny, sh, r) > -ROOF_ROCK * 0.3) continue;
       }
 
       /**
@@ -2167,10 +2950,31 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
         const min = main.r[j] * main.w[j] + r * sh.w + 3;
         if (dx * dx + dy * dy + dz * dz < min * min) clash = true;
       }
+      // …and against the branch's own line, on the beads. See the block above
+      // `beads` and the one it points at in `buildNodes`.
+      for (let s = 1; s <= 4 && !clash; s++) {
+        const f = s / 4;
+        const px = x + (nx - x) * f;
+        const py = y + (ny - y) * f;
+        const pz = z + (nz - z) * f;
+        for (let j = 0; j < beads.length; j++) {
+          const bd = beads[j];
+          const min = bd.half + r * sh.w * 1.15 + 3.5;
+          if (walked - bd.at < min + 8) continue;
+          const dx = bd.x - px;
+          const dy = bd.y - py;
+          const dz = bd.z - pz;
+          if (dx * dx + dy * dy + dz * dz < min * min) {
+            clash = true;
+            break;
+          }
+        }
+      }
       if (clash) continue;
 
       const nd = shaped(nx, ny, nz, r, sh, rng);
       nd.type = kind;
+      bead(nodes[nodes.length - 1], nd);
       nodes.push(nd);
       heading = h;
       pitch = pn;
@@ -2220,7 +3024,7 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
   // No depth floor: a branch has never had one, and the dive is bounded anyway
   // by the same MAX_DIVE gradient over the step that the main walk uses.
   yield 'branch';
-  const term = yield* terminusFit(rng, x, y, z, heading, joints, mainNodes, -Infinity, last.r * 1.25);
+  const term = yield* terminusFit(rng, x, y, z, heading, joints, mainNodes, -Infinity, last.r * 1.25, beads, walked);
   yield 'branch-terminus';
   if (term) {
     const sh = SHAPES[term.kind];
@@ -2463,13 +3267,29 @@ function flatten(path, from = 0) {
      * secretly distances came to be wrong.
      *
      * As metres it says what it means: level the floor over most of the space's
-     * own half-width, out to 22 m, which is over the widest the rock has ever
-     * granted. A chamber levelled over less than its own width comes out as a
-     * shallow dish with the axis's meander still in it — the "rolling bottom no
-     * collapse ever made" this function exists to delete, at the one scale where
-     * it is unmissable.
+     * own half-width. A chamber levelled over less than its own width comes out
+     * as a shallow dish with the axis's meander still in it — the "rolling
+     * bottom no collapse ever made" this function exists to delete, at the one
+     * scale where it is unmissable.
+     *
+     * THE CAP WAS 22 m AND IT WAS JUSTIFIED AS "over the widest the rock has
+     * ever granted", WHICH IS A FACT ABOUT THE ROCK AND NOT ABOUT THIS
+     * FUNCTION. The rock grants more now — `roofScan` asks it properly and a
+     * hall reaches 36 m of half-width against the 25 it used to — so the same
+     * number silently became a cap that BINDS on exactly the spaces the whole
+     * function exists for. What that presents as is not a wobbly floor: it is
+     * hovering, because `caveSample` answers the floor from one ring while the
+     * drawn floor at a point is the lowest of the dozen sections that reach it,
+     * and the gap between those two is the meander the levelling was supposed to
+     * have removed. Measured on grove-01 with the cap at 22: 428 probes
+     * disagreeing by over 0.45 m against 203 before the chambers grew.
+     *
+     * 45 m is over the widest section this table can now produce, which puts the
+     * cap back where it was meant to be — a backstop against a runaway radius
+     * rather than a limit on a real one. It costs nothing anywhere else: every
+     * ordinary passage is far under it and takes its own half-width as before.
      */
-    const win = Math.round(Math.min(22, path.r[i] * path.w[i] * 0.9) / RING_STEP);
+    const win = Math.round(Math.min(45, path.r[i] * path.w[i] * 0.9) / RING_STEP);
     if (win < 2) {
       level[i] = floor[i];
       continue;
@@ -2876,18 +3696,279 @@ function ceilY(k, path, i, sh, nOff, x, z) {
 const BLOCK_SIDES = 7;
 
 /**
- * How much of a breakdown slab the BODY is allowed to stand on, against how much
- * of it is drawn. Fitted, not derived — the long block in `caveSample` is where
- * the measurement and the reasoning are, and neither of these numbers means
- * anything without it.
+ * A BREAKDOWN SLAB, SOLVED ONCE AND PACKED, SO THE MESH AND THE BODY CANNOT
+ * DISAGREE ABOUT IT.
  *
- * Kept here rather than inline because they are a fact about `_emitBlock`'s
- * shape, not about the collider: the day the plan jitter or the lean in that
- * function changes, these are what has to be re-fitted, and they should be
- * sitting next to it when it happens.
+ * There used to be two numbers here — BLOCK_REACH 0.5 and BLOCK_RISE 0.8 — that
+ * described a DOME the collider raised over `(b.x, b.z, b.rad, b.top)`, and a
+ * long comment in `caveSample` explaining that the dome was a fitted compromise
+ * because the drawn height is not a function of those four numbers. It is not,
+ * and it never was: `_emitBlock` throws each of the seven base corners to
+ * `rad * 0.26..1.5`, puts a SEPARATE top polygon on top (`shrink` 0.28-0.72,
+ * shoved sideways by up to half the radius, each corner with its own break), and
+ * leans the whole solid by up to 0.7 m per metre. Measured against the drawn
+ * geometry, past 0.4 of the nominal radius the MEDIAN block is simply gone. A
+ * dome fitted to that is fitted to a bimodal distribution, and the whole Pareto
+ * front of 243 of them traded hovering for wading at a fixed total: the best any
+ * of them managed was 79 bad stands out of 278, and the shipped one left the
+ * body up to 1.18 m in the air over a boulder it could see under its feet.
+ *
+ * So the shape is solved ONCE, here, in `prepare`, and both consumers read the
+ * same numbers out of the same buffer. `_emitBlock` no longer runs the rng at
+ * all — it draws the polygon this function packed — and `blockTopAt` below
+ * evaluates the exact triangles that polygon becomes. The disagreement between
+ * the collider and the mesh is now zero by construction rather than fitted, and
+ * there is no constant left in this file that has to be re-fitted the day the
+ * jitter changes.
+ *
+ * WHAT IT COSTS IN MEMORY, because that is the reason to think twice about
+ * putting a polygon on a per-block record. Forty floats a block: the base ring's
+ * seven (x, z), the top ring's seven (x, z, y), the top polygon's own centre and
+ * height, the buried base plane, and a plan-radius for the reject. 160 bytes a
+ * block, ~300 blocks in a big cave, so 48 kB per cave — held as ONE Float32Array
+ * per passage rather than one per block, because 300 typed-array headers cost
+ * more than the floats in them.
+ *
+ * The rng draw ORDER below is load-bearing and matches the one `_emitBlock` used
+ * to run inline, draw for draw: lean angle, lean strength, shrink, skewX, skewZ,
+ * then per corner angle, radius, shrink, own break. Change the order and every
+ * boulder in the world moves.
  */
-const BLOCK_REACH = 0.5;
-const BLOCK_RISE = 0.8;
+/**
+ * THE RISE THE BODY CAN TAKE, AND ITS EYE, MIRRORED FROM `controller.js`.
+ *
+ * `STEP_UP` and `EYE` live over there and are not exported; they are 0.55 and
+ * 1.68. They are needed here because the moment the collider started answering
+ * with the DRAWN slab instead of a dome, a breakdown block stopped being a ramp
+ * and became what it looks like: a thing with a near-vertical fracture face on
+ * at least one side. The step rule then correctly refuses to climb it — and
+ * refusing is all it does, so a body walking head-on into a boulder stopped
+ * dead. `cave-walk` caught it immediately: k=1 stuck at 2.2 m against a 1.07 m
+ * slab seated 1.07 m off the axis of a ten-metre passage, for forty seconds,
+ * with room to walk round it on both sides.
+ *
+ * So a slab too tall to step onto is published as a POST, which is the
+ * machinery this file already has for a column and which `controller.js`
+ * applies as a displacement push — you slide round it exactly as you slide
+ * round a trunk. Two numbers duplicated across a module boundary is a real
+ * cost; the alternative was for the collider to keep lying about the shape of
+ * every boulder in the world so that one rule in another file could stay
+ * ignorant of it, which is the trade that produced the hover in the first
+ * place. If either constant moves over there, this is what has to follow.
+ */
+const BLOCK_STEP = 0.55;
+const BODY_EYE = 1.68;
+
+const BLOCK_STRIDE = 5 + BLOCK_SIDES * 5;
+const B_YBOT = 0;
+const B_CTOP = 1;
+const B_CTX = 2;
+const B_CTZ = 3;
+const B_REACH = 4;
+const B_BX = 5;
+const B_BZ = 5 + BLOCK_SIDES;
+const B_TX = 5 + BLOCK_SIDES * 2;
+const B_TZ = 5 + BLOCK_SIDES * 3;
+const B_TY = 5 + BLOCK_SIDES * 4;
+
+function blockSolid(k, bl, buf, si) {
+  const rng = makeRng(`${getWorldSeed()}:cave-block:${k}:${bl.seed}`);
+  /**
+   * The base goes further under the floor than the block stands above it, so it
+   * is never on screen. A slab resting exactly on the analytic floor shows a
+   * seam all the way round wherever the visible floor's own displacement dips
+   * under it — which is everywhere, because the floor carries its own rock
+   * noise — and that is the whole "the boulders are hovering" class of
+   * screenshot. It costs two triangles a side that nobody ever sees.
+   */
+  const yTop = bl.y + bl.top;
+  const yBot = bl.y - bl.top * 0.5 - 0.5;
+
+  /**
+   * The lean, and it is what makes a field of these read as a collapse rather
+   * than as a car park. Slabs come to rest against each other and against the
+   * rubble under them, so they sit at angles; a scatter of level ones reads as
+   * placed, whatever shape they are.
+   */
+  const leanA = rngRange(rng, 0, TAU);
+  const leanK = rngRange(rng, 0.22, 0.7);
+  const tiltX = Math.cos(leanA) * leanK;
+  const tiltZ = Math.sin(leanA) * leanK;
+
+  /**
+   * THE FIRST TUNING OF THIS WAS FAR TOO POLITE AND CAME OUT AS BOXES AGAIN.
+   *
+   * Radii from half to just over one, angles jittered by a fifth of a step, and
+   * a top plane with a tenth of the block's height of relief on it. Every one of
+   * those is a reasonable-sounding number and together they describe a squat
+   * cylinder with a lid — which the eye files under "box" just as fast as an
+   * actual box, because at this scale what it is reading is "no corner is much
+   * different from any other corner".
+   *
+   * A quarter to one and a half on the radius, half a step on the angle, and a
+   * per-corner height drawn independently of the tilt plane. The point is that
+   * the corners must DISAGREE: one that sticks a long way out next to one that
+   * barely does is what a fracture looks like, and a flat top is the single most
+   * box-like feature a solid can have.
+   *
+   * AND THE TOP IS A DIFFERENT POLYGON FROM THE BOTTOM, WHICH IS THE ONE THAT
+   * FINALLY KILLED THE BOX. A prism has vertical sides. Ragged them all you like
+   * and every side face is still parallel to every other side face's own
+   * vertical, so the silhouette is a vertical-walled lump with a jagged hat on it
+   * and the eye still says box. Verticality WAS the tell, not regularity. So the
+   * top ring is drawn separately: smaller by a large and random factor, shoved
+   * sideways by up to half the radius, and with its own per-corner scatter. Now
+   * no two side faces share a slope, none of them is vertical, and the thing has
+   * an overhang on one side and a ramp on the other — which is what a lump of
+   * fractured limestone lying in silt actually looks like.
+   */
+  const shrink = rngRange(rng, 0.28, 0.72);
+  const skewX = rngRange(rng, -0.5, 0.5) * bl.rad;
+  const skewZ = rngRange(rng, -0.5, 0.5) * bl.rad;
+  /** The tilted top, plus this corner's own break. */
+  const topAt = (px, pz, own) =>
+    yTop +
+    (px - bl.x) * tiltX +
+    (pz - bl.z) * tiltZ +
+    own +
+    rock(px * 1.6, yTop, pz * 1.6) * bl.top * 0.2;
+
+  let reach = 0;
+  let wall = 0;
+  for (let i = 0; i < BLOCK_SIDES; i++) {
+    const a = bl.rot + (i / BLOCK_SIDES) * TAU + rngRange(rng, -0.5, 0.5);
+    const rr = bl.rad * rngRange(rng, 0.26, 1.5);
+    const bx = bl.x + Math.cos(a) * rr;
+    const bz = bl.z + Math.sin(a) * rr;
+    const s = shrink * rngRange(rng, 0.55, 1.4);
+    // Each corner's own height, on top of the tilt. A third of the block.
+    const own = rngRange(rng, -0.34, 0.16) * bl.top;
+    const tx = bl.x + (bx - bl.x) * s + skewX;
+    const tz = bl.z + (bz - bl.z) * s + skewZ;
+    buf[si + B_BX + i] = bx;
+    buf[si + B_BZ + i] = bz;
+    buf[si + B_TX + i] = tx;
+    buf[si + B_TZ + i] = tz;
+    buf[si + B_TY + i] = topAt(tx, tz, own);
+    /**
+     * The reject radius is the widest CORNER, not `bl.rad`. It is up to 1.5x
+     * bigger, so the collider now looks at blocks it used to skip — which is the
+     * point: those columns are where the drawn rock is and the body was walking
+     * through it. Taking the max over both rings rather than the base alone
+     * because the skew can push a top corner outside every base corner.
+     */
+    const db = Math.hypot(bx - bl.x, bz - bl.z);
+    const dt = Math.hypot(tx - bl.x, tz - bl.z);
+    if (db > reach) reach = db;
+    if (dt > reach) reach = dt;
+    /**
+     * …AND THE PLAN RADIUS OF THE PART THAT IS A WALL, which is a different
+     * question from `reach` and is the one the go-round push needs.
+     *
+     * `reach` is the whole solid including the fracture faces, which RAMP from
+     * below the silt up to the lid and are climbable over most of their run.
+     * The part the body cannot get onto is the LID — a body at the lid's edge
+     * has the whole of the block's height in front of it — so the wall radius is
+     * how far the lid reaches, and only from corners that actually stand more
+     * than a step above the slab's foot. A slab under half a metre tall has no
+     * wall radius at all and is walked over, which is what most of them are.
+     *
+     * A circle, where the floor answer is exact, and the asymmetry is
+     * deliberate. The floor is what puts the body in mid-air when it is wrong,
+     * so it is solved. The push only decides which way you go round something
+     * you can see; a circle over the lid is conservative in the safe direction
+     * (you brush past a corner slightly wider than it looks) and it costs one
+     * float instead of a per-frame outward search along the bearing.
+     */
+    if (buf[si + B_TY + i] > bl.y + BLOCK_STEP && dt > wall) wall = dt;
+  }
+  buf[si + B_YBOT] = yBot;
+  buf[si + B_CTOP] = topAt(bl.x + skewX, bl.z + skewZ, 0);
+  buf[si + B_CTX] = bl.x + skewX;
+  buf[si + B_CTZ] = bl.z + skewZ;
+  buf[si + B_REACH] = reach;
+  bl.reach = reach;
+  bl.wall = wall;
+}
+
+/**
+ * Height of a triangle over a column, or -Infinity if the column misses it.
+ *
+ * -Infinity and not null on purpose: this is called up to 21 times per block per
+ * `caveSample` and a function that returns "number or null" is not monomorphic,
+ * which in a hot loop costs more than the arithmetic it is guarding.
+ */
+function triY(ax, az, ay, bx, bz, by, cx, cz, cy, px, pz) {
+  const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+  if (d > -1e-9 && d < 1e-9) return -Infinity;
+  const w0 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+  if (w0 < 0 || w0 > 1) return -Infinity;
+  const w1 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+  if (w1 < 0 || w1 > 1) return -Infinity;
+  const w2 = 1 - w0 - w1;
+  if (w2 < 0) return -Infinity;
+  return w0 * ay + w1 * by + w2 * cy;
+}
+
+/**
+ * The top of the drawn slab over a column, evaluated on the same triangles the
+ * mesh is made of. -Infinity if the column misses the solid entirely.
+ *
+ * THE TOP FAN FIRST, AND A HIT THERE RETURNS. The lid is emitted as seven wedges
+ * fanned from the top polygon's centre, so a column inside it is on the upper
+ * surface of the solid by definition and no side face can be above it. That is
+ * the case the body is in whenever it is standing ON a block, and it costs four
+ * triangle tests on average rather than twenty-one.
+ *
+ * THE SIDES ARE NOT OPTIONAL, which was the surprise. The top polygon is 28-72%
+ * of the base and shoved sideways, so most of the slab's PLAN is side face: a
+ * sloping fracture panel running from the buried base ring up to the lid. On the
+ * skewed side that panel is an overhang the body should walk under, and on the
+ * other it is a ramp the body should walk up, and the old dome answered "flat
+ * top" to both. Split the same way `_face` splits a quad — (A,B,C) then (A,C,D)
+ * — because a quad with four corners at four heights is not planar and the two
+ * triangulations differ by up to the block's whole height along the diagonal.
+ *
+ * The `max` over the side triangles rather than a first hit: the plan angles are
+ * jittered by half a step against a step of TAU/7, so consecutive corners can
+ * cross and the polygon is not guaranteed convex. Taking the highest hit is what
+ * the mesh's own depth test does anyway.
+ */
+function blockTopAt(buf, si, px, pz) {
+  const ctx = buf[si + B_CTX];
+  const ctz = buf[si + B_CTZ];
+  const ctop = buf[si + B_CTOP];
+  for (let i = 0; i < BLOCK_SIDES; i++) {
+    const j = i + 1 === BLOCK_SIDES ? 0 : i + 1;
+    const y = triY(
+      ctx, ctz, ctop,
+      buf[si + B_TX + i], buf[si + B_TZ + i], buf[si + B_TY + i],
+      buf[si + B_TX + j], buf[si + B_TZ + j], buf[si + B_TY + j],
+      px, pz
+    );
+    if (y > -Infinity) return y;
+  }
+  const yBot = buf[si + B_YBOT];
+  let best = -Infinity;
+  for (let i = 0; i < BLOCK_SIDES; i++) {
+    const j = i + 1 === BLOCK_SIDES ? 0 : i + 1;
+    const abx = buf[si + B_BX + i];
+    const abz = buf[si + B_BZ + i];
+    const bbx = buf[si + B_BX + j];
+    const bbz = buf[si + B_BZ + j];
+    const atx = buf[si + B_TX + i];
+    const atz = buf[si + B_TZ + i];
+    const aty = buf[si + B_TY + i];
+    const btx = buf[si + B_TX + j];
+    const btz = buf[si + B_TZ + j];
+    const bty = buf[si + B_TY + j];
+    let y = triY(abx, abz, yBot, bbx, bbz, yBot, btx, btz, bty, px, pz);
+    if (y > best) best = y;
+    y = triY(abx, abz, yBot, btx, btz, bty, atx, atz, aty, px, pz);
+    if (y > best) best = y;
+  }
+  return best;
+}
 
 /**
  * How far back from the drawn wall a formation's root is bedded, in METRES.
@@ -3122,6 +4203,43 @@ const POOL_MIN_HALF = 4.5;
  * reads as a hazard rather than as a mirror.
  */
 const POOL_DEPTH = 0.2;
+/**
+ * How many rings past the level run the shore is allowed to be looked for.
+ *
+ * See the block in `placeWater` that uses it. Rings are RING_STEP-ish apart
+ * AFTER resampling — measured at 0.23-0.94 m through the terminal chamber of
+ * grove-01 k=0, so forty rings is twenty to thirty metres of bank, which is
+ * more than any chamber in SHAPES is long. It is a stop, not a target: the
+ * height test is what normally ends the walk, and on the reference cave it ends
+ * it after seventeen.
+ */
+const POOL_REACH = 40;
+
+/**
+ * How deep a stream is over the lowest rock in its section, in metres.
+ *
+ * THIS IS A WIDTH CONTROL AND NOT A DEPTH. Nothing in the game can be in water
+ * this shallow in any way it would notice — the body walks the analytic floor
+ * underneath — so what the number actually decides is how far up the bank the
+ * surface reaches before the ground wins, and therefore how wide the water is.
+ * It is set against the floor's own relief rather than against a taste: the
+ * drawn floor carries `r * ROUGH_FLOOR` of displacement, which is 11 cm on a
+ * squeeze and 22 on a four-metre passage, so 0.16 puts the shoreline out where
+ * the section itself starts to curve up on a narrow ring and inside the
+ * displacement's own hollows on a wide one. Bigger and it floods a room; much
+ * smaller and it is a wet line rather than a stream.
+ */
+const STREAM_DEEP = 0.16;
+/**
+ * Samples either side of the axis when looking for the hollow the water is in.
+ *
+ * Nine across the section. The floor's finest displacement octave is about
+ * 0.8 m of wavelength (see `rock`), and nine samples across an ordinary
+ * four-metre passage is 0.6 m apart — just inside it, which is what a scan
+ * looking for a local minimum needs. Finer buys a meander the mesh cannot draw,
+ * because the floor is only RADIAL vertices around.
+ */
+const STREAM_SCAN = 4;
 
 function placeWater(c, path, tag) {
   const rng = makeRng(`${getWorldSeed()}:cave-water:${c.k}:${tag}`);
@@ -3159,7 +4277,25 @@ function placeWater(c, path, tag) {
           j += w * 2;
         }
       }
-      runs.push({ i0: i, i1 });
+      /**
+       * CHUNKED, FOR THE REASON THE LAKE IS — see the block below its own
+       * `runs.push`. `_emitExtra` emits one object per call and `step` yields
+       * between them, so a run is atomic however long it is. That was free while
+       * a stream was a constant-width strip: two multiplications a ring. It is
+       * not free now that each ring scans its section for the hollow the water
+       * lies in, which is twenty-five `floorY` solves — a sixty-six ring run is
+       * sixteen hundred of them in one uninterruptible slice, against a 1.8 ms
+       * budget the lake had already run into.
+       *
+       * Ten rings a chunk, overlapping by one so the strips join on a shared
+       * edge rather than meeting at one.
+       */
+      const CHUNK = 10;
+      for (let a = i; a < i1; a += CHUNK) {
+        const b = Math.min(i1, a + CHUNK + 1);
+        runs.push({ i0: a, i1: b });
+        if (b >= i1) break;
+      }
     }
     i = i1 + 30 + Math.floor(rng() * 90);
   }
@@ -3205,16 +4341,6 @@ function placeWater(c, path, tag) {
       j0 = k;
     }
     if (endR - j0 >= 8) {
-      for (let j = j0; j <= endR; j++) {
-        /**
-         * Tapered at the SHALLOW end only. A stream is tapered at both because
-         * both of its ends are arbitrary; a lake's far end is the wall of the
-         * chamber, and fading the water out before it reaches the rock is the
-         * one thing that would make it read as a decal.
-         */
-        path.wet[j] = clamp01((j - j0) / 5);
-        path.pool[j] = Math.max(path.pool[j], path.wet[j]);
-      }
       /**
        * ONE SURFACE HEIGHT FOR THE WHOLE LAKE, SOLVED HERE AND CARRIED.
        *
@@ -3230,6 +4356,84 @@ function placeWater(c, path, tag) {
         poolY = Math.max(poolY, floorY(c.k, path, j, sh, 0, path.x[j], path.z[j]));
       }
       poolY += POOL_DEPTH;
+      /**
+       * AND THEN KEEP WALKING, PAST THE LEVEL RUN, UNTIL THE FLOOR IS OUT OF THE
+       * WATER — BECAUSE A LAKE'S SHALLOW END IS A SHORELINE TOO.
+       *
+       * This replaces a `clamp01((j - j0) / 5)` taper that multiplied the solved
+       * half-width, and that taper was the single most visible thing wrong with
+       * the pool. The sides of a lake are solved: `_emitWater` bisects for the
+       * offset at which the rock rises through the surface, so they wander with
+       * the displacement and look like a shore. The shallow end was not solved at
+       * all — it was a width scaled from 0 to 1 over five rings while `poolY` was
+       * by construction ABOVE every floor in the run, so the water could not
+       * close on its own and the taper drew the only shape it can: a triangular
+       * wedge, thirty metres across, with two dead-straight sides. Measured on
+       * grove-01 k=0 that wedge is the whole upstream half of the pool — the run
+       * was rings 895-906, 5.1 m of passage in a chamber 34 m wide.
+       *
+       * The fix is not a softer taper, it is not having one. `poolY` is already
+       * solved over the LEVEL part of the run above; walking further back from
+       * `j0` now costs nothing but a few more rings of geometry, and every one of
+       * them is a ring whose floor is climbing THROUGH the surface — which is
+       * exactly the condition the side bisection already handles. The shore
+       * closes itself, from both sides at once, along the rock.
+       *
+       * The extension stops on whichever comes first:
+       *   - the axis floor clears the surface by a good margin (the passage has
+       *     definitively left the water), or
+       *   - POOL_REACH rings, so a cave whose terminal chamber runs gently uphill
+       *     for eighty metres does not flood all of it, and
+       *   - the section narrowing below POOL_MIN_HALF, the same test as above,
+       *     so the lake still cannot climb the passage that feeds the chamber.
+       *
+       * Measured on grove-01 k=0: 895 becomes 878, 5.1 m becomes 12.4 m, and the
+       * straight edge is gone because there is no longer an edge that is drawn
+       * rather than found.
+       */
+      const deep0 = j0;
+      let jS = j0;
+      while (jS > 1 && j0 - jS < POOL_REACH) {
+        const k = jS - 1;
+        if (path.r[k] * path.w[k] < POOL_MIN_HALF) break;
+        const sh = ringShape(path, k, _shapeB);
+        // The axis is the lowest point of the section, so an axis this far clear
+        // of the surface means the whole ring is dry and every one behind it is
+        // drier still — the walk is climbing away from the water by construction.
+        if (floorY(c.k, path, k, sh, 0, path.x[k], path.z[k]) > poolY + 0.9) break;
+        jS = k;
+      }
+      j0 = jS;
+      for (let j = j0; j <= endR; j++) {
+        /**
+         * NOT tapered at either end now. The far end is the wall of the chamber
+         * and the near end is the shore; fading the water out before it reaches
+         * either is the one thing that would make it read as a decal.
+         *
+         * `wet` is what `_emitRing` reads for the floor's damp darkening and what
+         * `_shade` gets as `damp`, so a flat 1 over the run is also what puts wet
+         * rock on the bank — see the WET ROCK block in `_shade`.
+         */
+        path.wet[j] = 1;
+        /**
+         * `pool` IS NOT `wet` HERE, AND IT IS STILL WORTH THE TWO CHANNELS.
+         *
+         * `pool` used to be what `_emitRing` scooped a trench with, and the
+         * asymmetry existed because the trench would have run out of the lake
+         * along the dry bank as a gutter pointing at the water like an arrow.
+         * There is no trench any more — it is the groove, and the block in
+         * `_emitRing` is where it went — so that particular failure cannot
+         * happen.
+         *
+         * The distinction survives because `pool` is now the one number that
+         * says "this ring is standing water, not a stream": `_emitWater` deepens
+         * a stream by it, so a run that fattens into a pool broadens rather than
+         * stopping at a width, and the still sheet below is gated on the level
+         * solve rather than on a die roll. The bank is `wet` without being
+         * `pool`, which is exactly what a bank is.
+         */
+        path.pool[j] = j >= deep0 ? 1 : 0;
+      }
       /**
        * CUT INTO CHUNKS, BECAUSE ONE EXTRA IS ONE UNINTERRUPTIBLE SLICE.
        *
@@ -4811,6 +6015,32 @@ function caveMaterial() {
            * over which it has to hold together to double the room.
            */
           float rip = mix(1.0, 0.22, still);
+          /**
+           * AND THE RIPPLE HAS TO DIE WITH DISTANCE, WHICH IT DID NOT HAVE TO
+           * BEFORE BECAUSE NOTHING DOWNSTREAM OF IT VARIED.
+           *
+           * The two sines are at 1.9 m and 2.3 m of wavelength. At thirty metres
+           * that is three or four pixels a cycle, and there is no mip chain on an
+           * analytic function — so with the fresnel above pinned at 1 the whole
+           * ripple was multiplied out of existence and nobody ever saw it alias.
+           * Un-pin the fresnel and the same wave becomes the input to a
+           * fifth-power curve: the first frame back showed a stream thirty metres
+           * off as a ladder of hard horizontal stripes, exactly like corrugated
+           * metal, and a lake edge-on as a barcode.
+           *
+           * This is the mip chain, written as a fade. Full amplitude out to five
+           * metres, where a cycle is still tens of pixels across and the movement
+           * is the best thing about the water; a tenth of it by thirty, where the
+           * surface should be a smooth plate holding one gradient. It is the
+           * honest answer rather than a cosmetic one — the correct filtered value
+           * of a wave you cannot resolve IS its mean, and its mean is flat.
+           *
+           * spark gets it too and needs it more: it is sin*sin to the twelfth,
+           * so its features are a fraction of a wavelength wide and it aliases
+           * into a shimmering dot screen at half the distance the ripple does.
+           */
+          float ripFade = mix(1.0, 0.10, smoothstep(5.0, 30.0, dist));
+          rip *= ripFade;
           float wsp = mix(1.0, 0.35, still);
           float wx = vWorld.x * 3.3 + uTime * 0.5 * wsp;
           float wz = vWorld.z * 2.7 - uTime * 0.38 * wsp;
@@ -4831,9 +6061,51 @@ function caveMaterial() {
            * and the fact that it moves, not brightness — and the tail is clamped
            * so no viewing angle can take it past its own albedo.
            */
-          float fres = pow(1.0 - clamp(dot(wn, v), 0.0, 1.0), 4.0);
-          float spark = pow(max(0.0, sin(wx * 1.7) * sin(wz * 1.3)), 12.0);
-          float sheen = min(1.6, 0.32 + 1.0 * fres + 0.45 * spark);
+          /**
+           * abs(), AND THAT ONE CHARACTER IS MOST OF WHY THE POOL WAS PLASTIC.
+           *
+           * clamp(dot(wn, v), 0.0, 1.0) is zero for every water pixel whose
+           * surface is ABOVE the eye, and in a cave that is most of them: a
+           * passage that pitches up in front of you puts its stream ten metres
+           * away and five metres higher, and the terminal chamber is a bowl you
+           * stand at the bottom of. Measured off the framebuffer on grove-01 k=0
+           * with the water rendering its own terms — dot(wn, v) came back 0.000
+           * and fres 1.004 over EVERY water pixel in the frame, mean v.y -0.172.
+           *
+           * A fresnel pinned at 1 is not a fresnel. It made sheen a constant
+           * 1.315 (measured) instead of a term that runs from nearly nothing
+           * looking down into the water to nearly all of it looking along the
+           * surface, and it made the haze term below a flat fill. Every
+           * "water is dark" argument in the two blocks around this line was
+           * describing code that could not execute.
+           *
+           * The magnitude of the dot IS the grazing angle. A surface above the
+           * eye is grazed exactly as much as one the same angle below it, and
+           * the sign only says which side of the plane you are on — which for an
+           * opaque sheet you are never wrong about, because you cannot see the
+           * underside. So abs(), and the exponent goes 4 -> 5 now that the term
+           * has a range to be steep over.
+           */
+          float fres = pow(1.0 - clamp(abs(dot(wn, v)), 0.0, 1.0), 5.0);
+          float spark = pow(max(0.0, sin(wx * 1.7) * sin(wz * 1.3)), 12.0) * ripFade;
+          /**
+           * AND THE FLOOR COMES OFF THE SHEEN, because a floor under a fresnel
+           * is a floor under the one term that is supposed to reach zero.
+           *
+           * 0.32 was the reason the pool could never be dark: it is a third of
+           * the surface's reflectance handed out at every angle including
+           * straight down, so a mirror looked into from above still returned a
+           * third of whatever was baked into it. It was harmless while fres was
+           * stuck at 1 — 0.32 against 1.32 is a quarter of a term nobody could
+           * see varying — and it is the whole ball game now that fres works.
+           *
+           * 0.05 is the real number for water at normal incidence (about 2% for
+           * the specular, plus a little for the fact that this stands in for a
+           * blurred reflection rather than a perfect one). What you see looking
+           * straight down is not the sheen at all, it is the lit bottom, and
+           * that is a term of its own below.
+           */
+          float sheen = min(1.6, 0.05 + 1.25 * fres + 0.45 * spark);
           /**
            * A REFLECTION THAT IS A COLUMN AND NOT A BLOB, WHICH IS THE ONE
            * THING THAT MAKES A POOL DOUBLE THE HEIGHT OF A ROOM.
@@ -4879,17 +6151,48 @@ function caveMaterial() {
                     normalize(vec3(ldir.x, ldir.y * aniso, ldir.z))), 0.0),
             mix(22.0, 46.0, still)
           ) * coh;
-          vec3 water = vRock * 0.05
+          /**
+           * THE BOTTOM, WHICH IS WHAT YOU ACTUALLY SEE LOOKING DOWN INTO IT.
+           *
+           * Now that the sheen can reach nearly zero there has to be something
+           * under it, or a pool looked into from above is a black hole in the
+           * floor — which is a worse artefact than the blue plastic this pass
+           * set out to remove, and it is what the 0.32 sheen floor was
+           * accidentally preventing.
+           *
+           * THE BED IS col, THE ROCK SHADING THIS FRAGMENT ALREADY DID.
+           *
+           * The first version of this term was vRock * 0.30 + vLit * 0.55 — the
+           * raw albedo and the baked light — and it was flat in the literal
+           * sense: no grain, no near-field, no moss, none of the two hundred
+           * lines above this branch. A pool three metres from the eye came back
+           * as one untextured facet the colour of the floor beside it, which is
+           * the same complaint this pass started with wearing a different hue.
+           * Blue plastic became grey plastic.
+           *
+           * Everything needed was already sitting in col: this fragment has just
+           * been shaded as rock, using the water vertex's own attributes, and
+           * that shading is the best available answer to "what does the ground
+           * under this water look like". It costs nothing — the work is done
+           * whether the branch uses it or throws it away, because the branch is
+           * a mix at the end and not an early-out.
+           *
+           * Then two things are done to it that make it read as being UNDER
+           * something. It is darkened, because water absorbs and because a wet
+           * bed is a dark bed; and it is pushed toward the green-blue, because
+           * what water absorbs first is red. That tint is the only place in this
+           * branch a colour is asserted rather than sampled, and it is small on
+           * purpose: the failure mode this whole pass exists to remove is a
+           * surface with an opinion of its own.
+           *
+           * (1 - fres) so it is the complement of the surface: straight down you
+           * see the bottom and no sky, along the surface you see sky and no
+           * bottom. That swap IS the look of standing water and nothing in this
+           * shader was doing it.
+           */
+          vec3 bed = col * vec3(0.42, 0.50, 0.54);
+          vec3 water = bed * (1.0 - fres)
                      + vLit * (sheen + min(2.2, mirror * mix(3.4, 5.2, still)))
-                     /**
-                      * …and the air above it. A pool at a grazing angle is
-                      * showing you the far haze, which by uHaze's own note is
-                      * the brightest thing in the frame — so the far end of a
-                      * flooded chamber is a pale blue plate and the near end is
-                      * black, which is the same depth gradient the fog draws on
-                      * the walls, drawn again upside down. That doubling is the
-                      * cheapest height a chamber can be given.
-                      */
                      /**
                       * AND THE LAKE GETS MORE OF THE AIR, WHICH IS THE HONEST
                       * ANSWER TO "WHY IS THERE NO REAL REFLECTION IN IT".
@@ -4935,7 +6238,38 @@ function caveMaterial() {
                       * is never seen at the angles that matter, a lake is thirty
                       * and is mostly seen at nothing else.
                       */
-                     + uHaze * fres * mix(1.9, 2.6, still)
+                     /**
+                      * 2.6 -> 0.75, AND THAT IS THE SINGLE BIGGEST NUMBER IN
+                      * THIS PASS, BECAUSE THE WATER WAS PAYING FOR DISTANCE
+                      * TWICE.
+                      *
+                      * Measured over the pool's own pixels on grove-01 k=0, with
+                      * the water rendering one term at a time to the
+                      * framebuffer: this term was (0.021, 0.044, 0.278) linear —
+                      * FORTY-NINE PER CENT of everything the surface returned,
+                      * thirteen times more blue than red, and, because fres
+                      * was pinned at 1 (see the abs() block above), the SAME
+                      * value at every pixel regardless of distance, angle, or
+                      * what was overhead. That is the blue plastic. It is not a
+                      * tuning error, it is a constant being added to a mirror.
+                      *
+                      * And the aerial perspective it was standing in for was
+                      * already there. Forty lines below, every fragment in this
+                      * material — water included — is mixed toward uHaze by
+                      * smoothstep(14, 52, vDepthFog). The far end of a flooded
+                      * chamber gets its pale blue plate from the fog, correctly
+                      * ramped by distance, and always did. Adding a second,
+                      * distance-independent copy in front of it is what put far-
+                      * haze colour on water three metres from your boots.
+                      *
+                      * What is left at 0.75 is the part the fog cannot do: a
+                      * grazing surface shows the air along a MUCH longer path
+                      * than the one the depth buffer measured to it. With fres
+                      * working that is now a real gradient across the pool
+                      * rather than a fill — and it is scaled to be a lift on the
+                      * fog rather than a substitute for it.
+                      */
+                     + uHaze * fres * mix(0.55, 0.75, still)
                      + uDay * vDay * uDayGain * 0.55;
           col = mix(col, water, clamp((vWet - 0.5) * 2.0, 0.0, 1.0));
         }
@@ -5300,7 +6634,7 @@ const HALL_HALF = 12;
  * in `_seatShaft` about the beam's RADIUS, arrived at again one level up. The
  * count is the cube root of the volume ratio so that it grows the way the eye's
  * sense of scale does and not the way the numbers do: 12 m of half-width gets
- * one, 18 m gets two, 26 m gets three. Capped at three because a fourth cone in
+ * one, 15 m gets two, 24 m gets three. Capped at three because a fourth cone in
  * one room is a light rig.
  */
 const HALL_BEAMS_MAX = 3;
@@ -5575,7 +6909,30 @@ const BUILD_MS = 0.6;
  * propose six hundred; 190 m is "this is a cave", and asking for it costs 0.42
  * of an extra walk and buys a third more passage.
  */
-const GOOD_RINGS = Math.round(190 / RING_STEP);
+/**
+ * 270 m NOW, AND THE REASON IS THAT THE WALK GOT MORE VARIABLE RATHER THAN
+ * WORSE.
+ *
+ * This is a bar, not a target: `prepare` keeps the first of three walks that
+ * clears it. So what it actually controls is how much of the SPREAD between
+ * salts the build is willing to pay to escape — and the spread is the whole
+ * problem, because the first corner decides which part of the ridge the passage
+ * spends itself under.
+ *
+ * The walk now turns half again as much and refuses to cut through itself, so
+ * that spread is wider than it was: measured over eight seeds after the change,
+ * a mean of 854 m against 787 before, but with individual mouths ranging from
+ * 262 m to 1285. A bar at 190 m accepts nearly every first walk, which means it
+ * accepts the 262 m one — and 262 m on grove-01's k=0, the mouth every picture
+ * in this repo is taken at, is a visibly smaller cave than the seed can carry.
+ *
+ * The cost is build TIME and not a hitch, which is the distinction that makes
+ * this affordable. `perf/cave-build` gates the worst SLICE, and slices are
+ * 0.70 ms median against a 1.8 ms budget whatever the walk count; an extra walk
+ * is more frames of streaming, spread over a cave that is already built two
+ * hundred metres before you can see it. Three walks remains the hard cap.
+ */
+const GOOD_RINGS = Math.round(270 / RING_STEP);
 
 class Cave {
   constructor(descriptor) {
@@ -5819,16 +7176,25 @@ class Cave {
      * seventy-metre one did, so the density of choice FELL as the cave got
      * bigger — the opposite of what a system should do.
      *
-     * One junction per 95 m of passage, capped at five. The cap is not a
-     * performance limit — each branch is a few hundred triangles on a mesh that
-     * costs 0.6 ms — it is that a passage with a hole in the wall every forty
-     * metres is a maze, and a maze is a different feature with a different set
-     * of problems, chiefly that you cannot make one legible with fungi.
+     * One junction per 62 m of passage, capped at eight, and both numbers moved
+     * from 95 and five for the same reason: the cap was doing the work. A
+     * six-hundred-metre passage hit five junctions and stopped, so the density
+     * of choice still fell as the cave got longer — the fault the per-metre rule
+     * was written to fix, moved up one line rather than removed. At 62 m a
+     * nine-hundred-metre system gets fourteen wanted and eight granted, so the
+     * cap still binds; what it now bounds is a system with genuinely more in it
+     * rather than the same system with a smaller number attached.
+     *
+     * The maze objection stands and is what keeps this from going further. A
+     * junction every sixty metres is still a passage you can hold in your head:
+     * you meet one, you walk a minute, you meet the next, and BRANCH_GAP below
+     * guarantees the minute. What makes a maze is not the count, it is two holes
+     * within sight of each other.
      */
     const metres = along[n - 1];
-    const want = Math.min(5, Math.floor(metres / 95) + (brRng() < 0.5 ? 1 : 0));
+    const want = Math.min(8, Math.floor(metres / 62) + (brRng() < 0.5 ? 1 : 0));
     /**
-     * …AND ONE OF THEM IS A REAL FORK.
+     * …AND SOME OF THEM ARE REAL FORKS.
      *
      * Never the first, which is the closest to the entrance and the one the
      * player is least invested in when they meet it, and never one so near the
@@ -5836,15 +7202,46 @@ class Cave {
      * middle one means the major junction lands where the passage has already
      * committed to a direction and the player has already walked far enough that
      * turning back is a cost. See `buildBranch`.
+     *
+     * ONE FORK IN A SYSTEM OF EIGHT LEADS IS A SYSTEM WITH ONE DECISION IN IT.
+     * The count now scales with the junctions: a second fork above four of them,
+     * placed independently, so a long cave asks the question twice at different
+     * depths and the second one is asked of a player who has already learned
+     * what taking the first one cost. Two is where it stops on purpose — three
+     * forks is eight ways through a mountain with no map, which is the maze
+     * again by another route.
      */
     const majorAt = want > 1 ? 1 + Math.floor(brRng() * Math.max(1, want - 1)) : 0;
+    const majorAt2 = want > 4 ? 1 + Math.floor(brRng() * Math.max(1, want - 1)) : -1;
     let cursor = BRANCH_MIN_RING + Math.floor(brRng() * 14);
     // Both in metres over the ring step: the gap to the end of the passage a
     // branch needs to be worth starting, and the gap between two junctions.
     const BRANCH_TAIL = Math.round(20 / RING_STEP);
     const BRANCH_GAP = Math.round(34 / RING_STEP);
+    /**
+     * SPREAD OVER THE PASSAGE, NOT PACKED INTO ITS FIRST THIRD.
+     *
+     * The cursor used to advance by BRANCH_GAP plus up to as much again — 34 to
+     * 68 m, mean 51 — which is a rule about the gap between two junctions and
+     * says nothing at all about where the last one lands. On a nine-hundred
+     * metre system that put every junction inside the first four hundred metres
+     * and left the whole deep half of the cave, which is where the chambers are
+     * and where the player has invested the most walking, without a single hole
+     * in the wall. The count scaling with length made that worse rather than
+     * better: more branches, same first third.
+     *
+     * So the stride is the passage's own remaining length divided by the number
+     * of junctions it is getting, floored at BRANCH_GAP so a short passage
+     * cannot bunch them. The jitter is a fraction of the stride rather than a
+     * fixed distance, so it stays proportionate at either end of the range.
+     */
+    const spread = Math.max(
+      BRANCH_GAP,
+      Math.floor((n - BRANCH_TAIL - cursor) / Math.max(1, want))
+    );
     for (let b = 0; b < want && cursor < n - BRANCH_TAIL; b++) {
-      const br = yield* buildBranch(this.c, this.path, walk.joints, cursor, `${b}`, b === majorAt);
+      const major = b === majorAt || b === majorAt2;
+      const br = yield* buildBranch(this.c, this.path, walk.joints, cursor, `${b}`, major);
       if (br) {
         br.baseAlong = along[cursor];
         // Measured from the MAIN mouth, so a lead off the deepest chamber in the
@@ -5870,7 +7267,7 @@ class Cave {
         this.paths.push(br);
         for (const g of placeFungi(this.c, br, `br${b}`, 3)) this.fungi.push(g);
       }
-      cursor += BRANCH_GAP + Math.floor(brRng() * BRANCH_GAP);
+      cursor += Math.max(BRANCH_GAP, Math.floor(spread * 0.7 + brRng() * spread * 0.6));
     }
 
     /**
@@ -5958,15 +7355,55 @@ class Cave {
       this.spires.push(...spires);
       this.crystals.push(...crystals);
       /**
+       * THE SLABS, SOLVED. See `blockSolid`: this is where the corner jitter,
+       * the separate top polygon and the lean stop being private to the emitter
+       * and become numbers the body can read. One buffer per passage, `bl.si`
+       * the offset into it, so `_emitBlock` and `caveSample` are looking at the
+       * same forty floats and cannot drift apart.
+       *
+       * SLICED, because it is the most expensive thing added to `prepare` in a
+       * while and the budget here is 0.6 ms. Eight `rock()` lookups a block —
+       * seven corners and the lid's centre — and a big cave has ~300 blocks, so
+       * doing them in one go is several times the whole frame's build budget.
+       * Yielding every 32 measures at 0.1-0.3 ms a slice, which is the quantum
+       * the rest of this generator is cut at; `perf/cave-build` is the gate.
+       *
+       * It replaces work rather than adding all of it: `_emitBlock` used to run
+       * this same rng and these same eight noise lookups at emit time, and now
+       * reads them back. The build does the arithmetic once instead of once.
+       */
+      const solids = new Float32Array(blocks.length * BLOCK_STRIDE);
+      for (let bi = 0; bi < blocks.length; bi++) {
+        blocks[bi].si = bi * BLOCK_STRIDE;
+        blockSolid(this.c.k, blocks[bi], solids, blocks[bi].si);
+        if ((bi & 31) === 31) yield 'solids';
+      }
+      path.obsSolid = solids;
+
+      /**
        * Obstacles, bucketed by ring so the body can find them in a slice rather
        * than a scan. `caveSample` already knows which ring it is nearest; this
        * makes "what is on the floor here" the same question.
+       *
+       * `reach` is carried as a plain field beside `si` so the reject that
+       * throws away the blocks the body is nowhere near — which is nearly all of
+       * them — never touches the float buffer at all.
        */
       const obs = [];
-      for (const b of blocks) obs.push({ x: b.x, z: b.z, y: b.y, rad: b.rad, top: b.top, ring: b.ring, kind: 0 });
+      for (const b of blocks)
+        obs.push({
+          x: b.x, z: b.z, y: b.y, rad: b.rad, top: b.top,
+          ring: b.ring, kind: 0, si: b.si, reach: b.reach, wall: b.wall,
+        });
       for (const s of spires) {
         if (s.kind !== 'column') continue;
-        obs.push({ x: s.x, z: s.z, y: s.y0, rad: s.rad + 0.1, top: s.y1 - s.y0, ring: s.ring, kind: 1 });
+        // Same field set as a slab's record, `si` and `reach` included and
+        // unused, so the one loop in `caveSample` that walks this list sees a
+        // single hidden class rather than two.
+        obs.push({
+          x: s.x, z: s.z, y: s.y0, rad: s.rad + 0.1, top: s.y1 - s.y0,
+          ring: s.ring, kind: 1, si: 0, reach: s.rad + 0.1, wall: 0,
+        });
       }
       obs.sort((a, b) => a.ring - b.ring);
       const at = new Int32Array(path.x.length + 1);
@@ -6423,11 +7860,35 @@ class Cave {
     const scal = isHood ? 0 : path.scal[i];
     const seep = isHood ? 0 : path.seep[i];
     const wetRing = isHood ? 0 : path.wet[i];
-    // How wide the water is here, and how far the visible floor is scooped out
-    // under it. See `placeWater` — the body still walks the analytic floor, so
-    // this is a channel the stream sits IN rather than a step the player takes.
-    const waterHalf = wetRing > 0.01 ? Math.min(1.7, r * sh.w * 0.55) * wetRing : 0;
-    const troughMax = 0.12 + 0.30 * (isHood ? 0 : path.pool[i]);
+    /**
+     * THERE IS NO CHANNEL CUT UNDER THE WATER ANY MORE, AND THAT IS THE WHOLE
+     * OF WHY THE FLOOR STOPPED LOOKING MACHINED.
+     *
+     * What used to be here scooped the drawn floor out by 0.12-0.42 m over a
+     * band `min(1.7, r * w * 0.55)` wide, centred on the axis, with a hard cut
+     * at `floorish > 0.5`. Read that back as a shape rather than as an
+     * intention: a trench of CONSTANT width running dead down the middle of the
+     * passage for as far as the run goes, with two parallel edges that never
+     * deviate because nothing in the expression varies along the passage except
+     * the radius. Forty per cent of the rings on grove-01 k=0 are wet, so forty
+     * per cent of the cave had a gutter down it — and `_emitWater` then laid a
+     * ribbon of exactly the same constant width on top, so the two edges agreed
+     * and reinforced each other. The player's word for it was a groove, and a
+     * groove is machining: it is the one thing in a cave that no water makes,
+     * because water follows the rock and the rock is not straight.
+     *
+     * Deleting it is also a correctness win, which is the part worth recording.
+     * `floorY` — what `caveSample` answers with, what `placeBlocks` seats slabs
+     * on and what the pool shoreline bisects against — never knew about the
+     * scoop. It could not: the scoop is applied in the emitter, after the
+     * analytic floor has been solved. So every wet ring in the world was a ring
+     * where the drawn floor was up to 0.42 m BELOW the floor the body walks on,
+     * which is the wading half of the disagreement `cave-floor` counts.
+     *
+     * The stream still knows where the low ground is. It finds it the way the
+     * lake does — see `_emitWater` — by solving the rock rather than by having
+     * a bed carved for it.
+     */
     /**
      * The main tube flattens where a branch leaves it; a branch flattens at its
      * own mouth. Both halves of the same seam.
@@ -6535,12 +7996,6 @@ class Cave {
       let px = cx + rx * ox + (ux / ul) * oy;
       let py = cy + (uy / ul) * oy;
       let pz = cz + rz * ox + (uz / ul) * oy;
-
-      // The stream's channel, cut into the visible floor only.
-      if (waterHalf > 0 && floorish > 0.5) {
-        const acrossN = Math.abs(sec.x * r) / (waterHalf * 1.3);
-        if (acrossN < 1) py -= troughMax * (1 - acrossN * acrossN) * (floorish - 0.5) * 2;
-      }
 
       /**
        * Bury the shell — but ONLY where there is a hillside to bury it in.
@@ -6671,7 +8126,9 @@ class Cave {
    * distance, so it lights a squeeze harder than a hall — and this is what puts
    * the sign back the right way round.
    */
-  _shade(vi, x, y, z, floorish, calcite = 0, above = 99, damp = 0, span = 6, ao = 1) {
+  // `wetTag` and not `wet`: there is already a local `wet` in here, the damp
+  // multiplier on the floor's albedo, and it means the opposite thing.
+  _shade(vi, x, y, z, floorish, calcite = 0, above = 99, damp = 0, span = 6, ao = 1, wetTag = 0) {
     const b = this._buffers;
     const k = vi * 3;
     /**
@@ -6929,7 +8386,42 @@ class Cave {
        * of range inside one view. Contrast is the whole of what makes darkness
        * legible; a dark picture with no bright thing in it is just a dim one.
        */
-      const fall = t * t * g.power * 0.8;
+      /**
+       * WATER TAKES ITS LIGHT FROM ABOVE, AND THAT IS THE WHOLE OF WHY A POOL
+       * NOW GOES DARK IN A DARK ROOM.
+       *
+       * A mirror does not show you what is beside it. Every other surface down
+       * here is a diffuse reflector and this loop is the right integral for one;
+       * a water surface is looking at the CEILING, and baking it the same
+       * omnidirectional irradiance as the rock two metres away is what made the
+       * pool a constant. Measured before this, over the pool's own pixels on
+       * grove-01 k=0: `vLit * sheen` was 46% of the surface's light, `vLit` was
+       * the mean of every cluster within reach in every direction, and NOTHING
+       * in the water's colour was a function of what was over it. The remaining
+       * 49% was worse — see the uHaze block in the fragment shader.
+       *
+       * `dy / dist` is the sine of the elevation to the source, so this is the
+       * ordinary cosine-weighted irradiance on an upward-facing surface: a
+       * blurred reflection of the upper hemisphere, which is what a mirror with
+       * a ripple on it shows and is a far better match for the reference than
+       * any sharp highlight would be. Sources at or below the surface fall out
+       * entirely, which deletes the one that was doing the most damage — the
+       * pool of light at a beam's FOOT, seated half a metre above the floor and
+       * therefore half a metre above the water, contributing at full strength to
+       * a surface it is level with.
+       *
+       * The 2.4 is the compensation for the cosine, fitted so a pool DIRECTLY
+       * under this cave's brightest beam comes back at roughly the brightness it
+       * had before and everywhere else falls. That asymmetry is the point: the
+       * complaint was not that the pool was too bright, it was that it was
+       * uniformly bright.
+       *
+       * Nothing per frame. It is the same loop, one multiply longer, on water
+       * vertices only.
+       */
+      const fall =
+        t * t * g.power * 0.8 * (wetTag > 0.5 ? Math.max(0, dy / dist) * 2.4 : 1);
+      if (fall <= 0) continue;
       lr += g.colour.r * fall;
       lg += g.colour.g * fall;
       lb += g.colour.b * fall;
@@ -7029,7 +8521,12 @@ class Cave {
     buf.surf[k4 + 1] = 0;
     buf.surf[k4 + 2] = px * this.bedX + py * this.bedY + pz * this.bedZ;
     buf.surf[k4 + 3] = wet;
-    this._shade(vi, px, py, pz, floorish, calcite, above, damp, span, ao);
+    // `wet` goes through as well as into aSurf: it is the ONLY caller-side fact
+    // that tells the bake this vertex is a mirror rather than a diffuse
+    // reflector, and the light walk needs to know. See the WATER TAKES ITS
+    // LIGHT FROM ABOVE block in `_shade`. `_emitRing` deliberately does not pass
+    // it — the rock BESIDE a stream is still rock.
+    this._shade(vi, px, py, pz, floorish, calcite, above, damp, span, ao, wet);
     // A surface that emits is one whose baked light is large and whose light
     // direction is its own normal. See `_emitCrystal`.
     const e = this._emit;
@@ -7341,93 +8838,31 @@ class Cave {
    * were reaching for.
    */
   _emitBlock(bl) {
-    const rng = makeRng(`${getWorldSeed()}:cave-block:${this.c.k}:${bl.seed}`);
     const path = this.paths[bl.path];
     const day = this._daylight(path, bl.ring);
     const span = this._spanAt(path, bl.ring);
     /**
-     * The base goes further under the floor than the block stands above it, so
-     * it is never on screen. A slab resting exactly on the analytic floor shows
-     * a seam all the way round wherever the visible floor's own displacement
-     * dips under it — which is everywhere, because the floor carries its own
-     * rock noise — and that is the whole "the boulders are hovering" class of
-     * screenshot. It costs two triangles a side that nobody ever sees.
-     */
-    const yTop = bl.y + bl.top;
-    const yBot = bl.y - bl.top * 0.5 - 0.5;
-
-    /**
-     * The lean, and it is what makes a field of these read as a collapse rather
-     * than as a car park. Slabs come to rest against each other and against the
-     * rubble under them, so they sit at angles; a scatter of level ones reads as
-     * placed, whatever shape they are.
-     */
-    const leanA = rngRange(rng, 0, TAU);
-    const leanK = rngRange(rng, 0.22, 0.7);
-    const tiltX = Math.cos(leanA) * leanK;
-    const tiltZ = Math.sin(leanA) * leanK;
-
-    /**
-     * THE FIRST TUNING OF THIS WAS FAR TOO POLITE AND CAME OUT AS BOXES AGAIN.
+     * THE SHAPE IS NOT DRAWN HERE ANY MORE — see `blockSolid`, which `prepare`
+     * ran once and packed into `path.obsSolid`. Everything this function used to
+     * derive inline from its own rng (the lean, the shrink and skew of the top
+     * polygon, the seven jittered corners, their heights, the buried base plane)
+     * is read back below.
      *
-     * Radii from half to just over one, angles jittered by a fifth of a step,
-     * and a top plane with a tenth of the block's height of relief on it. Every
-     * one of those is a reasonable-sounding number and together they describe a
-     * squat cylinder with a lid — which the eye files under "box" just as fast
-     * as an actual box, because at this scale what it is reading is "no corner
-     * is much different from any other corner".
-     *
-     * A quarter to one and a half on the radius, half a step on the angle, and a
-     * per-corner height drawn independently of the tilt plane. The point is that
-     * the corners must DISAGREE: one that sticks a long way out next to one that
-     * barely does is what a fracture looks like, and a flat top is the single
-     * most box-like feature a solid can have.
+     * That is the whole point of the change: the collider used to raise a fitted
+     * DOME over the block's nominal radius because none of those numbers reached
+     * it, and the body ended up standing over a metre above rock it could see
+     * under its feet. Two consumers deriving the same shape from the same rng in
+     * two places is the same bug waiting to happen again the first time one of
+     * them is edited, so there is exactly one derivation and both read it.
      */
-    /**
-     * AND THE TOP IS A DIFFERENT POLYGON FROM THE BOTTOM, WHICH IS THE ONE THAT
-     * FINALLY KILLED THE BOX.
-     *
-     * A prism has vertical sides. Ragged them all you like — jitter the plan,
-     * break the lid, lean the whole thing over — and every side face is still
-     * parallel to every other side face's own vertical, so the silhouette is a
-     * vertical-walled lump with a jagged hat on it and the eye still says box.
-     * Verticality WAS the tell, not regularity.
-     *
-     * So the top ring is drawn separately: smaller by a large and random factor,
-     * shoved sideways by up to half the radius, and with its own per-corner
-     * scatter. Now no two side faces share a slope, none of them is vertical,
-     * and the thing has an overhang on one side and a ramp on the other — which
-     * is what a lump of fractured limestone lying in silt actually looks like.
-     */
-    const shrink = rngRange(rng, 0.28, 0.72);
-    const skewX = rngRange(rng, -0.5, 0.5) * bl.rad;
-    const skewZ = rngRange(rng, -0.5, 0.5) * bl.rad;
-    const plan = [];
-    for (let i = 0; i < BLOCK_SIDES; i++) {
-      const a = bl.rot + (i / BLOCK_SIDES) * TAU + rngRange(rng, -0.5, 0.5);
-      const rr = bl.rad * rngRange(rng, 0.26, 1.5);
-      const bx = bl.x + Math.cos(a) * rr;
-      const bz = bl.z + Math.sin(a) * rr;
-      const s = shrink * rngRange(rng, 0.55, 1.4);
-      plan.push({
-        bx,
-        bz,
-        tx: bl.x + (bx - bl.x) * s + skewX,
-        tz: bl.z + (bz - bl.z) * s + skewZ,
-        // Each corner's own height, on top of the tilt. A third of the block.
-        own: rngRange(rng, -0.34, 0.16) * bl.top,
-      });
-    }
-    /** The tilted top, plus this corner's own break. */
-    const topAt = (px, pz, own) =>
-      yTop +
-      (px - bl.x) * tiltX +
-      (pz - bl.z) * tiltZ +
-      own +
-      rock(px * 1.6, yTop, pz * 1.6) * bl.top * 0.2;
+    const buf = path.obsSolid;
+    const si = bl.si;
+    const yBot = buf[si + B_YBOT];
+    const centreTop = buf[si + B_CTOP];
+    const ctx = buf[si + B_CTX];
+    const ctz = buf[si + B_CTZ];
 
     const above = bl.top * 0.5;
-    const centreTop = topAt(bl.x + skewX, bl.z + skewZ, 0);
     const inside = [bl.x, (centreTop + yBot) * 0.5, bl.z];
     /**
      * The slab's own middle. `inside` is already it — the point `_face` uses to
@@ -7443,30 +8878,41 @@ class Cave {
     const foot = [bl.x, yBot, bl.z];
     for (let i = 0; i < BLOCK_SIDES; i++) {
       const j = (i + 1) % BLOCK_SIDES;
-      const a = plan[i];
-      const b = plan[j];
-      const at = topAt(a.tx, a.tz, a.own);
-      const bt = topAt(b.tx, b.tz, b.own);
+      const abx = buf[si + B_BX + i];
+      const abz = buf[si + B_BZ + i];
+      const bbx = buf[si + B_BX + j];
+      const bbz = buf[si + B_BZ + j];
+      const atx = buf[si + B_TX + i];
+      const atz = buf[si + B_TZ + i];
+      const at = buf[si + B_TY + i];
+      const btx = buf[si + B_TX + j];
+      const btz = buf[si + B_TZ + j];
+      const bt = buf[si + B_TY + j];
       /**
        * The fracture face: a sloped quad from the buried base ring to the
        * smaller, shoved top ring, and DARK. The gaps between fallen rock are
        * where a chamber's shadow actually lives, and them being dark is what
        * makes a breakdown floor read as something with depth rather than as a
        * pattern on the ground.
+       *
+       * `_face` splits a quad as (0,1,2) then (0,2,3), and this quad is NOT
+       * planar — four corners at four heights. `blockTopAt` splits it the same
+       * way for exactly that reason; the two triangulations of a corner this
+       * ragged differ by up to the block's whole height along the diagonal.
        */
       this._face(
-        [a.bx, yBot, a.bz],
-        [b.bx, yBot, b.bz],
-        [b.tx, bt, b.tz],
-        [a.tx, at, a.tz],
+        [abx, yBot, abz],
+        [bbx, yBot, bbz],
+        [btx, bt, btz],
+        [atx, at, atz],
         inside, day, 0, 0.85, above, 0.25, 0, span, 0.34
       );
       // …and one wedge of the top, fanned from the middle so the tilt reads as
       // a tilt rather than as a flat lid set at an angle.
       this._face(
-        [bl.x + skewX, centreTop, bl.z + skewZ],
-        [a.tx, at, a.tz],
-        [b.tx, bt, b.tz],
+        [ctx, centreTop, ctz],
+        [atx, at, atz],
+        [btx, bt, btz],
         null,
         inside, day, 0, 0.85, above, 0.25, 0, span, 0.95
       );
@@ -7490,8 +8936,8 @@ class Cave {
        */
       this._face(
         foot,
-        [b.bx, yBot, b.bz],
-        [a.bx, yBot, a.bz],
+        [bbx, yBot, bbz],
+        [abx, yBot, abz],
         null,
         inside, day, 0, 1, above, 0.55, 0, span, 0.12
       );
@@ -7924,19 +9370,138 @@ class Cave {
         // rock rather than exactly on it: the two surfaces are solved from the
         // same function but drawn by different code, and a coincident edge is
         // the one place z-fighting could show on an otherwise opaque mesh.
-        const wl = Math.max(0, shore(i, sh, tx, tz, 1) - 0.12) * path.wet[i];
-        const wr = Math.max(0, shore(i, sh, tx, tz, -1) - 0.12) * path.wet[i];
+        /**
+         * …AND THEN PULLED IN AGAIN BY A NOISE, WHICH IS NOT A FUDGE.
+         *
+         * The bisection is exact against `floorY`, and `floorY` is the ANALYTIC
+         * outline plus `surfaceLift`. The floor that is actually DRAWN is a
+         * lattice: RADIAL=44 samples round a ring, so across a chamber 34 m wide
+         * the drawn floor is straight lines 1.5 m apart, and between them it
+         * cannot hold the detail the noise field has. Solving the shore against
+         * the continuous function therefore produces an edge that is SMOOTHER
+         * than the rock it is supposed to be following — the exact answer to a
+         * question the geometry cannot ask.
+         *
+         * A metre-scale wobble puts the missing frequency back. It only ever
+         * pulls the water IN, never out, so it cannot expose the sheet's own
+         * edge hanging over a step — the worst it does is leave a hand's width
+         * more dry rock, which is a beach.
+         *
+         * Two octaves of the same `noise2` the rock's mottle uses, read at the
+         * SHORE POINT's own world position rather than at the ring's, so the two
+         * banks wander independently and a bank does not repeat down the lake.
+         * Tried at one octave and 0.9 m: reads as a scallop, i.e. as a pattern.
+         * Tried keyed to the ring index: the two sides then wobble in step,
+         * which is a taper with a wiggle in it and reads as a ribbon.
+         */
+        const wob = (d, sx, sz) => {
+          if (d <= 0) return 0;
+          // `noise2` is signed; folded to 0..1 so the wobble can only ever take
+          // water away. A signed one would push the sheet out over rock that the
+          // bisection has already said is above the surface.
+          const w = clamp01(
+            0.5 +
+              (noise2(sx * 0.74, sz * 0.74) * 0.66 +
+                noise2(sz * 1.9 + 11.3, sx * 1.9 - 4.1) * 0.34) *
+                0.5
+          );
+          // Held off in the last half-metre so a shore that has already closed
+          // to nothing is not pushed negative and re-opened by the clamp.
+          return Math.max(0, d - w * 0.55 * clamp01(d / 0.5));
+        };
+        const dl = Math.max(0, shore(i, sh, tx, tz, 1) - 0.12) * path.wet[i];
+        const dr = Math.max(0, shore(i, sh, tx, tz, -1) - 0.12) * path.wet[i];
+        const wl = wob(dl, path.x[i] - tz * dl, path.z[i] + tx * dl);
+        const wr = wob(dr, path.x[i] + tz * dr, path.z[i] - tx * dr);
         return {
           l: [path.x[i] - tz * wl, poolY, path.z[i] + tx * wl],
           r: [path.x[i] + tz * wr, poolY, path.z[i] - tx * wr],
           y: poolY,
         };
       }
-      const wide = Math.min(1.7, r * sh.w * 0.55) * path.wet[i] * (1 + path.pool[i] * 0.9);
-      const y = path.y[i] - r * sh.f + 0.03;
+      /**
+       * A STREAM LIES IN THE LOWEST GROUND THERE IS, AND FINDING IT IS THE WHOLE
+       * DIFFERENCE BETWEEN A WATERCOURSE AND A GROOVE.
+       *
+       * What was here was `min(1.7, r * w * 0.55) * wet * (1 + pool * 0.9)`,
+       * laid symmetrically about the centre line at the analytic floor plus
+       * 3 cm. Every term in that varies with the RADIUS and with nothing else,
+       * so down a passage of near-constant radius — which is most of one — it
+       * draws two parallel straight lines the length of the run. `_emitRing`
+       * then cut a trench of exactly that width between them, so the
+       * straightness was in the rock as well as in the water and the two edges
+       * agreed to the centimetre. That pair is the thing the player called a
+       * groove. The trench is gone (see the block in `_emitRing`) and this is
+       * the half that would have survived deleting it.
+       *
+       * A stream cannot take the lake's treatment — it is not level, so there is
+       * no one surface height to bisect against — but it can be asked the same
+       * QUESTION per ring: where is the rock lowest, and how far does water
+       * STREAM_DEEP above that reach before the ground comes back up?
+       *
+       * Scanned rather than bisected, and that is not laziness. A bisection has
+       * to be anchored at an offset that is known to be under water, and the
+       * only such offset for a lake is the axis; for a stream on a floor whose
+       * displacement is a noise field the axis is under water about half the
+       * time, so an anchored search returns zero width on every other ring and
+       * the stream becomes a dashed line. The scan finds the argmin instead, so
+       * the water is wherever the hollow is — which moves from side to side as
+       * the noise does, at the metre scale the noise has. The meander is not
+       * authored anywhere: it is the rock's own low line, read out.
+       *
+       * `floorY` is the same solve the lake bisects against, the same one
+       * `caveSample` answers the body with, and — now that nothing is cut under
+       * the water — the same surface the emitter draws. Three consumers, one
+       * floor, and a sheet that cannot hang in the air or sink into the rock
+       * because it was placed by asking where the rock is.
+       */
+      const span = (sh.w - 1e-3) * r;
+      const at = (d) =>
+        floorY(this.c.k, path, i, sh, d / r, path.x[i] - tz * d, path.z[i] + tx * d);
+      let lowD = 0;
+      let lowY = Infinity;
+      for (let s = -STREAM_SCAN; s <= STREAM_SCAN; s++) {
+        const d = (s / STREAM_SCAN) * span * 0.82;
+        const fy = at(d);
+        if (fy < lowY) {
+          lowY = fy;
+          lowD = d;
+        }
+      }
+      const y = lowY + STREAM_DEEP * (1 + path.pool[i] * 1.4);
+      /**
+       * Out from the hollow until the ground comes up through the surface, one
+       * bank at a time and each one refined where it crosses. The step is the
+       * scan's own spacing, so a bank is never reported further out than the
+       * next sample the argmin was chosen against.
+       */
+      const bank = (side) => {
+        const step = (span * 0.82) / STREAM_SCAN;
+        let d = 0;
+        while (d < span - lowD * side) {
+          const nd = d + step;
+          if (at(lowD + nd * side) > y) {
+            // Halve into the crossing four times: 6 cm on a four-metre passage.
+            let lo = d;
+            let hi = nd;
+            for (let s = 0; s < 4; s++) {
+              const mid = (lo + hi) * 0.5;
+              if (at(lowD + mid * side) > y) hi = mid;
+              else lo = mid;
+            }
+            return lo;
+          }
+          d = nd;
+        }
+        return d;
+      };
+      // Held off the rock by a hand's breadth, for the reason the lake's edge is
+      // — two surfaces solved from one function and drawn by different code.
+      const dl = Math.max(0, bank(1) - 0.06) * path.wet[i];
+      const dr = Math.max(0, bank(-1) - 0.06) * path.wet[i];
       return {
-        l: [path.x[i] - tz * wide, y, path.z[i] + tx * wide],
-        r: [path.x[i] + tz * wide, y, path.z[i] - tx * wide],
+        l: [path.x[i] - tz * (lowD + dl), y, path.z[i] + tx * (lowD + dl)],
+        r: [path.x[i] + tz * (dr - lowD), y, path.z[i] - tx * (dr - lowD)],
         y,
       };
     };
@@ -8571,7 +10136,7 @@ class Cave {
      * that goes with it — so a room exactly on the threshold gets exactly one
      * beam and the transition across HALL_HALF is continuous rather than a step.
      */
-    const vol = (half * half * head) / (HALL_HALF * HALL_HALF * HALL_HALF * 2.2);
+    const vol = (half * half * head) / (HALL_HALF * HALL_HALF * HALL_HALF * 0.75);
     const beams = clamp(Math.round(Math.cbrt(Math.max(1, vol))), 1, HALL_BEAMS_MAX);
     /**
      * Spread across the run rather than stacked at its biggest ring. Two cones a
@@ -9742,29 +11307,20 @@ export function caveSample(x, y, z) {
       bestInside = inside;
 
       /**
-       * BREAKDOWN, UNDERFOOT.
+       * BREAKDOWN, UNDERFOOT — AND IT IS THE DRAWN SOLID NOW, NOT A DOME OVER IT.
        *
        * The floor here is the higher of the rock and whatever is lying on it.
-       * Each block reports a dome — ramping to nothing at the rim — so the body
-       * climbs one through the ordinary floor clamp with no step logic and
-       * nothing to get caught on.
        *
-       * THE BARGAIN THIS USED TO NAME — "the visible block is angular and does
-       * not match the dome, and it is invisible because you cannot see your
-       * feet" — WAS BEING PAID IN METRES, AND IT IS THE WHOLE OF THE HOVER.
-       *
-       * `b.rad` is the block's NOMINAL plan radius. `_emitBlock` draws the base
-       * polygon with each of its seven corners at `rad * 0.26..1.5` of it, puts a
-       * separate, smaller top polygon on top (`shrink` 0.28-0.72, shoved sideways
-       * by up to half the radius), and then LEANS the whole solid over by up to
-       * 0.7 — so the drawn top plane falls by up to 0.7 m per metre from the
-       * centre. None of that reaches this function: the obstacle record carries
-       * x, z, y, rad and top and nothing else.
-       *
-       * The dome was reading the nominal radius as if the block filled it. It
-       * does not, and the gap is not subtle. Measured on grove-01 k=0 and k=-1,
-       * 278 probes standing on a block, against the drawn geometry in the body's
-       * own column:
+       * WHAT THIS USED TO BE, because the failure is the whole reason the code
+       * looks like this. Each block reported a dome raised over `(b.x, b.z,
+       * b.rad, b.top)` — the four fields the obstacle record carried — and
+       * `b.rad` is the block's NOMINAL plan radius. `_emitBlock` throws each of
+       * the seven base corners to `rad * 0.26..1.5` of it, puts a SEPARATE,
+       * smaller top polygon on top (`shrink` 0.28-0.72, shoved sideways by up to
+       * half the radius), and leans the whole solid over by up to 0.7 m per
+       * metre. None of that reached this function. Measured on grove-01 k=0 and
+       * k=-1, 278 probes standing on a block, against the drawn geometry in the
+       * body's own column:
        *
        *   dd / b.rad     drawn height, in units of b.top      p10   median   p90
        *   0.0 - 0.2                                         -0.02     0.94  1.00
@@ -9773,38 +11329,43 @@ export function caveSample(x, y, z) {
        *   0.6 - 0.8                                         -0.13     0.02  0.69
        *   0.8 - 1.0                                         -0.27    -0.02  0.44
        *
-       * Past 0.4 of the nominal radius the MEDIAN drawn block is gone — half of
-       * those columns have bare floor in them. The old dome held full height out
-       * to 0.55 of the radius and rode a smoothstep to the rim, so over most of
-       * its own disc it was inventing a floor out of nothing: 173 of 278 stands
-       * put the body more than 0.45 m above anything drawn, worst 2.35 m, mean
-       * error 0.84 m. And because the ramp is gentle enough to climb — 0.12 m a
-       * frame at a walk, against STEP_UP's 0.55 — the body is not stopped by it.
-       * It walks up the invisible ramp and stands in the air over a boulder. That
-       * is the "standing on nothing" report, and it is not the passage floor.
+       * Past 0.4 of the nominal radius the MEDIAN drawn block is gone. The p10
+       * and p90 columns straddle the block's whole height in EVERY band, which is
+       * the finding that matters: the drawn height is bimodal in `dd` and no dome
+       * of any shape can be a function of it. Searched over 243 of them and the
+       * entire Pareto front traded hovering for wading at a fixed total of ~78
+       * bad stands out of 278; the one that shipped removed the hover (173 -> 10,
+       * worst 2.35 m -> 1.18 m) and paid 69 wading stands for it.
        *
-       * WHAT IS CHOSEN HERE, AND WHY IT IS A CHOICE RATHER THAN A DERIVATION.
-       * With only (dd, rad, top) the drawn height is very nearly bimodal — the
-       * p10 and p90 columns above straddle the block's whole height in every
-       * band — so no dome of this shape can be right; searched over 243 of them,
-       * the best total error any of them reaches is 77 of 278 against this one's
-       * 79, and the entire Pareto front trades hovering for wading at a fixed
-       * total. So the front is picked at the point that removes the hover:
-       * half the nominal radius, 0.8 of the height, linear. 173 hovering stands
-       * become 10, the worst falls from 2.35 m to 1.18 m, and the mean error
-       * falls from 0.84 m to 0.35 m — the lowest of any candidate. It is paid for
-       * with 69 stands where the body wades through the outer, spiky part of a
-       * slab instead of climbing it, up from 10. That direction is the right one
-       * to be wrong in: a boulder you clip is a boulder, and a boulder you stand
-       * two metres above is a bug in the sky.
+       * SO THE DOME IS GONE AND THIS EVALUATES THE MESH. `prepare` now solves
+       * each slab once into `path.obsSolid` (see `blockSolid`) and `blockTopAt`
+       * intersects the column against the SAME triangles `_emitBlock` emits from
+       * the same forty floats — the seven jittered base corners, the shrunk and
+       * skewed top polygon with its per-corner breaks and its rock relief, the
+       * lean already folded into the corner heights. There is no fitted constant
+       * left: BLOCK_REACH and BLOCK_RISE were deleted along with the dome, and
+       * the collider cannot disagree with the mesh about a block by construction.
        *
-       * THE EXACT FIX IS ONE FIELD AWAY AND IS NOT IN THIS FUNCTION. `_emitBlock`
-       * already knows `tiltX`, `tiltZ`, `shrink`, `skewX` and `skewZ`; if the
-       * obstacle record built in `prepare` carried the tilt vector and the top
-       * polygon's own centre and radius, this could evaluate the same tilted
-       * plane the mesh draws and the disagreement would be the corner jitter
-       * alone. That record is built in `prepare`, which is not this pass's to
-       * change.
+       * WHAT IT COSTS IS NOTHING MEASURABLE, and it was priced properly because
+       * every constant in this file that was assumed free was not.
+       *
+       * A/B in one page behind a temporary flag, so the two arms could not
+       * differ by anything but the code: grove-01 k=0, the 24 m breakdown
+       * chamber at ring 881, 200 000 calls a run, five runs each interleaved
+       * after twelve warm-up runs. The first attempt sampled a GRID across the
+       * chamber and priced the wrong thing — 5 columns in 256 had a slab under
+       * them, so 98% of the samples never reached this loop and both arms
+       * measured 6.9 us. Sampled instead at 256 points drawn inside the blocks'
+       * own reach, 131 of 256 standing on one: dome 9.393 us a call, exact solid
+       * 9.216 us. Delta -0.177 us against a run-to-run spread of 0.6, i.e. no
+       * difference, and if anything the new one is faster.
+       *
+       * It has no right to be free and it is, for two reasons. The reject is a
+       * SQUARED distance against the block's widest corner (`b.reach`, packed at
+       * build) where the dome needed a `Math.hypot` for its ramp; and
+       * `blockTopAt` returns on the first hit in the top fan, which is the case
+       * the body is in whenever it is actually standing on one, so the common
+       * path is about four triangle tests and not twenty-one.
        *
        * Bucketed by ring in `prepare`, so this is a walk over the handful of
        * blocks within three rings rather than over a room's worth of them.
@@ -9816,15 +11377,16 @@ export function caveSample(x, y, z) {
       if (obs && obs.length) {
         const lo = path.obsAt[Math.max(0, bi - 3)];
         const hi = path.obsAt[Math.min(path.obsAt.length - 1, bi + 4)];
+        const solid = path.obsSolid;
         for (let o = lo; o < hi; o++) {
           const b = obs[o];
           const dx = x - b.x;
           const dz = z - b.z;
-          const dd = Math.hypot(dx, dz);
-          if (dd > b.rad) continue;
           if (b.kind === 1) {
             // A pillar: the body goes round it. Nearest one wins — two columns
             // close enough to be inside at once is rare and either push is fine.
+            const dd = Math.hypot(dx, dz);
+            if (dd > b.rad) continue;
             if (postR === 0 || b.rad - dd > postR - Math.hypot(x - postX, z - postZ)) {
               postX = b.x;
               postZ = b.z;
@@ -9832,15 +11394,59 @@ export function caveSample(x, y, z) {
             }
             continue;
           }
-          // Half the nominal radius, 0.8 of the height, linear to the rim. See
-          // the table above for where those three numbers come from; `dd > b.rad`
-          // has already skipped, and this skips the outer half of that again.
-          const t = 1 - dd / (b.rad * BLOCK_REACH);
-          if (t <= 0) continue;
-          const top = b.y + b.top * BLOCK_RISE * t;
+          // Squared, and against the widest corner rather than the nominal
+          // radius: the drawn base reaches 1.5x it, and the columns this used to
+          // skip are exactly the ones the body was walking through.
+          const dd2 = dx * dx + dz * dz;
+          /**
+           * THE PART OF THE SLAB YOU GO ROUND, WHICH IS NEW AND WHICH THE DOME
+           * NEVER NEEDED.
+           *
+           * `placeBlocks` says breakdown is "walked on, not walked around", and
+           * the dome is what made that true: it ramped to nothing at the rim, so
+           * every slab in the world was a hill. The drawn slab is not a hill. It
+           * has a lid up to 2.4 m over the silt and a fracture face under it that
+           * is near-vertical on at least one side, and the moment this function
+           * started reporting that honestly the step rule in `controller.js`
+           * refused to climb it — correctly — and then did nothing else, because
+           * blocking is all that rule does. `cave-walk` went from three mouths to
+           * two: k=1 held W into a 1.07 m slab for forty seconds, 2.2 m inside a
+           * passage ten metres wide.
+           *
+           * A boulder you cannot step onto is one you walk ROUND, so it is
+           * published as a post — the same field a column uses, applied by the
+           * same displacement push, with no new mechanism anywhere. Gated on the
+           * body's FEET rather than on the block's height so that a body already
+           * standing on one slab is not shoved off it by the taller slab it is
+           * about to step onto: `y - BODY_EYE` is where the feet are, and the
+           * test is the same one the step rule will apply a moment later.
+           *
+           * It is deliberately NOT gated on the body being inside the solid.
+           * That was the first version and it does nothing at all: the step rule
+           * reverts the move that put the body inside, `_resolveCave` then runs
+           * at the position BEFORE the move — outside, where the column misses
+           * the solid and no post is published — and the body is stuck in exactly
+           * the same place, one frame later. A push has to exist before the body
+           * arrives, which is why the wall radius is a property of the block.
+           */
+          if (
+            b.wall > 0 &&
+            dd2 < (b.wall + 0.5) * (b.wall + 0.5) &&
+            b.y + b.top > y - BODY_EYE + BLOCK_STEP
+          ) {
+            const dd = Math.sqrt(dd2);
+            if (postR === 0 || b.wall - dd > postR - Math.hypot(x - postX, z - postZ)) {
+              postX = b.x;
+              postZ = b.z;
+              postR = b.wall;
+            }
+          }
+          if (dd2 > b.reach * b.reach) continue;
+          const top = blockTopAt(solid, b.si, x, z);
           // Only if the body could plausibly be standing on it: a block whose
           // top is above your head is a wall, and reporting it as floor would
-          // teleport you onto the roof of a slab you are walking past.
+          // teleport you onto the roof of a slab you are walking past. A miss
+          // comes back as -Infinity and fails the first half of this.
           if (top > floor && top < y + 0.6) floor = top;
         }
       }

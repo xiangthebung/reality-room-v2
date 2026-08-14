@@ -288,9 +288,49 @@ for (const seed of SEEDS) {
         const t0 = performance.now();
         while (performance.now() - t0 < seconds * 1000) {
           const bi = nearest(con.position.x, con.position.z);
-          // Steer a few rings ahead, never past the end: the terminus is the
-          // target, and a body aimed at a cap ring aims into the rock beside it.
-          const j = Math.min(end, Math.max(bi + 5, from + 2));
+          /**
+           * STEER AT THE FURTHEST RING YOU CAN STILL SEE, NOT AT A FIXED FIVE.
+           *
+           * Five rings is 3.6 m, which is inside the body's own stopping
+           * distance and well inside a corner. On a passage that runs straight
+           * that costs nothing — the ring 3.6 m ahead is on the same bearing as
+           * the one 20 m ahead — and on a passage that bends it aims at a point
+           * the body cannot travel to in a straight line, so the wall push takes
+           * the whole of the component that would have got there and the body
+           * slides along the rock at full speed. It never triggers the veer
+           * escape below either, because it IS moving; it is just not moving
+           * forward. Measured: pinned 6.3 m short of the terminus for the whole
+           * twelve seconds, at v 4.3, with two and a half metres of passage
+           * across.
+           *
+           * `cave-walk` has this fix already and its block records the three
+           * versions it took to get there. This is the same test — the furthest
+           * ring whose straight line from HERE stays inside the passage — and it
+           * is what a person does: you steer at the last thing you can see down
+           * the passage, and at a corner that is the corner.
+           */
+          const lo = Math.max(bi + 3, from + 2);
+          const fits = (t) => {
+            const dx = p.x[t] - con.position.x;
+            const dz = p.z[t] - con.position.z;
+            const len2 = dx * dx + dz * dz;
+            if (len2 < 1e-6) return false;
+            for (let m = bi + 1; m < t; m++) {
+              const ex = p.x[m] - con.position.x;
+              const ez = p.z[m] - con.position.z;
+              const u = Math.max(0, Math.min(1, (ex * dx + ez * dz) / len2));
+              const ox = ex - dx * u;
+              const oz = ez - dz * u;
+              const fit = p.r[m] * Math.min(p.w[m], p.t[m]) * 0.62;
+              if (ox * ox + oz * oz > fit * fit) return false;
+            }
+            return true;
+          };
+          let j = Math.min(end, lo);
+          for (let t = j + 1; t <= Math.min(end, bi + 24); t++) {
+            if (!fits(t)) break;
+            j = t;
+          }
           const moved = Math.hypot(con.position.x - lastX, con.position.z - lastZ);
           lastX = con.position.x;
           lastZ = con.position.z;
