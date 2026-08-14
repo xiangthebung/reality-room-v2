@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Does the floor you stand on match the floor you can see?
@@ -73,23 +74,11 @@ for (const c of near.slice(0, CAVES)) {
    * WAIT FOR THE CAVE, NOT FOR A NUMBER OF SECONDS.
    *
    * This was `waitForTimeout(3500)`, which is a guess about how long a build
-   * takes, and a build takes as long as the passage is: `Cave.step` meters the
-   * sweep out at RINGS_PER_FRAME a frame and the passages have gone from ~300 m
-   * to ~650 m. Measured on this tree, grove-01's k=-1 and check-3's k=-3 both
-   * pass 6.4 s — so the fixed wait expired mid-sweep, `cave.mesh` was null, and
-   * the script printed "k=-1: not built" and moved on. A gate that skips half
-   * its subjects and still prints a total is worse than one that fails: the
-   * count halves and reads as an improvement.
-   *
-   * Polling `ready` costs nothing when the cave is already up, which it is for
-   * every cave this has ever measured except the biggest.
+   * takes, and a build takes as long as the passage is. The fixed wait expired
+   * mid-sweep, `cave.mesh` was null, and the script printed "k=-1: not built"
+   * and moved on — the failure `_cave-ready.mjs` exists to describe.
    */
-  await page
-    .waitForFunction((k) => window.RR.caves.caves.get(k)?.ready === true, c.k, {
-      timeout: 60000,
-      polling: 250,
-    })
-    .catch(() => {});
+  await caveReady(page, c.k);
 
   const report = await page.evaluate(
     async ({ k, tol }) => {

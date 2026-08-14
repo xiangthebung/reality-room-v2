@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Stand in front of ONE of each thing and look at it.
@@ -71,7 +72,10 @@ await page.evaluate(
   },
   { x: c.x, z: c.z }
 );
-await page.waitForTimeout(4000);
+// Wait for the passage itself, not for four seconds — see `_cave-ready.mjs`.
+// Every object this photographs is hung off `cave`, so looking early does not
+// take a worse picture, it takes none at all.
+await caveReady(page, c.k);
 
 /**
  * The exposure lift is a uniform on the shared material, not a post effect.

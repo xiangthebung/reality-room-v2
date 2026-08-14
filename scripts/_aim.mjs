@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { caveAxisPoint, cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Hand-aimed shots inside one cave, plus an optional pixel probe.
@@ -65,7 +66,10 @@ await page.evaluate(
   },
   { x: approach.x, z: approach.z }
 );
-await page.waitForTimeout(5000);
+// For the passage, not for five seconds — see `_cave-ready.mjs`. This one is
+// hand-driven rather than a gate, but every pose below is a ring index into a
+// path that does not exist yet if this looks early.
+await caveReady(page, target.k);
 
 const info = await page.evaluate((k) => {
   const c = window.RR.caves.caves.get(k);

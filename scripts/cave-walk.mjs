@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { caveAxisPoint, cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Can you actually walk into one?
@@ -97,7 +98,17 @@ for (const c of near.slice(0, 3)) {
     },
     { x: start.x, z: start.z, yaw: Math.atan2(-(c.x - start.x), -(c.z - start.z)) }
   );
-  // Long enough for the ground to stream and the passage to build.
+  /**
+   * The passage first, then the ground.
+   *
+   * The single 3 s wait this replaces was doing two jobs, and only one of them
+   * has a fixed cost. The build has none — see `_cave-ready.mjs` — and when it
+   * overran, `path` came back null, the walk ran with nothing to steer at, and
+   * the cave was written off. The fall is the other job: the body was dropped
+   * from 60 m with `fly` off, so it still needs its chunks to arrive and its
+   * feet to land, and that is what the three seconds are kept for.
+   */
+  await caveReady(page, c.k);
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${OUT}/k${c.k}-0-start.png` });
 

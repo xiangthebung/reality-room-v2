@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * IS THERE A HILL STANDING IN THE DOORWAY?
@@ -78,7 +79,10 @@ for (const c of near.slice(0, CAVES)) {
     },
     { x: c.x, z: c.z }
   );
-  await page.waitForTimeout(3500);
+  // For this cave to say it is built, not for 3.5 s — see `_cave-ready.mjs`.
+  // A mouth this skipped is a mouth nobody checked was open, reported as one
+  // fewer cave in the total.
+  await caveReady(page, c.k);
 
   const report = await page.evaluate(
     async ({ k, rings, tol }) => {
