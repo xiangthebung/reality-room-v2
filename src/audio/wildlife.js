@@ -3123,7 +3123,9 @@ export class Wildlife {
       body.connect(env).connect(spatial.input);
       body.start(t);
       body.stop(t + 0.05);
+      this.voices++;
       body.onended = () => {
+        this._release(body);
         try {
           env.disconnect();
         } catch {
