@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync, statSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, renameSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
@@ -349,6 +349,26 @@ const BEDS = [
 const TARGET_LUFS = -23;
 
 /**
+ * ISO 9613-1 atmospheric absorption at 20 °C and 70% relative humidity, in
+ * dB per kilometre. Rainforest conditions, and the humidity matters — dry air
+ * absorbs high frequencies considerably harder, so a table picked for a
+ * temperate afternoon would over-dull these beds.
+ *
+ * Used by `--distance`. See the long block in `encodeBed`.
+ */
+const AIR_ABSORPTION = [
+  [63, 0.1],
+  [125, 0.4],
+  [250, 1.0],
+  [500, 2.8],
+  [1000, 5.0],
+  [2000, 9.0],
+  [4000, 22.9],
+  [8000, 76.6],
+  [16000, 168],
+];
+
+/**
  * Integrated loudness of a file, in LUFS, or null if ffmpeg cannot say.
  *
  * `ebur128` writes its summary to STDERR and ffmpeg still exits 0, so the output
@@ -388,7 +408,7 @@ function loudness(file) {
  * @param {number} [opts.opus]    kbps for the Opus encode
  * @param {number} [opts.aac]     kbps for the AAC fallback
  */
-function encodeBed(src, slot, { start = 0, length = null, opus = 64, aac = 96 } = {}) {
+function encodeBed(src, slot, { start = 0, length = null, opus = 64, aac = 96, distance = 0 } = {}) {
   const cut = [];
   // BEFORE `-i`, so ffmpeg seeks rather than decoding and discarding. On a
   // thirteen-minute source that is the difference between instant and not.
@@ -408,8 +428,85 @@ function encodeBed(src, slot, { start = 0, length = null, opus = 64, aac = 96 } 
     { stdio: 'inherit' }
   );
 
+  /**
+   * ==== THE TILT IS BAKED IN BEFORE THE LOUDNESS IS MEASURED =================
+   *
+   * This ordering is not a detail, and getting it wrong would have quietly
+   * destroyed the one invariant this script exists to hold.
+   *
+   * `--distance` REMOVES ENERGY, and it removes a different amount from each
+   * recording — most from night, which is the brightest of the three, least from
+   * day. Measure first and filter afterwards and every bed leaves here at some
+   * level BELOW -23 LUFS, each by its own private amount, which is precisely the
+   * thirty-decibel spread the block on loudness above exists to abolish. The
+   * symptom would be night quietly sitting a decibel or two under day for the
+   * rest of the project's life, with a manifest confidently recording that both
+   * were normalised to the same figure.
+   *
+   * So the tilt is applied to the trimmed intermediate, and the loudness is
+   * measured on the RESULT. `-23 LUFS` then means what it says for every bed, at
+   * whatever distance each was placed, and `manifest.gain` keeps meaning one
+   * thing across all of them.
+   */
+  if (distance > 0) {
+    const entries = AIR_ABSORPTION.map(
+      ([hz, dbPerKm]) => `entry(${hz},${((-dbPerKm * distance) / 1000).toFixed(2)})`
+    ).join(';');
+    const tilted = resolve(OUT, `.${slot}-tilt.wav`);
+    execFileSync(
+      'ffmpeg',
+      ['-y', '-loglevel', 'error', '-i', trimmed, '-af',
+        `firequalizer=gain_entry='${entries}'`, tilted],
+      { stdio: 'inherit' }
+    );
+    rmSync(trimmed, { force: true });
+    renameSync(tilted, trimmed);
+  }
+
   const measured = loudness(trimmed);
   const deltaDb = measured === null ? 0 : TARGET_LUFS - measured;
+
+  /**
+   * ==== THE RECORDING IS CLOSE AND THE BED IS FAR ============================
+   *
+   * A field recordist stands IN the chorus. `bed.js` wants the chorus a couple
+   * of hundred metres away — that is the entire premise of the layer, the thing
+   * that cannot be synthesised, the unresolvable middle distance. Those are not
+   * the same signal, and the difference is not level. It is the top end.
+   *
+   * Measured on the three approved recordings, straight out of the encoder:
+   *
+   *   day    centroid 6483 Hz   night 9400 Hz   dawn 5786 Hz
+   *
+   * Night is at NINE KILOHERTZ, because katydids stridulate up there and the mic
+   * was underneath them. `audio-probe.mjs` fails anything over 2600 Hz and it was
+   * right to: with the bed live, eight stages failed, `ambience only` went from
+   * 1720 Hz to 3492 Hz, and every music row roughly doubled its centroid.
+   *
+   * So the beds are filtered by DISTANCE, using ISO 9613-1 atmospheric
+   * absorption at 20 °C and 70% relative humidity — a published table for the
+   * actual physical process, rather than a low-pass tuned until a gate went
+   * green. That distinction matters: the number below is a claim about where the
+   * chorus is, and it can be argued with on those terms.
+   *
+   * TWO THINGS THIS DOES THAT ARE NOT OBVIOUS.
+   *
+   * FIRST, IT MAKES THE HARSH FRACTION WORSE BEFORE IT MAKES IT BETTER. Air
+   * absorption removes 8 kHz roughly eight times faster than 2 kHz, so the
+   * PROPORTION of what survives that lands in the 2–6 kHz band goes UP — night
+   * measured 0.285 before and 0.650 after. That reads like a regression against
+   * the one gate this repo has least headroom on. It is not: the absolute energy
+   * in that band falls 4.6x, and `harsh` is a fraction of a master bus this bed
+   * is only part of. The fraction is the wrong number to watch here; the master
+   * is measured below and it is what decides.
+   *
+   * SECOND, AIR ABSORPTION IS THE ONLY TERM MODELLED. Dense foliage scatters and
+   * absorbs on top of this, and it is frequency-dependent in the same direction
+   * and of the same rough magnitude. So the distance that SOUNDS right is
+   * larger than the distance you would have to walk — this knob is honest about
+   * the physics it includes and silent about the physics it does not, and a
+   * value of 250 here does not assert the birds are 250 m away.
+   */
   const filter = deltaDb ? ['-af', `volume=${deltaDb.toFixed(2)}dB`] : [];
 
   const webm = resolve(OUT, `${slot}.webm`);
@@ -440,6 +537,7 @@ function encodeBed(src, slot, { start = 0, length = null, opus = 64, aac = 96 } 
   return {
     slot,
     seconds: length,
+    distance,
     sourceLufs: measured,
     appliedDb: deltaDb,
     webm: statSync(webm).size,
@@ -551,6 +649,7 @@ if (args.in) {
     length,
     opus: Number(args.opus ?? 64),
     aac: Number(args.aac ?? 96),
+    distance: Number(args.distance ?? 0),
   });
   row.duck = {
     wind: Number(args.duckWind ?? 0.55),
@@ -564,12 +663,34 @@ if (args.in) {
     // The whole point of recording these: the trim is reproducible, and a CC BY
     // licence obliges us to say the work was changed.
     originalFile: args.in.split(/[\\/]/).pop(),
+    /**
+     * WHAT THE SOURCE FILE ACTUALLY WAS, when that is not simply "the original".
+     *
+     * Freesound serves originals only to a logged-in session, and this project
+     * does not hold one — so the beds were built from the public `-hq.mp3`
+     * preview transcode instead. That is a real fact about the artefact: the
+     * delivered Opus is a SECOND lossy generation, and anyone later wondering
+     * why a spectrogram tops out where it does, or whether re-encoding at a
+     * higher bitrate would recover anything, needs to know it before they spend
+     * an afternoon finding out. `--note` puts it in the manifest beside the
+     * timecodes rather than in a commit message nobody reads.
+     */
+    ...(args.note ? { note: args.note } : {}),
     trimmedFrom: `${start}s`,
     trimmedLength: `${length}s`,
+    // Recorded because it is a change to the work that CC BY obliges us to
+    // declare, and because the centroid of the delivered file is meaningless
+    // without it. `sourceLufs` below is measured AFTER this is applied.
+    ...(row.distance > 0
+      ? { distanceFilter: `ISO 9613-1 air absorption, ${row.distance} m at 20 C / 70% RH` }
+      : {}),
     normalisedTo: `${TARGET_LUFS} LUFS`,
     sourceLufs: row.sourceLufs,
     gainApplied: `${row.appliedDb.toFixed(2)} dB`,
-    modified: 'trimmed, loudness-normalised, re-encoded and looped',
+    modified:
+      'trimmed, ' +
+      (row.distance > 0 ? 'distance-filtered, ' : '') +
+      'loudness-normalised, re-encoded and looped',
   };
   rows.push(row);
   writeManifest(rows);

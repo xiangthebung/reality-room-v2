@@ -18,10 +18,23 @@ dist-perf/
 .env.*
 !.env.example
 
-# The ambience beds. Generated, or licensed from somewhere else — either way not
-# ours to commit. `scripts/audio-bed-make.mjs` writes a synthesised placeholder
-# here so the player can be tested without licensing anything, and a real bed
-# would be a third-party recording with its own terms. `AmbienceBed.load` returns
-# null when this directory is absent, which is what keeps a stock checkout
-# measuring exactly the forest every script in scripts/ was calibrated against.
+# The ambience beds.
+#
+# This said "licensed from somewhere else — either way not ours to commit", and
+# for the three recordings now in here that is NOT TRUE. Two are CC BY 4.0 and
+# one is CC0 1.0; redistribution is exactly what those licences grant, and the
+# attribution CC BY asks for is in CREDITS.md, which the build now emits into
+# dist/. There is no licence reason to keep them out.
+#
+# The remaining reason is calibration, and it is the real one: `AmbienceBed.load`
+# returns null when this directory is absent, so a stock checkout measures
+# exactly the forest every script in scripts/ was tuned against. Committing the
+# beds would move the baseline under all of them at once.
+#
+# ==> CONSEQUENCE, AND IT IS NOT OBVIOUS: a fresh clone builds with NO BED AT
+#     ALL, and nothing errors — `load` returning null is a supported state. A
+#     deployed build would ship the forest silently missing its far chorus. If
+#     Reality Room is ever deployed from a clean clone rather than from this
+#     working copy, either this line comes out or the beds have to arrive some
+#     other way. Left ignored deliberately; see CREDITS.md.
 public/audio/beds/
