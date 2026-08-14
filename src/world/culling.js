@@ -66,6 +66,12 @@ import * as THREE from 'three';
  * This is not an approximation. The output buffer is bit-for-bit what the
  * full repack would have produced, which is what makes it safe to leave
  * cull-check's zero-pixel-diff requirement standing over it.
+ *
+ * THAT SENTENCE IS ABOUT THE ARRAY, NOT ABOUT THE GPU, and for a long time only
+ * the first half was true. "Only that span is flagged for upload" is a promise
+ * that has to be kept across every repack that happens before the next draw, and
+ * there is no rule anywhere that those are one to one — behind the main menu
+ * there are five or six repacks per drawn frame. See `flagUpload`.
  */
 
 const _sphere = new THREE.Sphere();
@@ -259,6 +265,56 @@ export function packSlab(
   const canThin = thinnable ?? (mesh.name === 'grass' || mesh.name === 'ferns');
   let density = 1;
   const take = (b) => (density >= 1 ? b.count : Math.max(1, Math.ceil(b.count * density)));
+
+  /**
+   * "Instances [from, to) were just rewritten — send them."
+   *
+   * NOTHING HERE CLEARS THE PENDING RANGES, AND THAT IS THE WHOLE POINT.
+   *
+   * These two lines used to be `clearUpdateRanges()` then `addUpdateRange(...)`,
+   * on the reasonable-sounding grounds that this repack's range supersedes the
+   * last one's. It does not, and the assumption hiding inside it is that every
+   * repack is followed by a draw before the next repack. **A repack is not a
+   * frame.** three uploads an attribute's ranges from inside `WebGLAttributes.
+   * update`, which only runs when the mesh is actually submitted — and it bumps
+   * `version` on `needsUpdate`, so once a range is dropped the version has
+   * already moved past it and the bytes it described are never sent again. Two
+   * repacks between two draws therefore lose the first one's writes PERMANENTLY:
+   * the CPU slab is right, the GPU keeps whatever it had, and the frame draws a
+   * plausible mixture of the two.
+   *
+   * The case that proved it is not exotic. `gateUp` in main.js throttles the
+   * draw to 10 Hz while the menu is up while the cull keeps running every tick
+   * (it is what streams the world in), so behind the title card there are five
+   * or six repacks per draw and five of every six sets of writes were being
+   * thrown away. Every screenshot script that dismisses the gate by hand rather
+   * than clicking `#enter` — `look-shots.mjs` and the several that copied its
+   * seating — stays in that state for its whole run, which is why two runs of it
+   * against unchanged code produced frames differing across a THIRD of the
+   * viewport: which repacks happened to land on a drawn frame is a question
+   * about wall-clock timing, so the picture was a coin toss. It also reaches a
+   * player: a sector that arrived while they were choosing a name could keep its
+   * stale transforms after the gate lifted.
+   *
+   * Accumulating instead is unconditionally safe, because a range describes a
+   * REGION rather than a snapshot: re-uploading a region uploads whatever is in
+   * the array at upload time, which is by definition the current answer. three
+   * sorts, merges adjacent ranges in place and clears them once it has sent
+   * them, so the list cannot grow without bound and the merge means overlapping
+   * suffixes usually collapse into one `bufferSubData`.
+   *
+   * `restoreAll` still clears — it queues no range at all, and an empty list is
+   * three's own signal to upload the whole attribute, which supersedes anything
+   * outstanding by covering it.
+   */
+  function flagUpload(from, to) {
+    mesh.instanceMatrix.addUpdateRange(from * 16, (to - from) * 16);
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) {
+      mesh.instanceColor.addUpdateRange(from * 3, (to - from) * 3);
+      mesh.instanceColor.needsUpdate = true;
+    }
+  }
 
   /**
    * The last eye `update` was given, remembered for `restoreAll`.
@@ -724,14 +780,7 @@ export function packSlab(
         writtenLength += added;
         mesh.count = write;
         mesh.visible = write > 0;
-        mesh.instanceMatrix.clearUpdateRanges();
-        mesh.instanceMatrix.addUpdateRange(keep * 16, (write - keep) * 16);
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) {
-          mesh.instanceColor.clearUpdateRanges();
-          mesh.instanceColor.addUpdateRange(keep * 3, (write - keep) * 3);
-          mesh.instanceColor.needsUpdate = true;
-        }
+        flagUpload(keep, write);
         return write - keep;
       }
 
@@ -785,16 +834,7 @@ export function packSlab(
        * whenever the player is looking the other way, that is not nothing.
        */
       mesh.visible = write > 0;
-      if (write > keep) {
-        mesh.instanceMatrix.clearUpdateRanges();
-        mesh.instanceMatrix.addUpdateRange(keep * 16, (write - keep) * 16);
-        mesh.instanceMatrix.needsUpdate = true;
-        if (mesh.instanceColor) {
-          mesh.instanceColor.clearUpdateRanges();
-          mesh.instanceColor.addUpdateRange(keep * 3, (write - keep) * 3);
-          mesh.instanceColor.needsUpdate = true;
-        }
-      }
+      if (write > keep) flagUpload(keep, write);
       written.set(candidate.subarray(0, length));
       writtenLength = length;
       return write - keep;
