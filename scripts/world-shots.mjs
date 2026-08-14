@@ -116,7 +116,15 @@ await page.evaluate(() => {
   document.getElementById('toast').style.display = 'none';
   document.getElementById('help').style.display = 'none';
   const R = window.RR;
-  R.probe.freeze(true);
+  /**
+   * At a STATED instant, not at this one. A bare `freeze(true)` pins the world
+   * clock to whatever millisecond page load finished on, so the river, the
+   * clouds and the mist are in a different place in every run — which is the
+   * floor under any comparison this instrument is used to make. 600 for the same
+   * reason look-shots picked it; see WORLD_T there, and the header there for the
+   * two larger causes found alongside this one.
+   */
+  R.probe.freeze(true, { at: 600 });
   // trailEnabled, not setTripParameters({trail:0}): the director rewrites the
   // trail amount every frame, and this is the switch it cannot overwrite.
   R.pipeline.trailEnabled = false;

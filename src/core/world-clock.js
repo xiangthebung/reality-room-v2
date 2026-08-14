@@ -154,10 +154,25 @@ export function worldClock() {
 /**
  * Stop the world clock where it is, or let it go again.
  *
+ * `at` PINS TO A STATED INSTANT RATHER THAN TO THIS ONE, and that distinction is
+ * the difference between a frozen world and a reproducible one. "Where it is" is
+ * a reading of the wall clock, so a script that freezes as its first act still
+ * freezes at whatever millisecond page load happened to finish on — and every
+ * surface downstream of this number (the river's two wave trains, the cloud and
+ * aurora scroll, the mist, the campfire) is then in a slightly different place in
+ * every run. Small, but it is the floor under any pixel comparison, and it is
+ * paid at the one moment a comparison is being made.
+ *
+ * Left undefined for a human pressing the debug panel's freeze, who wants the
+ * world stopped where they are looking at it and would be baffled by the river
+ * jumping. Given a number by the capture scripts, which want two runs to be the
+ * same picture more than they want any particular one.
+ *
  * @param {boolean} on
+ * @param {number} [at] seconds on the room's clock to hold at
  */
-export function pinWorldClock(on) {
-  pinned = on ? worldClock() : null;
+export function pinWorldClock(on, at) {
+  pinned = on ? (Number.isFinite(at) ? at : worldClock()) : null;
   return pinned;
 }
 

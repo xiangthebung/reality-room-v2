@@ -2368,7 +2368,18 @@ function frame() {
    * `sitting`, `findInteractable` and the prompt all ask the same question of
    * the same frame.
    */
-  ferry?.update(dt);
+  /**
+   * Frozen by the same switch as the fires, the animals and the fish, and it was
+   * the last thing in the world that was not.
+   *
+   * A raft is 1.9 m/s and a settle is ten seconds of frames, so two runs of a
+   * capture script that freeze the world and then wait for the streamer to drain
+   * photograph it twenty metres apart — and at the stream station it is in
+   * shot. Nothing else about the freeze noticed, because the ferry is the only
+   * thing in the world that travels hundreds of metres while everything around
+   * it is standing still.
+   */
+  ferry?.update(probe.frozen ? 0 : dt);
   seats.update();
 
   /**
@@ -2948,7 +2959,16 @@ const probe = {
    * indistinguishable from the artefact being looked for.
    */
   frozen: false,
-  freeze(on = true) {
+  /**
+   * @param {boolean} [on]
+   * @param {{at?: number, phase?: number}} [pin] the instant to hold at, for a
+   *   caller that needs two runs to agree rather than needing THIS moment.
+   *   `at` is seconds on the room's clock, `phase` is 0..1 of a day. Both
+   *   default to wherever the world has got to, which is what a human pressing
+   *   the freeze key wants; the capture scripts state them. See
+   *   `pinWorldClock`.
+   */
+  freeze(on = true, pin = {}) {
     this.frozen = on;
     debug.speed = on ? 0 : 1;
     /**
@@ -2965,9 +2985,11 @@ const probe = {
      * passed between the two captures.
      *
      * Pinned to the CURRENT phase rather than a fixed one, so freezing does not
-     * also teleport you to nine in the morning.
+     * also teleport you to nine in the morning — unless the caller asked for a
+     * stated hour, which is what a capture script that has to match its own
+     * previous run does.
      */
-    atmosphere.day.set(on ? atmosphere.day.phase() : null);
+    atmosphere.day.set(on ? (pin.phase ?? atmosphere.day.phase()) : null);
     /**
      * …AND THE WORLD CLOCK, WHICH IS THE SAME BUG A THIRD TIME.
      *
@@ -2980,8 +3002,12 @@ const probe = {
      * Releasing JUMPS to wherever the room has got to rather than resuming
      * where it paused, and that is the right way round: this is one machine's
      * debugging pause, not an event the other seven agreed to.
+     *
+     * `pin.at` is the reproducibility half of it — see `pinWorldClock`. Without
+     * it "frozen" still means "frozen at whichever millisecond page load
+     * finished on", which two runs of a capture script never agree about.
      */
-    pinWorldClock(on);
+    pinWorldClock(on, pin.at);
     return on;
   },
   /** Name -> the objects that draw it. */
