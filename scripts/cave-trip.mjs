@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * THE ONE THING NO CAVE SCRIPT HAD EVER LOOKED AT: a formation at arm's length,
@@ -126,7 +127,8 @@ await page.evaluate(
   },
   { x: target.x, z: target.z }
 );
-await page.waitForTimeout(5000);
+// Then wait for the passage itself, not for five seconds — see `_cave-ready.mjs`.
+await caveReady(page, target.k);
 
 /* -------------------------------------------------------------------------- */
 /*  the structural probe                                                      */

@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { caveAxisPoint, cavesNear, heightAt, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Does any part of a built passage come out of the hillside?
@@ -26,11 +27,23 @@ import { caveAxisPoint, cavesNear, heightAt, setWorldSeed } from '../src/world/t
  * the axis: the tube breaks out sideways while its centre still has four metres
  * of rock above it. Sampling across the passage is the whole point.
  *
- *   node scripts/cave-roof.mjs
+ *   node scripts/cave-roof.mjs [--url=http://127.0.0.1:5180/]
  *
  * Rings 0-4 are expected to be proud of the ground: that is the mouth, and the
  * hood exists to carry rock over it. Anything past the hood is a skylight.
+ *
+ * `--url` because this was the one cave script with the port written into it,
+ * and 5180 belongs to whichever checkout started Vite first. Run from a
+ * worktree it silently measured a different tree's geometry — an instrument
+ * reporting confidently about source that is not the source being changed.
  */
+const args = Object.fromEntries(
+  process.argv.slice(2).map((a) => {
+    const [k, v = 'true'] = a.replace(/^--/, '').split('=');
+    return [k, v];
+  })
+);
+const URL = args.url ?? 'http://127.0.0.1:5180/';
 const SEED = 'grove-01';
 setWorldSeed(SEED);
 const near = cavesNear(0, 0, 900);
@@ -40,7 +53,7 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1024, height: 640 } });
 await page.routeWebSocket(/.*/, () => {});
-await page.goto('http://127.0.0.1:5180/', { waitUntil: 'networkidle' });
+await page.goto(URL, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.RR !== undefined, { timeout: 45000 });
 await page.click('#enter');
 await page.waitForSelector('#gate.gone', { timeout: 20000 }).catch(() => {});
@@ -59,7 +72,10 @@ for (const c of near.slice(0, 3)) {
     },
     { x: start.x, z: start.z }
   );
-  await page.waitForTimeout(3500);
+  // For this cave to say it is built, not for 3.5 s — see `_cave-ready.mjs`.
+  // The `null` below then means a cave that really did not build, which is a
+  // different thing from one this script was too impatient to see.
+  await caveReady(page, c.k);
   const dump = await page.evaluate((k) => {
     const cave = window.RR.caves.caves.get(k);
     if (!cave?.paths) return null;

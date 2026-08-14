@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { caveAxisPoint, cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * WALK IN, AT THE RESOLUTION SOMEBODY ACTUALLY PLAYS AT.
@@ -76,7 +77,10 @@ await page.evaluate(
   },
   { x: approach.x, z: approach.z }
 );
-await page.waitForTimeout(5000);
+// Then wait for the passage itself, not for five seconds — see `_cave-ready.mjs`.
+// The `null` below aborts the whole tour, so a build this looked past is not one
+// missing shot, it is an empty run that says the cave was never there.
+await caveReady(page, target.k);
 
 const plan = await page.evaluate((k) => {
   const cave = window.RR.caves.caves.get(k);

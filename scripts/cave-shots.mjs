@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { caveAxisPoint, cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * Look at a cave mouth from outside it.
@@ -97,8 +98,15 @@ await page.evaluate(() => {
   document.getElementById('help').style.display = 'none';
 });
 
-/** Put the camera somewhere and let the world catch up with it. */
-async function goto(x, z, yaw, pitch) {
+/**
+ * Put the camera somewhere and let the world catch up with it.
+ *
+ * Pass `k` when the shot is OF a cave rather than merely near one: the ground
+ * settles on a clock, the passage does not, and this file reads `cave.path` to
+ * decide where to stand. `if (!ring) continue` skips the cave silently, so an
+ * impatient wait here costs a whole cave's worth of pictures and says nothing.
+ */
+async function goto(x, z, yaw, pitch, k) {
   await page.evaluate(
     (s) => {
       const { director, controller } = window.RR;
@@ -112,20 +120,21 @@ async function goto(x, z, yaw, pitch) {
     { x, z, yaw, pitch }
   );
   /**
-   * Long enough for the ground AND the passage.
+   * Long enough for the ground.
    *
-   * A teleport lands in a world whose chunks are still arriving, and the cave
-   * on top of that builds at one ring batch per frame — five or six frames for
-   * the mesh, but only after the streamer's half-second rescan has noticed the
-   * camera moved. Anything under two seconds photographs a hillside.
+   * A teleport lands in a world whose chunks are still arriving, and the
+   * streamer's rescan takes half a second to notice the camera moved at all.
+   * Anything under two seconds photographs a hillside.
    */
   await page.waitForTimeout(2600);
+  // The passage is not on that clock — see `_cave-ready.mjs`.
+  if (k !== undefined) await caveReady(page, k);
 }
 
 for (const [i, c] of near.slice(0, 2).entries()) {
   const tag = i === 0 ? 'a' : 'b';
   // Stand at the notch's mouth first, purely to make the field stream this one.
-  await goto(c.x, c.z, 0, 0);
+  await goto(c.x, c.z, 0, 0, c.k);
   const ring = await page.evaluate((k) => {
     const cave = window.RR.caves.caves.get(k);
     if (!cave?.path) return null;
@@ -189,7 +198,7 @@ for (const [i, c] of near.slice(0, 2).entries()) {
  */
 for (const [i, c] of near.slice(0, 2).entries()) {
   const tag = i === 0 ? 'a' : 'b';
-  await goto(c.x, c.z, 0, 0);
+  await goto(c.x, c.z, 0, 0, c.k);
   const ring = await page.evaluate((k) => {
     const cave = window.RR.caves.caves.get(k);
     if (!cave?.path) return null;

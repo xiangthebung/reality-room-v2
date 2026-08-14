@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { cavesNear, setWorldSeed } from '../src/world/terrain.js';
+import { caveReady } from './_cave-ready.mjs';
 
 /**
  * WHAT HAPPENS WHEN YOU GET TO THE END.
@@ -155,16 +156,12 @@ for (const seed of SEEDS) {
      * that it is cut against a millisecond deadline, because how many frames
      * that comes to depends on the machine and on how many other mouths are in
      * range being built first. What a short wait produces here is
-     * `check-3 k=-3: not built`, which reads as a passage that failed to
+     * `check-3 k=-3 did not build`, which reads as a passage that failed to
      * generate and is really a script that looked too early — the exact failure
-     * this suite has recorded four instruments making in one day. Bounded, so a
-     * cave that genuinely never builds still reports `not built`.
+     * this suite has recorded four instruments making in one day. See
+     * `_cave-ready.mjs`; `built: false` below still catches a real one.
      */
-    await page
-      .waitForFunction((k) => window.RR.caves.caves.get(k)?.ready === true, c.k, {
-        timeout: 60000,
-      })
-      .catch(() => {});
+    await caveReady(page, c.k);
 
     const r = await page.evaluate(
       async ({ k, seconds, jumpLimit }) => {
