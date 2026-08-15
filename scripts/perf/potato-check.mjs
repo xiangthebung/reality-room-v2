@@ -77,7 +77,15 @@ async function settled(label) {
     // apart can agree while a chunk is still inbound. That is the difference
     // between "not changing right now" and "finished", and it cost this test
     // two rounds of a mismatch that was always exactly one ground chunk.
-    if (await page.evaluate(() => window.RR.forest.settled)) {
+    /**
+     * BOTH RINGS AND THE CAVES. `forest.settled` covers the trees, the ground
+     * and the impostor bakes; it knows nothing about the cave field, which
+     * builds at 0.6 ms a frame and takes tens of seconds to finish the nearest
+     * mouth. Waiting only for the forest is what made the ultra restore below
+     * read as a 278 384-triangle regression for two rounds — see the block on
+     * `CaveField.settled`.
+     */
+    if (await page.evaluate(() => window.RR.forest.settled && window.RR.caves.settled)) {
       const s = await sample();
       if (prev && s.tris === prev.tris && s.calls === prev.calls) return s;
       prev = s;
@@ -87,6 +95,25 @@ async function settled(label) {
   console.log(`  (${label}: never settled in ${STABLE_TRIES} tries — reporting last reading)`);
   return prev;
 }
+
+/**
+ * BUILD THE WORLD ONCE BEFORE READING ANYTHING, AND THROW THAT READING AWAY.
+ *
+ * The `ultra restored — MISMATCH` line at the bottom of this script was red for
+ * two rounds and neither of them was the ladder's fault. `settled` is an honest
+ * signal and the poll below is an honest poll; what neither can express is that
+ * the first reading is taken on a world that has NEVER BEEN FULLY BUILT. The gate
+ * comes down as soon as the rings around the spawn point have drained, and the
+ * ring keeps widening for several seconds afterwards — so `field.pending` is
+ * legitimately 0, two consecutive samples legitimately agree, and the wood is
+ * legitimately still arriving. It read as ultra gaining 278 384 triangles over
+ * the run, which is the shape of a regression and was nothing of the kind.
+ *
+ * One full settle at the top costs a few seconds and makes the comparison at the
+ * bottom mean what it says: the same world, measured twice.
+ */
+await page.evaluate(() => window.RRSettings.setMode('ultra'));
+await settled('warm-up');
 
 console.log('level      tris        draws  reach                        scale  fog   shad  dens');
 const rows = {};

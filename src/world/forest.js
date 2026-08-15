@@ -1818,6 +1818,58 @@ export function buildForest(scene, seed = 'grove-01') {
   /** The band `setReach` last asked for, applied the moment the bakes finish. */
   let impostorBand = { min: IMPOSTOR_REACH, max: IMPOSTOR_REACH };
 
+  /**
+   * THE COARSE TRUNK MODE — MEASURED, REJECTED, AND KEPT SO THAT IT CAN BE
+   * REJECTED WITH NUMBERS THE NEXT TIME SOMEBODY HAS THE IDEA. There is no
+   * quality preset for this and there should not be. Same standing as
+   * `setImpostors` below: a mechanism the A/B scripts drive and no knob does.
+   *
+   * THE IDEA IS EXTREMELY TEMPTING AND THE ARITHMETIC IS ALL ON ITS SIDE. A near
+   * trunk is 4350 triangles on average and 7766 at the worst; at `potato` there
+   * are 570 of them in front of the camera at the deep station, 2.49 M of the
+   * frame's 3.44 M. Seventy-two per cent of everything the cheapest preset in
+   * the game submits is second- and third-order boughs inside crowns you cannot
+   * see into. `grown.far` already exists, is built from the same control points,
+   * pairs with the same material and the same bucket spheres, and is 206
+   * triangles — 3.6% of the near mesh. Pointing the near layer at it takes deep
+   * from 3.44 M to 1.05 M with every tree still standing where it was and every
+   * leaf card still on it, because the canopy is a different mesh.
+   *
+   * IT LOOKS WRONG, AND IT LOOKS WRONG IN THE ONE PLACE THE TRIANGLE COUNT
+   * CANNOT SEE. `branch-visible.mjs` diffs it against potato-as-shipped inside
+   * one page session, one camera, one minute of one day:
+   *
+   *     arm              triangle cut   worst eye-level mean of 255
+   *     lod 30                   30%        0.02
+   *     lod 20                   35%        0.22
+   *     lod 12                   40%        0.41
+   *     coarse (lod 0)           67%       14.06
+   *
+   * 14 of 255 is the same order as the fog change this project measured its way
+   * back out of, and `.perf/shots/branch-stream-{full,coarse}.png` is what it
+   * is: the kapok that fills the right third of the frame at the stream station
+   * is GONE. Not simplified — the far sweep is three or four sides with no
+   * buttress, built for a tree 80 px tall at 170 m, and at four metres it is a
+   * pole where a wall used to be. What the far mesh throws away is invisible at
+   * the range it was designed for and is the whole subject at arm's length.
+   *
+   * SO THE HANDOVER DISTANCE IS THE LEVER AND NOT THE GEOMETRY, and it has a
+   * floor: the band is tested per BUCKET against the bucket's nearest point,
+   * `TREE_BUCKET` is 44 m, so the sphere is about 41 m of radius and no `lod`
+   * under about 12 m removes another tree. That is where `REACH_TABLE`'s potato
+   * row now sits, and 40% is what this lever is worth. Getting past it needs a
+   * THIRD trunk mesh — second-order branches kept, third dropped, fewer sides —
+   * which is real work in trees.js and is the honest next move, not this.
+   */
+  let coarseTrunks = false;
+  /** near trunk mesh -> the two geometries it may point at. */
+  const trunkDetail = [];
+  /** The last `setReach` call, replayed when the trunk detail changes. */
+  let lastReach = null;
+  /** The understorey layers marked `clutter` — see the table below. */
+  const clutterLayers = [];
+  let clutterOn = true;
+
   for (const arch of archetypes) {
     const a = archetypes.filter((x) => x.name === arch.name).indexOf(arch);
     /**
@@ -1845,6 +1897,18 @@ export function buildForest(scene, seed = 'grove-01') {
       thinnable: false,
       castShadow: true,
       bound: trunkBound,
+    });
+    /**
+     * The two geometries this layer may point at. See `coarseTrunks`.
+     *
+     * Read off `streamedLayers` rather than threaded back out of `addStreamed`,
+     * which returns the packer because that is what every one of its forty-odd
+     * callers wants. The entry just pushed is this one.
+     */
+    trunkDetail.push({
+      mesh: streamedLayers[streamedLayers.length - 1].mesh,
+      full: arch.grown.trunk,
+      coarse: arch.grown.far,
     });
     /**
      * The far half of the same trunk, fed by the same sector data.
@@ -2142,14 +2206,41 @@ export function buildForest(scene, seed = 'grove-01') {
    * the failure mode a camera-following ring cannot have.
    */
   const understoreyLayers = [
+    /**
+     * `clutter: true` MARKS A LAYER THE `potato` RUNG DOES NOT DRAW AT ALL, and
+     * the flag is on this table rather than in a list somewhere else because
+     * this is where anybody adding a layer will be looking.
+     *
+     * The test for it is NOT "is this cheap" — every one of these is cheap, and
+     * that is the trap. It is: **would the wood be a different place without
+     * it?** A stick lying on the floor, a fallen leaf, a wildflower, a bramble
+     * runner and a reed are TEXTURE: they read as detail on the ground you are
+     * walking over and nothing in the world means anything different when they
+     * are gone. A bush, a sapling, a palm, a bromeliad or a giant leaf is
+     * SHAPE — you walk round it, it blocks a sight line, it is the difference
+     * between a rainforest and a temperate wood — and a stump is a thing you
+     * come across. None of those are marked.
+     *
+     * WHAT IT IS WORTH IS DRAW CALLS AND NOT TRIANGLES, which is why this was
+     * nearly not done at all. Measured at the wood station on `potato`: the five
+     * layers below are 0.05 M triangles of a 2.24 M frame, and on a desktop GPU
+     * removing them is inside the noise floor. On a main thread throttled 8x —
+     * see `npm run perf:weak` — removing fourteen draw calls is the difference
+     * between a 33.3 ms frame and a 16.7 ms one, because the frame sits exactly
+     * on the 60 Hz boundary there and every draw is scene-graph traversal, a
+     * render-list insert, a program select and a driver call that a weak core
+     * pays for in full. A triangle count is what a weak GPU charges; a draw
+     * count is what a weak CPU charges, and this game runs out of the second
+     * one first.
+     */
     { id: 'meadow', geo: meadowGeo, mat: meadowMat, capacity: 16384, bucketSize: 18 },
-    { id: 'bramble', geo: brambleGeo, mat: brambleMat, capacity: 16384, bucketSize: 20 },
+    { id: 'bramble', geo: brambleGeo, mat: brambleMat, capacity: 16384, bucketSize: 20, clutter: true },
     { id: 'bushes', geo: bushGeo, mat: shrubMat, capacity: 2048, bucketSize: 26, castShadow: true },
     { id: 'saplings', geo: saplingGeo, mat: shrubMat, capacity: 1024, bucketSize: 26, castShadow: true },
-    { id: 'sticks', geo: stickGeo, mat: twigMat, capacity: 8192, bucketSize: 24, spin: true },
-    { id: 'flowers', geo: flowerGeo, mat: flowerMat, capacity: 8192, bucketSize: 18 },
-    { id: 'litter', geo: litterGeo, mat: litterMat, capacity: 8192, bucketSize: 22, spin: true },
-    { id: 'reeds', geo: reedGeo, mat: reedMat, capacity: 2048, bucketSize: 18 },
+    { id: 'sticks', geo: stickGeo, mat: twigMat, capacity: 8192, bucketSize: 24, spin: true, clutter: true },
+    { id: 'flowers', geo: flowerGeo, mat: flowerMat, capacity: 8192, bucketSize: 18, clutter: true },
+    { id: 'litter', geo: litterGeo, mat: litterMat, capacity: 8192, bucketSize: 22, spin: true, clutter: true },
+    { id: 'reeds', geo: reedGeo, mat: reedMat, capacity: 2048, bucketSize: 18, clutter: true },
     {
       id: 'stumps',
       geo: stumpGeo,
@@ -2213,6 +2304,7 @@ export function buildForest(scene, seed = 'grove-01') {
       // off-centre would let a rotated instance escape its own bound.
       bound: instanceBound(u.geo, u.spin ?? false),
     });
+    if (u.clutter) clutterLayers.push(streamedLayers[streamedLayers.length - 1]);
   }
 
   /**
@@ -2438,7 +2530,13 @@ export function buildForest(scene, seed = 'grove-01') {
     culler.invalidate();
   }
 
-  return {
+  /**
+   * Named rather than returned inline, so that a method may call a sibling
+   * without going through `this` — `setTrunkDetail` replays `setReach`, and a
+   * `this` that depends on how the caller reached the method is exactly the
+   * kind of coupling a settings registry (which stores bare functions) breaks.
+   */
+  const forest = {
     group,
     field,
     colliderGrid,
@@ -2620,6 +2718,15 @@ export function buildForest(scene, seed = 'grove-01') {
         return;
       }
       /**
+       * Remembered so `setTrunkDetail` can replay it.
+       *
+       * The alternative is for the trunk-detail switch to write the bands
+       * itself, which would be a second place that knows the four-band chain —
+       * and the chain is the invariant this whole file is most careful about.
+       * One writer, replayed, cannot disagree with itself.
+       */
+      lastReach = { lod, reach, leafReach, alwaysNear, impostorReach, geometryReach };
+      /**
        * THE FOURTH BAND JOINS THE CHAIN, AND IT JOINS IT AT `leafReach` RATHER
        * THAN AT `reach`. That is the one thing in here that is not a
        * straightforward extension, so it gets the argument.
@@ -2665,14 +2772,29 @@ export function buildForest(scene, seed = 'grove-01') {
       const geoReach = Math.max(lod, geometryReach);
       const impostorMax = Math.max(geoReach, impostorsOn ? impostorReach : geoReach);
       impostorBand = { min: geoReach, max: impostorMax };
+      /**
+       * WHERE THE NEAR TRUNK HANDS OVER, which is `lod` normally and the whole
+       * geometry band when the trunks are coarse.
+       *
+       * With `coarseTrunks` on, both meshes hold `grown.far` and the same
+       * material, so the handover is a distinction without a difference — and
+       * paying twelve draw calls and twelve slab packs a frame for it is exactly
+       * the kind of cost the potato rung exists to stop. Collapsing the far band
+       * to (handover, handover] leaves it empty and preserves every equality the
+       * chain depends on. See the `coarseTrunks` block.
+       */
+      const handover = coarseTrunks ? geoReach : lod;
       for (const layer of streamedLayers) {
         const kind = layer.id.split(':')[0];
         if (kind === 'trunk') {
-          layer.packer.setBand({ max: lod, ...(alwaysNear === null ? {} : { near: alwaysNear }) });
+          layer.packer.setBand({
+            max: handover,
+            ...(alwaysNear === null ? {} : { near: alwaysNear }),
+          });
         } else if (kind === 'trunk-far') {
           // min === the near layer's max, max === the impostor layer's min.
           // These two equalities are the invariant `check:potato` asserts.
-          layer.packer.setBand({ min: lod, max: geoReach });
+          layer.packer.setBand({ min: handover, max: geoReach });
         } else if (kind === 'leaf') {
           layer.packer.setBand({
             max: leafReach,
@@ -2687,6 +2809,105 @@ export function buildForest(scene, seed = 'grove-01') {
         }
       }
       culler.invalidate();
+    },
+
+    /**
+     * Draw every standing trunk from the reduced sweep instead of the full one.
+     * FOR `branch-visible.mjs`, NOT FOR A KNOB — see the `coarseTrunks` block at
+     * the top of this function for the frames that rejected it.
+     *
+     * What follows is only the mechanism, and the mechanism is small on purpose:
+     * an A/B script has to be able to flip this between two reads of the same
+     * camera without the frames differing in anything else, so it must not
+     * allocate, must not upload and must not recompile.
+     *
+     * IT COMPILES NOTHING. Both geometries were built by `growTree` from the
+     * same control points with the same attribute set, and both meshes were
+     * constructed with the SAME MATERIAL OBJECT — see the two `addStreamed`
+     * calls, which both pass `arch.mats.trunkMat`. Three keys a program on the
+     * material and the geometry's attribute names, and neither moves here, so
+     * the swap costs one property write per archetype and the next frame draws.
+     * That matters: a level change already rebuilds ~22 programs, and this
+     * project has shipped that hitch once. Adding a sixteenth-program rebuild to
+     * the rung that exists for weak machines would be the wrong place to do it.
+     *
+     * IT DOES NOT MOVE THE BUCKET SPHERES either, and does not need to:
+     * `trunkBound` is already the UNION of the two meshes' bounds because the
+     * pair shares one worker payload, so the sphere enclosing the full tree
+     * encloses the reduced one. See the block on `trunkBound`.
+     */
+    setTrunkDetail(coarse) {
+      const next = !!coarse;
+      if (next === coarseTrunks) return;
+      coarseTrunks = next;
+      for (const t of trunkDetail) t.mesh.geometry = next ? t.coarse : t.full;
+      /**
+       * The bands have to be rewritten, because the near layer's `max` depends
+       * on this — replayed through `setReach` rather than written here, so there
+       * stays exactly one function in this file that knows the four-band chain.
+       * Before the first `setReach` there is nothing to replay and the geometry
+       * swap alone is correct: `applyReach` in main.js runs on the next knob.
+       */
+      if (lastReach) {
+        const { lod, reach, ...opts } = lastReach;
+        forest.setReach(lod, reach, opts);
+      } else {
+        culler.invalidate();
+      }
+    },
+
+    /** Whether the trunks are currently drawn from the reduced sweep. */
+    get coarseTrunks() {
+      return coarseTrunks;
+    },
+
+    /**
+     * Draw the floor texture, or do not. Which five layers those are, and the
+     * test that decided them, is on the `understoreyLayers` table above.
+     *
+     * AN EMPTY BAND RATHER THAN `mesh.visible = false`, and that distinction is
+     * the entire point of doing it here instead of in the probe. The culler
+     * OWNS `visible` — it writes `mesh.visible = write > 0` at the end of every
+     * repack — so a `false` poked in from outside survives until the next time
+     * the player moves 2.5 m and is then silently undone. Worse, it would save
+     * only the draw: the repack would still walk the layer's buckets, still
+     * frustum-test them, still copy their matrices into the instance buffer and
+     * still flag the upload. Closing the band makes the packer write nothing,
+     * which sets `visible` false as a CONSEQUENCE, and both costs go.
+     *
+     * `min === max === Infinity` for empty, not `max = 0`: `inBand` tests
+     * `> min && <= max` and `horizontal` goes NEGATIVE for the bucket the eye is
+     * standing inside, so a zero maximum would put the ground under your feet
+     * back in the band. That is the trap `minDistance`'s own default records and
+     * `setImpostors` avoids the same way.
+     */
+    setClutter(on) {
+      const next = !!on;
+      if (next === clutterOn) return;
+      clutterOn = next;
+      for (const layer of clutterLayers) {
+        if (next) {
+          // Restored to the band the layer was BUILT with, which for every one
+          // of these is the unbounded default — see the `NO maxDistance` note on
+          // the understorey table. Recorded rather than assumed all the same, so
+          // that adding a bounded clutter layer later cannot silently unbound it.
+          layer.packer.setBand(layer.clutterBand);
+        } else {
+          // `band()` reports the fields under their long names and `setBand`
+          // takes the short ones; translated here rather than widening either,
+          // because `band()` is what `check:potato` reads and its key names are
+          // part of that contract.
+          const b = layer.packer.band();
+          layer.clutterBand ??= { min: b.minDistance, max: b.maxDistance, near: b.alwaysNear };
+          layer.packer.setBand({ min: Infinity, max: Infinity });
+        }
+      }
+      culler.invalidate();
+    },
+
+    /** Whether the floor texture layers are being drawn. */
+    get clutter() {
+      return clutterOn;
     },
 
     /**
@@ -2785,4 +3006,5 @@ export function buildForest(scene, seed = 'grove-01') {
       scene.remove(group);
     },
   };
+  return forest;
 }

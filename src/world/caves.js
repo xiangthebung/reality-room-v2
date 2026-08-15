@@ -219,6 +219,19 @@ const MAX_DIVE = 0.5;
  */
 const WALL_BITE = 0.55;
 
+/**
+ * The body's own half-width, in metres, as this file has to assume it.
+ *
+ * `controller.js` owns the real one (`RADIUS`) and nothing here should import
+ * the player to place a hole in a wall — but `buildBranch` has to know roughly
+ * how far short of a drawn surface a walking body is held, or it sites every
+ * junction past the last place anybody can stand. Copied deliberately rather
+ * than shared: it is used to leave ROOM, so it is safe while it is not smaller
+ * than the truth, and a cave that assumed a slimmer player would be a cave with
+ * doorways nobody fits through.
+ */
+const BODY_HALF = 0.34;
+
 /* -------------------------------------------------------------------------- *
  *  WHAT SHAPE A PASSAGE IS, WHICH IS THE WHOLE OF WHY A CAVE IS INTERESTING
  * -------------------------------------------------------------------------- *
@@ -451,6 +464,42 @@ const HALL_MIN = 9;
 const MIN_HEAD = 2.15;
 /** …and the narrowest a squeeze may be across, for the same reason. */
 const MIN_HALF = 0.78;
+/**
+ * Half the width of FLOOR every ring is guaranteed, in metres, measured where
+ * the feet are rather than where the shoulders are.
+ *
+ * MIN_HALF above is "does the body fit". This is "is it a floor or a rut", and
+ * they are not the same question: a keyhole is six metres wide at the chest and
+ * was one and a half at the ankle, so the body fitted perfectly and walking down
+ * it felt like walking in a gutter — step half a metre sideways and the ground
+ * is at your knee. See the block in `resample` that applies it.
+ *
+ * 1.50 m, and it was set by photographing the same ring at three values rather
+ * than by arithmetic, because the complaint was about a feeling and the
+ * arithmetic cannot see one. Shot at `.shots/kinds-<value>/keyhole.png` — and
+ * NO GLOB IN A BLOCK COMMENT, because a star followed by a slash ends it and
+ * the error then points at an innocent word three lines down. grove-01 k=0 ring
+ * 300, r = 3.64:
+ *
+ *   shipping before   floor 1.65 m   a slot with shoulders at chest height; you
+ *                                    walk along the bottom of a trench
+ *   FLOOR_HALF 1.15   floor 2.65 m   wide enough to walk two abreast and still
+ *                                    unmistakably a trench from inside it
+ *   FLOOR_HALF 1.50   floor 3.4 m    a passage with a sunken middle; the round
+ *                                    bore is still overhead, the rut is gone
+ *   FLOOR_HALF 1.90   floor —        `key` solves to 0. No keyhole at all.
+ *
+ * So the useful range is narrow and this sits at the top of it. What it costs is
+ * slot: at 1.50 a keyhole cut at 3.6 m of radius keeps 27% of its pinch and one
+ * cut at 5 m keeps 63%, so the shape survives where the rock is generous and
+ * gives way where it is not. 1.15 is the setting to go back to if the slot is
+ * wanted more than the floor is.
+ *
+ * For scale: a canyon — the shape whose whole character is walking with your
+ * shoulders turned — measures 2.9 m of floor, and it is the only other section
+ * anywhere near this narrow.
+ */
+const FLOOR_HALF = 1.5;
 
 /**
  * Below the mouth, in metres, at which `deep` reaches 1.
@@ -790,6 +839,27 @@ function* buildNodes(c, salt = 0) {
    * the one it replaced. Roughly a third more nodes against roughly a fifth less
    * distance each is a passage of about the same length with half again as many
    * corners in it, which is the trade that was wanted.
+   *
+   * AND IT IS WHERE THE MAIN WALK'S TURNING STOPS BEING TUNED, WHICH IS A
+   * FINDING RATHER THAN A DEFAULT. Asked for more twists, the obvious levers are
+   * here: hold the joint less often, take shorter reaches, add nodes to pay for
+   * both. A/B over twelve caves on four seeds, same seeds both arms —
+   *
+   *              passages   metres   deg/100m   tallest   m over 15 m
+   *   0.62 hold      5.8      905       257      45.9         192
+   *   0.52 hold      5.0      797       289      42.7         144
+   *
+   * — so a ninth more turning costs a ninth of the length, a seventh of the
+   * passages and a QUARTER of the tall chambers. Depth is the mechanism: descent
+   * is `sin(pitch) x step` per node, `deep` is what lets `pickType` reach a hall
+   * at all, and `chamberFit` only grants a big radius where there is mountain
+   * over it — so a walk that turns more arrives shallower and the chambers stop
+   * being available. Fewer passages is the same fault twice over, because a
+   * shorter main line carries fewer junctions.
+   *
+   * Nobody has ever described a cave by how much it turned. The turning went
+   * into the BRANCHES instead, where there is no depth envelope to spend and no
+   * chamber to lose — see the heading block in `buildBranch`.
    */
   const count = 32 + Math.floor(rng() * 15);
 
@@ -969,6 +1039,12 @@ function* buildNodes(c, salt = 0) {
        * against a mean of 855. Every third retry holding breaks the loop without
        * weakening any of the vetoes: it is another candidate, not another
        * acceptance.
+       */
+      /**
+       * 0.62, AND IT HAS BEEN MEASURED RATHER THAN LEFT ALONE. See the A/B in
+       * the block over `count`: this is the one number that decides how much the
+       * main line turns, and every tenth taken off it comes out of the length,
+       * the chamber heights and the junction count together.
        */
       const hold = attempt === 0 ? rng() < 0.62 : attempt % 3 === 0;
       let jn = joint;
@@ -2700,9 +2776,62 @@ function truncate(path, cut) {
  * of independent swept tubes; two of them rejoining is not a bigger version of
  * this problem, it is a different one.
  */
-function* buildBranch(c, main, joints, bi, tag, major = false) {
+function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
   const rng = makeRng(`${getWorldSeed()}:cave-branch:${c.k}:${tag}`);
   const n = main.x.length;
+
+  /**
+   * HOW MUCH WALL THERE IS WHERE A BODY IS, which is the only measure of a ring
+   * that says whether it can carry a junction.
+   *
+   * The same two heights `caveSample` solves the wall push at, and for the same
+   * reason: a section is an ellipse, so the half-width at the axis — the number
+   * every part of this file used to reach for — is the one height that is
+   * guaranteed to be the maximum, and in a keyhole or a canyon the body moves
+   * several metres below it in a slot a fraction as wide.
+   */
+  const walkHalf = (i) => {
+    const sh = { w: main.w[i], t: main.t[i], f: main.f[i], key: main.key[i] };
+    const r = main.r[i];
+    const fl = floorAt(0, sh);
+    return (
+      r *
+      Math.min(halfWidthAt(fl + 1.1 / r, sh), halfWidthAt(fl + 1.8 / r, sh))
+    );
+  };
+
+  /**
+   * MOVE THE JUNCTION TO A RING THAT CAN CARRY ONE.
+   *
+   * `prepare` picks the ring by spacing alone — every so many metres along the
+   * passage — which is the right rule for WHERE a player should meet a choice
+   * and knows nothing about whether there is a wall there to put one in. Where
+   * the main line happens to be in a slot, the opening cannot be reached from
+   * the floor at all, and the branch behind it is a hundred metres of passage
+   * nobody will ever stand in. `cave-branch` measured exactly that: a body
+   * pinned in a 1.0 m slot with the bore 2.4 m away through the rock.
+   *
+   * Forward only, and by up to 34 rings — 24 m, which is under the 34 m the
+   * junction spacing guarantees, so moving one junction can never overtake the
+   * next. Taking the first ring that is good enough rather than the best one in
+   * the window keeps the junctions where `prepare` asked for them; the running
+   * best is only the fallback for a window with nothing good in it.
+   */
+  const MOUTH_MIN = 1.9;
+  let bi = bi0;
+  let bestHalf = -1;
+  for (let i = bi0; i < Math.min(n - 8, bi0 + 34); i++) {
+    const h = walkHalf(i);
+    if (h > bestHalf) {
+      bestHalf = h;
+      bi = i;
+    }
+    if (h >= MOUTH_MIN) break;
+  }
+  // Nowhere near here has a wall a body could walk through. A junction that
+  // cannot be entered is worth less than no junction at all.
+  if (bestHalf < MOUTH_MIN * 0.82) return null;
+
   const r0 = main.r[bi];
   const w0 = main.w[bi];
 
@@ -2741,7 +2870,20 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
    * pokes its own ceiling through the main tube's, and the two surfaces argue
    * about which is in front for the six metres either side of the junction.
    */
-  const rb = Math.min(r0 * 0.85, rngRange(rng, sh0.lo, sh0.hi));
+  /**
+   * …AND NO WIDER THAN THE WALL IT LEAVES THROUGH, MEASURED THE SAME WAY.
+   *
+   * `r0 * 0.85` bounds the branch against the parent's NOMINAL size, which is
+   * the axis half-width again — so a bore that is half the size of an
+   * eleven-metre chamber passes it and still cannot fit in the metre and a half
+   * of slot at the bottom of one. The second term is the one that binds: ring
+   * zero's own half-width, against the wall a body can actually reach.
+   */
+  const rb = Math.min(
+    r0 * 0.85,
+    rngRange(rng, sh0.lo, sh0.hi),
+    (bestHalf * 1.6) / Math.max(sh0.w, 0.4)
+  );
   /**
    * Ring zero sits INSIDE the main passage by MOUTH_INSET, not on its wall.
    *
@@ -2753,16 +2895,99 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
    * whole class of gap.
    */
   const MOUTH_INSET = 0.4;
-  const first = shaped(
-    main.x[bi] + rx * (r0 * w0 - MOUTH_INSET),
-    main.y[bi],
-    main.z[bi] + rz * (r0 * w0 - MOUTH_INSET),
-    rb,
-    sh0
+  /**
+   * THE MOUTH GOES WHERE A BODY CAN WALK, NOT WHERE THE SECTION IS WIDEST — AND
+   * `r0 * w0` IS ALWAYS WHERE IT IS WIDEST.
+   *
+   * `r * w` is the half-width AT THE AXIS, which is the one height in a section
+   * that is guaranteed to be the maximum. Every branch was therefore hung on the
+   * widest point of the main tube's outline, at the main tube's axis height —
+   * and in a keyhole, a canyon or any chamber the axis is well above head
+   * height and the wall out there is above the slot the body actually moves in.
+   * The result is a doorway in the ceiling flare: `cave-branch` measured a body
+   * held on the main axis with 1.2 m of wall at chest height, running at full
+   * speed, 4.7 m short of a mouth in a bore 3.8 m across. `halfWidthAt` exists
+   * precisely because "the wall at the axis" and "the wall where the body is"
+   * are different numbers, and this had the same bug the wall push had.
+   *
+   * The other half of the same fault is the HEIGHT. Ring zero was welded to
+   * `main.y[bi]` — the main's axis — and `f` was then solved to drop the
+   * branch's floor onto the main's. That works while the two passages are a
+   * similar size and silently fails when they are not, because `f` is clamped at
+   * 1.6: a 1.9 m branch off an 11.3 m chamber needs f = 3.2 to reach down, gets
+   * 1.6, and starts 1.7 m up the chamber wall. A 1.7 m ledge in the dark is not
+   * a way on, it is a wall.
+   *
+   * So it is solved the other way round. The branch keeps its OWN section — a
+   * side passage should look like a side passage, not like a slice of its parent
+   * — and its axis is placed at whatever height puts its floor exactly on the
+   * main's floor. The lateral offset is then the main's half-width AT THAT
+   * HEIGHT. Both floors meet by construction at any size ratio, and the opening
+   * is in the part of the wall a body is standing next to.
+   */
+  const mSh = { w: w0, t: main.t[bi], f: main.f[bi], key: main.key[bi] };
+  const mouthFloor = main.y[bi] + r0 * floorAt(0, mSh);
+  const first = shaped(0, 0, 0, rb, sh0);
+  /**
+   * Ring zero's own floor depth, kept rather than solved, and bounded so the
+   * arithmetic below cannot put the axis absurdly high on a deep section.
+   */
+  first.f = clamp(first.f, 0.2, 1.1);
+  first.y = mouthFloor + rb * first.f;
+  /** Where that height is on the main's outline, in its own radius units. */
+  const mouthN = clamp(
+    (first.y - main.y[bi]) / r0,
+    -mSh.f + 1e-3,
+    mSh.t - 1e-3
   );
-  // Solved, not drawn: the branch's floor IS the main's floor at the join.
-  first.f = clamp((r0 * main.f[bi]) / rb, 0.1, 1.6);
-  first.t = clamp((r0 * main.t[bi]) / rb, 0.35, 1.9);
+  /**
+   * ON THE WALL THE BODY IS HELD AT, WHICH IS NOT THE WALL THAT IS DRAWN.
+   *
+   * Three separate allowances stand between the outline `halfWidthAt` solves
+   * and the furthest a walking body ever gets from the axis, and every one of
+   * them is deliberate: `caveSample` backs the wall off by half the rock
+   * displacement so the head does not go into the bulges (WALL_BITE), and
+   * `controller.js` backs it off again by the body's own radius and a little
+   * margin. On a ten-metre chamber with `rough` 0.36 that is over two and a
+   * half metres, and a mouth placed on the drawn outline is two and a half
+   * metres past anywhere the player can stand.
+   *
+   * THE TEST IS NOT "CAN THE BODY TOUCH THE MOUTH", IT IS "DOES THE BRANCH WIN
+   * THE FIT THERE" — see the selection block in `caveSample`. Both passages
+   * claim the junction and the one that governs the body is the one whose
+   * section the body is deeper inside, in that section's own units. That
+   * measure includes a term for how far the body is ALONG the section's axis,
+   * and a branch leaves through the wall — so its axis points straight back at
+   * the approaching player, and every metre the mouth sits beyond where the
+   * body can stand is a metre of that term counting against it. On a seven
+   * metre room the parent won the junction by 0.83 to 0.79 with the body 1.9 m
+   * from a bore 6.4 m across: inside the branch's section by any ordinary
+   * reading of the word, and held out of it.
+   *
+   * So ring zero's axis goes ON the wall the body is held at, a third of a
+   * metre proud of it, and the whole problem disappears rather than being
+   * balanced: at the moment the parent's wall stops the body it is standing
+   * essentially on the branch's own axis, so the branch wins on every term at
+   * once. The cost is that the snout stands that much further into the parent
+   * than the drawn wall does. It is not a cost — the first rings of a branch
+   * are wound both ways and solid from every angle (see `_link`), so what it
+   * draws is a rim of rock around the opening, which is what an opening in rock
+   * has.
+   *
+   * Still never further out than the drawn wall less the inset, so the snout
+   * cannot come adrift of the hole it plugs.
+   */
+  const bodyWall =
+    bestHalf - r0 * main.rough[bi] * WALL_BITE - (BODY_HALF + 0.12);
+  const lat = Math.max(
+    0.5,
+    Math.min(
+      Math.min(r0 * halfWidthAt(mouthN, mSh), bestHalf) - MOUTH_INSET,
+      bodyWall + 0.35
+    )
+  );
+  first.x = main.x[bi] + rx * lat;
+  first.z = main.z[bi] + rz * lat;
 
   const nodes = [first];
   let heading = Math.atan2(rz, rx);
@@ -2850,12 +3075,32 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
             bestH = j;
           }
         }
-        // The first attempt holds the nearest joint, which is what keeps a
-        // branch running straight the way the main line does. A retry is
-        // allowed any joint that is not a reversal, because the whole point of
-        // retrying is that the straight-on answer has just been refused.
-        h = (attempt === 0 || !near.length ? bestH : near[Math.floor(rng() * near.length)]) +
-          rngRange(rng, -0.2, 0.2);
+        /**
+         * A BRANCH TURNS MORE THAN THE MAIN LINE, AND THIS IS WHERE THE ROOM'S
+         * "MORE TWISTS AND TURNS" WENT.
+         *
+         * The first attempt used to hold the nearest joint unconditionally,
+         * which is what kept a lead running straight the way the main line does.
+         * Straight is the right default for the main line and the wrong one
+         * here, and the A/B over `count` says why: on the trunk, turning costs
+         * length, and length is depth, and depth is the chambers — a ninth more
+         * turning cost a quarter of the tall metres. A branch has NONE of that
+         * to lose. It has no depth envelope, no `bottom`, no chamber to unlock
+         * and only a centre-line roof clamp, so a corner in a lead costs a
+         * refusal and nothing else. It is also the part of the cave the player
+         * is choosing to walk, so it is where a corner is worth most: a lead
+         * that bends is a lead you cannot see the end of from its mouth.
+         *
+         * A little under half the nodes now take a different joint. The pool it
+         * takes one from is the same `near` set a retry uses — anything within
+         * 1.9 rad, which excludes the reversal into the passage just cut and
+         * nothing else.
+         */
+        const turn = i > 1 && near.length > 1 && rng() < 0.45;
+        h =
+          (attempt === 0 && !turn) || !near.length
+            ? bestH + rngRange(rng, -0.2, 0.2)
+            : near[Math.floor(rng() * near.length)] + rngRange(rng, -0.2, 0.2);
       }
       /**
        * Sections from node one, for a major branch only, and never a `hall`.
@@ -2950,6 +3195,31 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
         const min = main.r[j] * main.w[j] + r * sh.w + 3;
         if (dx * dx + dy * dy + dz * dz < min * min) clash = true;
       }
+      /**
+       * …AND EVERY OTHER PASSAGE IN THE SYSTEM, WITH NO EXEMPTION AT ALL.
+       *
+       * The window above exists because a branch is SUPPOSED to touch the
+       * passage it leaves — that is the junction. Nothing else in the cave has
+       * that licence, and a lead off a lead has a whole main line to miss that
+       * the test above knows nothing about. Two passages sharing a volume is,
+       * from inside, a hole in the wall with the back of another wall behind
+       * it; the reason it has never been seen is that until now there was only
+       * ever one thing to hit.
+       */
+      for (let a = 0; a < avoid.length && !clash; a++) {
+        const ap = avoid[a];
+        const an = ap.x.length;
+        for (let j = 0; j < an; j++) {
+          const dx = ap.x[j] - nx;
+          const dy = ap.y[j] - ny;
+          const dz = ap.z[j] - nz;
+          const min = ap.r[j] * ap.w[j] + r * sh.w + 3;
+          if (dx * dx + dy * dy + dz * dz < min * min) {
+            clash = true;
+            break;
+          }
+        }
+      }
       // …and against the branch's own line, on the beads. See the block above
       // `beads` and the one it points at in `buildNodes`.
       for (let s = 1; s <= 4 && !clash; s++) {
@@ -3021,6 +3291,13 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
   for (let i = 0; i < n; i++) {
     mainNodes.push({ x: main.x[i], y: main.y[i], z: main.z[i], r: main.r[i], w: main.w[i] });
   }
+  // …and the passages this branch is not allowed to touch at all. A terminal
+  // chamber is the biggest thing a lead builds and the likeliest to reach one.
+  for (const ap of avoid) {
+    for (let i = 0; i < ap.x.length; i++) {
+      mainNodes.push({ x: ap.x[i], y: ap.y[i], z: ap.z[i], r: ap.r[i], w: ap.w[i] });
+    }
+  }
   // No depth floor: a branch has never had one, and the dive is bounded anyway
   // by the same MAX_DIVE gradient over the step that the main walk uses.
   yield 'branch';
@@ -3039,6 +3316,32 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
   yield 'branch-resample';
   // From ring 1: ring 0 is welded to the main tube's wall and must not move.
   yield* burySkylights(path, 1);
+  /**
+   * …AND IF THE BURIAL TOOK IT, THERE IS NO BRANCH — NOT A TWO-METRE ONE.
+   *
+   * The `nodes.length < 3` test above runs before the hillside has had its say,
+   * and the hillside is entitled to the whole thing: `burySkylights` narrows a
+   * branch wherever the rock over it runs thin and `truncate` closes it at the
+   * first ring a body could not pass, which on a lead heading for the surface
+   * can be ring one. What survives is a two-metre alcove with a junction cut in
+   * the wall in front of it — which reads as a way on from ten metres back and
+   * as a mistake from two, and is the worst possible use of an opening.
+   *
+   * Measured: one branch of five on grove-01 k=0 came out 2 m long. It is
+   * rejected here rather than clamped longer, because the burial is right —
+   * there genuinely is no mountain there.
+   */
+  {
+    const bn = path.x.length;
+    const stop = Math.min(path.endRing ?? bn - 1, bn - 1);
+    let len = 0;
+    for (let i = 1; i <= stop; i++) {
+      len += Math.hypot(path.x[i] - path.x[i - 1], path.y[i] - path.y[i - 1], path.z[i] - path.z[i - 1]);
+    }
+    // Twelve metres is `cave-branch`'s own bar for having entered one: shorter
+    // than that and there is nothing on the other side of the doorway.
+    if (len < 12) return null;
+  }
   path.base = bi;
   path.side = side;
   /**
@@ -3058,9 +3361,51 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
    * because it is a straight view out of the hillside, and it is the last thing
    * you would ever find by walking around in the dark.
    */
-  const halfV = rb * Math.min(path.t[0], path.f[0]) * 0.5;
-  const halfH = rb * path.w[0] * 0.5;
-  path.holePhi = side > 0 ? 0 : Math.PI;
+  /**
+   * 0.82 OF THE BORE, NOT HALF OF IT.
+   *
+   * "Strictly inside the ring-zero ellipse" is the requirement and one half was
+   * never what it meant — it was the first number tried that stopped the rim of
+   * black nothing, and it stayed. What it produces is an opening a quarter of
+   * the AREA of the passage behind it, so a five-metre side passage is met
+   * through a window two and a half metres across: from the main line that does
+   * not read as a way on, it reads as a dark patch of wall, which is the other
+   * half of "the subsystems I cannot see".
+   *
+   * The margin the inset actually needs is the 0.4 m of MOUTH_INSET plus what
+   * the rock displacement can still take after `_emitRing` has flattened it
+   * around the opening — a fifth of the bore covers both on the smallest branch
+   * this can produce, and the seam is checked rather than argued: `cave-seal`
+   * is the gate that fails the moment an opening shows daylight.
+   */
+  const BORE = 0.82;
+  /**
+   * SIZED WHERE THE BRANCH CROSSES THE WALL, NOT AT ITS RING ZERO.
+   *
+   * The two used to be the same place to within MOUTH_INSET, so reading ring
+   * zero's section was reading the section in the plane of the hole. They are
+   * not the same place any more: ring zero's axis is now set at the wall a
+   * WALKING BODY is held at, which on a rough chamber is a couple of metres
+   * inside the wall that is drawn — and the hole is cut in the drawn one. Over
+   * those two metres the branch has moved: it is climbing, turning and
+   * changing section, and a window sized from where it starts is a window the
+   * tube behind it no longer fills.
+   *
+   * The leak is tiny and it is the whole failure. Two rays in five hundred and
+   * seventy-six at one junction and three at another, in `cave-junction` — but
+   * the tube is single-sided, so what those rays find is not a dark patch, it
+   * is a few pixels of hillside in the middle of a mountain.
+   *
+   * So the section is read at the ring that actually spans the parent's wall,
+   * and the window is centred on THAT ring's axis height too. Bounded to the
+   * collar rings, which are the ones `_link` winds both ways and are therefore
+   * the only ones solid enough to plug a hole from either side.
+   */
+  const wallRun = Math.max(0, bestHalf - lat);
+  const hr = Math.min(3, path.x.length - 1, Math.round(wallRun / RING_STEP));
+  const rw = path.r[hr];
+  const halfV = rw * Math.min(path.t[hr], path.f[hr]) * BORE;
+  const halfH = rw * path.w[hr] * BORE;
   /**
    * THE VERTICAL EXTENT IS AN ARCSINE, NOT AN ARCTANGENT, AND THAT WAS A LEAK.
    *
@@ -3076,9 +3421,72 @@ function* buildBranch(c, main, joints, bi, tag, major = false) {
    * at the junction you could see daylight and the tops of trees through the
    * corner of the opening, because the tube is single-sided and a hole in it
    * looks straight out of the mountain.
+   *
+   * …AND IT IS NO LONGER CENTRED ON THE AXIS, BECAUSE THE MOUTH IS NOT.
+   *
+   * The arcsine above is `phiAtHeight` with the flat floor and the keyhole slot
+   * left out, written when a branch always left at phi 0. Now that the mouth is
+   * placed at the height a body walks, the hole has to be cut where the mouth
+   * IS: solved on the outline at the branch's own axis height, and again at the
+   * top and bottom of its bore, so the window is the bore's own footprint on
+   * the wall rather than a band around the equator.
+   *
+   * THE SPAN IS THE SMALLER OF THE TWO HALVES and that is what keeps the floor
+   * intact. The hole is symmetric in phi, the outline is not — near the floor a
+   * centimetre of height is a great many degrees of phi — so taking the upward
+   * half bounds the downward one to the same vertical reach. Since `halfV` is
+   * 0.82 of the bore's own half-depth, the bottom lip of every window stays
+   * clear of the branch's floor, and a hole that reached past it would be a hole
+   * in the floor of the main passage with the dark under the world behind it.
    */
-  path.holeSpan = Math.min(0.85, Math.asin(clamp(halfV / Math.max(r0 * main.t[bi], 0.5), 0, 0.92)));
-  path.holeRings = Math.max(1, Math.floor(halfH / RING_STEP));
+  const mouthPhi = phiAtHeight((path.y[hr] - main.y[bi]) / r0, mSh);
+  const upPhi = phiAtHeight((path.y[hr] + halfV - main.y[bi]) / r0, mSh);
+  const downPhi = phiAtHeight((path.y[hr] - halfV - main.y[bi]) / r0, mSh);
+  path.holePhi = side > 0 ? mouthPhi : Math.PI - mouthPhi;
+  path.holeSpan = clamp(Math.min(upPhi - mouthPhi, mouthPhi - downPhi), 0.1, 0.85);
+  /**
+   * FRACTIONAL, BECAUSE ROUNDING TO WHOLE RINGS IS A METRE AND A HALF OF SLOP.
+   *
+   * Nothing needs this to be an integer: both readers — the quad skip in `_link`
+   * and the displacement flatten in `_emitRing` — divide by it and compare
+   * against 1, so a float is the same arithmetic with the quantisation removed.
+   * `Math.floor` was throwing away up to a whole ring step, and since a ring
+   * step is 0.72 m and a branch's half-width is 1.4-2.6 m it was almost always
+   * flooring to exactly 1 — which is how every junction in the world came out
+   * the same 1.44 m across whatever was behind it, measured over five branches
+   * on grove-01 k=0 whose bores ran from 2.9 m to 5.2 m.
+   */
+  path.holeRings = Math.max(0.8, halfH / RING_STEP);
+  /**
+   * …AND THE SNOUT IS FLARED AFTERWARDS, WHICH IS WHAT ACTUALLY SEALS IT.
+   *
+   * The window is cut as an ellipse in (ring, phi) and the bore that has to
+   * cover it is a circle in SPACE, on a wall that curves away in both. Those
+   * two are the same shape only near the middle of the window; out at the
+   * corners the phi-to-height mapping is nonlinear enough that the window
+   * reaches a little past the tube behind it, and what shows through the sliver
+   * is not a dark patch — the tube is single-sided, so it is a few pixels of
+   * hillside seen from inside a mountain.
+   *
+   * It is small and it is old: `cave-junction`'s ray gate finds it at one
+   * junction in eighteen on the code this replaced, at a hole HALF this size,
+   * which is what rules out the size as the cause. Shrinking the window is
+   * therefore the wrong lever twice over — it does not address the shape and it
+   * spends the doorway, which is the thing the room asked for.
+   *
+   * So the snout is made bigger than the window instead. `w` and `t` only, and
+   * never `f`: the floor is `y - r * f` and the branch's floor is welded to the
+   * parent's, so scaling anything that moves it would put a step back in the
+   * threshold. Tapered out over the collar rings — the same three `_link` winds
+   * both ways — so it is a rim you can see the thickness of rather than a lip
+   * that appears from nowhere.
+   */
+  const FLARE = 0.16;
+  for (let i = 0; i < Math.min(3, path.x.length); i++) {
+    const k = 1 + FLARE * (1 - i / 3);
+    path.w[i] *= k;
+    path.t[i] *= k;
+  }
   return path;
 }
 
@@ -3220,8 +3628,81 @@ function resample(nodes) {
     if (i >= capFrom || path.r[i] < CAP_MIN_R) continue;
     const head = path.r[i] * (path.f[i] + path.t[i]);
     if (head < MIN_HEAD) path.t[i] += (MIN_HEAD - head) / path.r[i];
-    // The slot, if there is one, is the narrowest part and is what has to fit.
-    const halfLow = path.r[i] * halfWidthAt(-path.f[i] * 0.35, ringShape(path, i, _shapeA));
+    /**
+     * …AND THEN THE FLOOR IS MADE WIDE ENOUGH TO WALK ALONG, WHICH IS A
+     * DIFFERENT QUESTION FROM WHETHER THE PASSAGE IS.
+     *
+     * This measured `halfWidthAt(-f * 0.35)` — a third of the way down from the
+     * axis to the floor, i.e. somewhere around the hip — and called it "the
+     * narrowest part". In every section without a slot that is close enough to
+     * true. In a KEYHOLE it is out by a factor of four, and the keyhole is the
+     * one shape the guard was written for.
+     *
+     * Measured on grove-01 by walking sideways from the centre line asking
+     * `caveSample`, which is the answer the feet get, per section kind:
+     *
+     *                floor width (m) before the ground climbs
+     *                ankle   shin   knee   | passage width at the chest
+     *     tube          7.1    7.8    8.4  |  7.5
+     *     canyon        2.9    3.2    3.7  |  2.6
+     *     bedding       9.4   11.2   14.5  | 12.9
+     *     room         11.0   14.6   15.9  | 21.6
+     *     keyhole       1.65   1.9    2.3  |  6.1
+     *
+     * Every other shape has a floor about as wide as the space over it. A
+     * keyhole is four times wider at your chest than at your feet, so what you
+     * are walking in is a gutter with a hall over it: step half a metre sideways
+     * and the ground comes up to your knee, and the camera rides up and down
+     * with it. The player's word for it was a groove, and the report was about
+     * how it FEELS to walk, which is exactly what a guard sampling at hip height
+     * cannot see. 15-16% of the rings in a cave are keyholes.
+     *
+     * So the sample moves to the floor, and there are now two guarantees rather
+     * than one, because they want to be given back in different currencies:
+     *
+     *   MIN_HALF, by widening `w`. "Does the body fit through at all." A section
+     *   whose FLOOR is narrower than this is one the player cannot walk down
+     *   whatever the bore is doing, and the old sample height could not see that
+     *   either. Unchanged in value, and it barely fires now that it is honest.
+     *
+     *   FLOOR_HALF, by easing `key`. "Is this a floor or a rut." Widening `w` is
+     *   the wrong currency for a slot: the squeeze is a FRACTION of the bore, so
+     *   scaling `w` to fix the floor scales the ceiling by the same factor, and a
+     *   keyhole wide enough to walk in would be sixteen metres across at the
+     *   waist. `key` is the dedicated dial for the slot alone, `section`,
+     *   `halfWidthAt` and `floorAt` all read it, so the mesh and the collider
+     *   cannot end up disagreeing about the fix.
+     *
+     * IT IS SELF-LIMITING, WHICH IS THE PROPERTY THAT MAKES IT SAFE. The slot is
+     * only eased as far as the metres demand, so a keyhole cut at 4 m of radius
+     * keeps about four fifths of its slot and one cut at 2.9 m keeps about half.
+     * The shape survives where there is room for it and gives way where the
+     * choice is between a slot and a walkable cave. Nothing that has no slot is
+     * touched at all: `key` is zero everywhere but a keyhole.
+     */
+    const sh = ringShape(path, i, _shapeA);
+    const floorY = -path.f[i];
+    const squeeze = slotSqueeze(floorY, 1);
+    if (sh.key > 0 && squeeze < 1) {
+      // The bore's own half-width down at the floor, before the slot pinches it.
+      _shapeB.w = sh.w;
+      _shapeB.t = sh.t;
+      _shapeB.f = sh.f;
+      _shapeB.key = 0;
+      const bore = path.r[i] * halfWidthAt(floorY, _shapeB);
+      if (bore > FLOOR_HALF) {
+        // floorHalf = bore * (1 - key * (1 - squeeze)); solve for the key that
+        // lands exactly on FLOOR_HALF, and never raise the one the table asked
+        // for — this may only open a slot, never close one.
+        const room = (1 - FLOOR_HALF / bore) / (1 - squeeze);
+        if (room < sh.key) sh.key = path.key[i] = room;
+      } else {
+        // The bore itself is too narrow for the slot to be the problem. Take the
+        // slot out entirely and let MIN_HALF below widen the section.
+        sh.key = path.key[i] = 0;
+      }
+    }
+    const halfLow = path.r[i] * halfWidthAt(floorY, sh);
     if (halfLow < MIN_HALF) path.w[i] *= MIN_HALF / Math.max(halfLow, 1e-3);
   }
   return path;
@@ -3451,6 +3932,31 @@ function halfWidthAt(ny, sh) {
   const inner = 1 - (y / sh.t) * (y / sh.t);
   const x = sh.w * Math.sqrt(inner > 0 ? inner : 0);
   return x * slotSqueeze(y, sh.key);
+}
+
+/**
+ * …and the inverse: which angle on the outline is at a given height.
+ *
+ * `buildBranch` needs it to say where in the main tube's lattice a junction
+ * belongs. The hole is cut in (ring, phi), the mouth is placed at a HEIGHT, and
+ * the two are only the same question at the axis — which is exactly the
+ * assumption that put every branch in the ceiling flare.
+ *
+ * Bisected rather than solved because `section` clamps the ellipse flat at `-f`
+ * and squeezes a keyhole's slot, so it has no inverse in closed form. It is
+ * monotonic over the half turn from the floor to the roof, which is all a
+ * bisection needs, and it runs a handful of times per cave at build time.
+ */
+function phiAtHeight(ny, sh) {
+  const target = clamp(ny, -sh.f + 1e-3, sh.t - 1e-3);
+  let lo = -Math.PI * 0.5;
+  let hi = Math.PI * 0.5;
+  for (let k = 0; k < 24; k++) {
+    const mid = (lo + hi) * 0.5;
+    if (section(mid, sh, _sectTmp).y < target) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) * 0.5;
 }
 
 /* -------------------------------------------------------------------------- *
@@ -7191,8 +7697,25 @@ class Cave {
      * guarantees the minute. What makes a maze is not the count, it is two holes
      * within sight of each other.
      */
+    /**
+     * 50 m AND TEN, DOWN FROM 62 AND EIGHT.
+     *
+     * The maze objection below is still the thing that bounds this and it is
+     * about SIGHT LINES rather than about a count — "what makes a maze is not
+     * the count, it is two holes within sight of each other" — and BRANCH_GAP
+     * is what enforces that, untouched at 34 m. What 62 was doing on top of it
+     * was leaving a nine-hundred-metre system with fourteen wanted and eight
+     * granted, so the cap bound and the density of choice fell with length
+     * again, which is the exact fault the per-metre rule was written to fix.
+     *
+     * The room asked for more subsystems and this is the cheapest half of the
+     * answer: it costs nothing but the branches themselves, where lengthening
+     * the main line to carry them would have cost the chambers (see `count`).
+     * The other half is that leads now have leads of their own, which is worth
+     * more per junction than another tooth on the same comb.
+     */
     const metres = along[n - 1];
-    const want = Math.min(8, Math.floor(metres / 62) + (brRng() < 0.5 ? 1 : 0));
+    const want = Math.min(10, Math.floor(metres / 50) + (brRng() < 0.5 ? 1 : 0));
     /**
      * …AND SOME OF THEM ARE REAL FORKS.
      *
@@ -7243,7 +7766,15 @@ class Cave {
       const major = b === majorAt || b === majorAt2;
       const br = yield* buildBranch(this.c, this.path, walk.joints, cursor, `${b}`, major);
       if (br) {
-        br.baseAlong = along[cursor];
+        /**
+         * `br.base`, NOT `cursor`. `buildBranch` is allowed to walk the junction
+         * forward to a ring with a wall a body can get through, and everything
+         * downstream that measures from the junction — the depth reported to the
+         * audio, the blind distance, the spacing of the next one — has to be
+         * measured from where it actually went.
+         */
+        cursor = br.base;
+        br.baseAlong = along[br.base];
         // Measured from the MAIN mouth, so a lead off the deepest chamber in the
         // system reports as deep as the chamber it leaves. See `markDepth`.
         markDepth(br, this.path.y[0]);
@@ -7264,11 +7795,81 @@ class Cave {
             Math.hypot(br.x[i] - br.x[i - 1], br.y[i] - br.y[i - 1], br.z[i] - br.z[i - 1]);
         }
         br.along = bAlong;
+        br.parent = 0;
         this.paths.push(br);
         for (const g of placeFungi(this.c, br, `br${b}`, 3)) this.fungi.push(g);
       }
       cursor += Math.max(BRANCH_GAP, Math.floor(spread * 0.7 + brRng() * spread * 0.6));
     }
+
+    /**
+     * …AND THE LEADS HAVE LEADS, WHICH IS WHAT MAKES IT A SYSTEM.
+     *
+     * Every branch until now hung off the main line and nothing hung off a
+     * branch, so the map was a comb: one spine, teeth, nothing else. That is a
+     * corridor with alcoves however many teeth it has, and it has a tell the
+     * player feels without being able to name — taking a side passage is always
+     * a decision you can undo by turning round, because a lead can only ever
+     * return you to the one line you were on. A lead that forks is the first
+     * point in the cave where you can be genuinely unsure of the way back.
+     *
+     * ONLY OFF PASSAGES LONG ENOUGH TO HAVE SOMEWHERE TO PUT ONE, and only one
+     * level deep. Both are the maze objection again: a junction every sixty
+     * metres is a passage you can hold in your head, and a third level would be
+     * sixteen ways through a mountain with no map. Depth two is where a system
+     * stops being a comb; depth three is where it stops being legible.
+     *
+     * THE AVOID LIST IS NOT OPTIONAL. A sub-branch's own line and its parent are
+     * both tested inside `buildBranch`; the MAIN passage is a third body it has
+     * never had to know about, and it is by far the largest thing in the
+     * mountain to hit. See the block on the clash test.
+     */
+    const SUB_MIN = 26;
+    const subs = [];
+    const topLevel = this.paths.length;
+    for (let p = 1; p < topLevel; p++) {
+      const parent = this.paths[p];
+      const pEnd = Math.min(parent.endRing ?? parent.x.length - 1, parent.x.length - 1);
+      const pLen = parent.along[pEnd];
+      // A lead needs to be a passage before it can carry one: 78 m is the
+      // junction spacing plus both of the margins the main line keeps.
+      if (pLen < 78) continue;
+      const nSub = Math.min(2, Math.floor(pLen / 78));
+      let sc = SUB_MIN + Math.floor(brRng() * 10);
+      for (let s = 0; s < nSub && sc < pEnd - BRANCH_TAIL; s++) {
+        const sub = yield* buildBranch(
+          this.c,
+          parent,
+          walk.joints,
+          sc,
+          `${p}.${s}`,
+          false,
+          [this.path]
+        );
+        if (sub) {
+          sc = sub.base;
+          // Measured through the parent, so a lead off a lead reports its true
+          // distance from daylight rather than its distance from its own mouth.
+          sub.baseAlong = parent.baseAlong + parent.along[sub.base];
+          markDepth(sub, this.path.y[0]);
+          sub.blind = sub.baseAlong + 10;
+          const sn = sub.x.length;
+          const sAlong = new Float64Array(sn);
+          for (let i = 1; i < sn; i++) {
+            sAlong[i] =
+              sAlong[i - 1] +
+              Math.hypot(sub.x[i] - sub.x[i - 1], sub.y[i] - sub.y[i - 1], sub.z[i] - sub.z[i - 1]);
+          }
+          sub.along = sAlong;
+          sub.parent = p;
+          subs.push(sub);
+          for (const g of placeFungi(this.c, sub, `sub${p}.${s}`, 3)) this.fungi.push(g);
+        }
+        sc += BRANCH_GAP;
+      }
+    }
+    // Appended after the loop: `this.paths` is what the loop is walking.
+    for (const sub of subs) this.paths.push(sub);
 
     /**
      * A BOX ROUND EACH PASSAGE, so `caveSample` can say "not this one" without
@@ -7338,13 +7939,51 @@ class Cave {
     this.blocks = [];
     this.spires = [];
     this.crystals = [];
+    /**
+     * NOTHING STANDS IN A DOORWAY.
+     *
+     * `placeBlocks` and `placeSpires` walk one passage at a time and know
+     * nothing about the others, so a breakdown slab or a column is as likely to
+     * land on a junction as anywhere else — and a junction is the one square
+     * metre of a cave where that is fatal rather than decorative. Both are
+     * published to `caveSample` as POSTS, things you walk round, and a post in
+     * a doorway is a doorway you cannot walk through: `cave-branch` measured a
+     * body at the mouth of an eighty-metre branch, pressed against a 1.8 m
+     * boulder, for the whole ten seconds.
+     *
+     * It reads as a sealed junction, and it is the third distinct mechanism in
+     * this file to do so — which is the argument for the check rather than for
+     * a nudge to the placers' spacing. A cleared gate is a fact about the
+     * junction, so it is enforced where the junctions are known.
+     *
+     * The first five rings, which is the mouth and a stride of the passage
+     * behind it: past that a boulder in a side passage is scenery, and scenery
+     * is what these are for.
+     */
+    const gates = [];
+    for (let p = 1; p < this.paths.length; p++) {
+      const br = this.paths[p];
+      for (let i = 0; i < Math.min(5, br.x.length); i++) {
+        gates.push({ x: br.x[i], z: br.z[i], r: br.r[i] * br.w[i] + 1.4 });
+      }
+    }
+    const clearOfGates = (o) => {
+      const own = o.wall || o.rad || o.r || 0;
+      for (let g = 0; g < gates.length; g++) {
+        const dx = o.x - gates[g].x;
+        const dz = o.z - gates[g].z;
+        const rr = gates[g].r + own;
+        if (dx * dx + dz * dz < rr * rr) return false;
+      }
+      return true;
+    };
     for (let p = 0; p < this.paths.length; p++) {
       const path = this.paths[p];
       const tag = p === 0 ? 'main' : `br${p}`;
       for (const run of placeWater(this.c, path, tag)) this.water.push({ path: p, ...run });
-      const blocks = placeBlocks(this.c, path, tag);
+      const blocks = placeBlocks(this.c, path, tag).filter(clearOfGates);
       yield 'blocks';
-      const spires = placeSpires(this.c, path, tag);
+      const spires = placeSpires(this.c, path, tag).filter(clearOfGates);
       yield 'spires';
       const crystals = placeCrystals(this.c, path, tag, p === 0 ? 16 : 2);
       yield 'crystals';
@@ -7531,10 +8170,26 @@ class Cave {
      * Flattening the wall near the hole is also just correct: the rim of a real
      * opening is where the rock has been worked hardest.
      */
-    this._holes = [];
+    /**
+     * BY PARENT, NOT ONE FLAT LIST, and that is what a second level of branch
+     * costs the emitter.
+     *
+     * Both readers used to test `path === this.path` and skip everything else,
+     * on the perfectly good assumption that a hole is only ever cut in the main
+     * tube. A lead off a lead puts one in a branch, and the version of this that
+     * kept a flat list would have cut every junction in the cave into every
+     * passage in it — the same ring index and the same phi, in a tube that has
+     * nothing there.
+     */
+    this._holesBy = this.paths.map(() => []);
     for (let p = 1; p < this.paths.length; p++) {
       const br = this.paths[p];
-      this._holes.push({ ring: br.base, rings: br.holeRings, phi: br.holePhi, span: br.holeSpan });
+      this._holesBy[br.parent ?? 0].push({
+        ring: br.base,
+        rings: br.holeRings,
+        phi: br.holePhi,
+        span: br.holeSpan,
+      });
     }
 
     /**
@@ -7546,8 +8201,12 @@ class Cave {
      * per ring.
      */
     let rows = 0;
-    for (const p of this.paths) {
+    for (let i = 0; i < this.paths.length; i++) {
+      const p = this.paths[i];
       p.vstart = rows;
+      // Its own index, so `_emitRing` can ask `_holesBy` for the openings cut in
+      // THIS passage without being told which one it is holding.
+      p.pi = i;
       rows += p.x.length;
     }
     this._rows = rows;
@@ -7893,7 +8552,8 @@ class Cave {
      * The main tube flattens where a branch leaves it; a branch flattens at its
      * own mouth. Both halves of the same seam.
      */
-    const holes = !isHood && path === this.path && this._holes.length ? this._holes : null;
+    const own = isHood || !this._holesBy ? null : this._holesBy[path.pi ?? 0];
+    const holes = own && own.length ? own : null;
     /**
      * …and the branch's own first rings, for the same reason from the other
      * side: ring zero is the disc that plugs the hole, and displacing it is
@@ -8595,22 +9255,78 @@ class Cave {
    * their own rays cannot change that. Topology beats geometry here.
    */
   _face(p, q, r, s, inside, day, calcite, floorish, above, damp, wet = 0, span = 6, ao = 1) {
-    let ax = q[0] - p[0];
-    let ay = q[1] - p[1];
-    let az = q[2] - p[2];
-    const bx = r[0] - p[0];
-    const by = r[1] - p[1];
-    const bz = r[2] - p[2];
-    let nx = ay * bz - az * by;
-    let ny = az * bx - ax * bz;
-    let nz = ax * by - ay * bx;
-    const nl = Math.hypot(nx, ny, nz) || 1;
-    nx /= nl;
-    ny /= nl;
-    nz /= nl;
+    /**
+     * THE NORMAL IS TAKEN FROM WHICHEVER CORNER OF THE QUAD HAS AN AREA, AND
+     * NEVER LEFT AT ZERO. This is the black-rectangle bug.
+     *
+     * It used to be one cross product over (p, q, r) with `Math.hypot(...) || 1`
+     * on the divide. That guard stops a division by zero and does nothing about
+     * the thing that matters: when those three points are collinear the cross
+     * product is (0, 0, 0), and dividing zero by one leaves a ZERO NORMAL on all
+     * four vertices of the quad.
+     *
+     * A degenerate triangle rasterises nothing, so the obvious reading — "a
+     * face with no area draws no pixels, who cares what its normal is" — is
+     * wrong for a QUAD. `_face` splits (p,q,r,s) into (p,q,r) and (p,r,s); only
+     * the FIRST of those has to be degenerate for the normal to come out zero,
+     * and the second one is then a perfectly ordinary triangle with three zero
+     * normals on it. The shader normalizes, `normalize(vec3(0.0))` is 0/0, and
+     * NaN interpolates to NaN across the whole triangle — so it comes out PURE
+     * BLACK with a hard edge on every side, sitting on an otherwise correctly
+     * shaded formation. Measured on grove-01: 52-144 zero-normal vertices in
+     * every cave in the world, in 5-21 runs, and one of them is a three-metre
+     * blade that reads as a black bar pasted over the rock.
+     *
+     * The degenerate quads are real geometry and not a mistake upstream: a
+     * drapery panel or a crystal face whose two spline samples land on top of
+     * each other has a genuine, visible shape, it just has one corner with no
+     * area in it. So this fixes the normal rather than dropping the face.
+     *
+     * Three fallbacks, in order of how much they know:
+     *   1  the other split, (p, r, s) — the triangle that is actually drawn;
+     *   2  the outward direction from `inside`, which is the reference the flip
+     *      test below already trusts for exactly this solid;
+     *   3  straight up, so that a caller with neither an area nor an `inside`
+     *      still cannot emit a NaN.
+     */
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    let nl = 0;
+    const cross = (u, v, w) => {
+      const ax = v[0] - u[0];
+      const ay = v[1] - u[1];
+      const az = v[2] - u[2];
+      const bx = w[0] - u[0];
+      const by = w[1] - u[1];
+      const bz = w[2] - u[2];
+      nx = ay * bz - az * by;
+      ny = az * bx - ax * bz;
+      nz = ax * by - ay * bx;
+      nl = Math.hypot(nx, ny, nz);
+      return nl > 1e-12;
+    };
+    const hasArea = cross(p, q, r) || (s && cross(p, r, s));
     const cx = (p[0] + q[0] + r[0] + (s ? s[0] : r[0])) / (s ? 4 : 3);
     const cy = (p[1] + q[1] + r[1] + (s ? s[1] : r[1])) / (s ? 4 : 3);
     const cz = (p[2] + q[2] + r[2] + (s ? s[2] : r[2])) / (s ? 4 : 3);
+    if (!hasArea) {
+      // Fallbacks 2 and 3. `flip` below is a no-op on the second — it points
+      // away from `inside` by construction — and harmless on the third.
+      nx = inside ? cx - inside[0] : 0;
+      ny = inside ? cy - inside[1] : 1;
+      nz = inside ? cz - inside[2] : 0;
+      nl = Math.hypot(nx, ny, nz);
+      if (!(nl > 1e-12)) {
+        nx = 0;
+        ny = 1;
+        nz = 0;
+        nl = 1;
+      }
+    }
+    nx /= nl;
+    ny /= nl;
+    nz /= nl;
     const flip = inside
       ? nx * (inside[0] - cx) + ny * (inside[1] - cy) + nz * (inside[2] - cz) > 0
       : false;
@@ -9581,21 +10297,20 @@ class Cave {
      * `buildBranch` for why "strictly", and for what a rim of black nothing
      * looks like when it is not.
      */
-    const holes = [];
-    for (let p = 1; p < this.paths.length; p++) {
-      const br = this.paths[p];
-      holes.push({ ring: br.base, rings: br.holeRings, phi: br.holePhi, span: br.holeSpan });
-    }
+    const holesBy = this._holesBy;
 
     // Every passage: the surface you are standing inside, facing in.
     for (let p = 0; p < this.paths.length; p++) {
       const path = this.paths[p];
       const n = path.x.length;
       const base = path.vstart;
+      // The openings cut in THIS passage — its own children's, and nobody
+      // else's. See the block over `_holesBy`.
+      const holes = holesBy[p] ?? [];
       for (let i = 0; i < n - 1; i++) {
         if (i % LINK_SLICE === 0) yield 'link';
         for (let j = 0; j < RADIAL; j++) {
-          if (p === 0 && holes.length) {
+          if (holes.length) {
             const phiC = ((j + 0.5) / RADIAL) * TAU - Math.PI * 0.5;
             let cut = false;
             for (const h of holes) {
@@ -10925,8 +11640,43 @@ export function caveSample(x, y, z) {
    * passage's wall for a body that has walked into the side lead — so the wall
    * push shoves you back out of the branch you just entered, from a surface
    * three metres behind you, which is unplayable and very hard to read.
+   *
+   * …AND "BEST" WAS `inside`, WHICH SATURATES, SO IT WAS STILL FIRST-WINS
+   * EVERYWHERE IT MATTERED. THIS IS THE BUG THAT SEALED EVERY SIDE PASSAGE.
+   *
+   * `inside` is a crossfade for the fog and the reverb: it is a ramp `slack`
+   * metres wide hung off the WALL, and it is flat 1 across the entire interior
+   * of every passage. So at a junction both paths answer exactly 1, the test
+   * `inside <= bestInside` keeps the incumbent, and the incumbent is the main
+   * line because it is `paths[0]`. The branch could only win by being MORE than
+   * fully inside, which is not a number. Every consequence follows from that:
+   * the governing wall is the main tube's, the push holds the body off the main
+   * wall, and the branch's mouth is on the far side of it.
+   *
+   * Measured with `cave-branch`, which presses W at each junction: 0 of 5
+   * branches on grove-01 k=0 entered, all five with the body at full walking
+   * velocity and zero progress for the whole twelve seconds — the signature of
+   * a push that exactly cancels a walking pace, and the third time this file has
+   * produced it. 40% of the metres in a cave were unreachable.
+   *
+   * SO THE TWO QUESTIONS ARE SEPARATED, because they were never one question.
+   * WHICH SECTION GOVERNS THE BODY is answered by `bestFit` — how far outside
+   * this section the point is, in that section's own units, on its worst axis —
+   * which is a real number everywhere, is already computed below for the ring
+   * choice, and is comparable across passages precisely because it is
+   * normalised. HOW MUCH ARE YOU IN A CAVE is `inside`, and is now the MAX over
+   * every passage that claims the point rather than the winner's own — so no
+   * reading of `inCave` anywhere in the project can get smaller because of this
+   * change, and the hover class of bug cannot come back through it.
+   *
+   * The crossover is where it should be: on the main axis the main line scores
+   * ~0 and the branch ~0.9, and walking at the hole they swap about halfway to
+   * the wall. It moves continuously with the body, unlike a tie between two
+   * saturated 1s, so the answer does not flicker.
    */
   let bestInside = 0;
+  /** The governing path's fit. Smaller is deeper inside; see above. */
+  let bestScore = Infinity;
   for (let ci = 0; ci < live.length; ci++) {
     const cave = live[ci];
     if (!cave.paths) continue;
@@ -11303,8 +12053,11 @@ export function caveSample(x, y, z) {
       const slack = clamp(wallHere * 0.5, 0.8, 1.8);
       const inside =
         clamp01((wallHere + slack - horiz) / slack) * clamp01((ceiling + 1.2 - y) / 1.2) * ends;
-      if (inside <= 0 || inside <= bestInside) continue;
-      bestInside = inside;
+      if (inside <= 0) continue;
+      // The crossfade is the union's, not the winner's. See the block at the top.
+      if (inside > bestInside) bestInside = inside;
+      if (bestFit >= bestScore) continue;
+      bestScore = bestFit;
 
       /**
        * BREAKDOWN, UNDERFOOT — AND IT IS THE DRAWN SOLID NOW, NOT A DOME OVER IT.
@@ -11494,6 +12247,8 @@ export function caveSample(x, y, z) {
       // chamber are the two ends of the same measurement.
       const span = r * Math.sqrt(sh.w * sh.t);
 
+      // Overwritten after both loops with the union's maximum — a later passage
+      // may claim the point more strongly than the one that governs it.
       _sample.inside = inside;
       _sample.cave = cave;
       _sample.path = path;
@@ -11577,7 +12332,9 @@ export function caveSample(x, y, z) {
       _sample.postR = postR;
     }
   }
-  return bestInside > 0 ? _sample : outside();
+  if (bestScore === Infinity) return outside();
+  _sample.inside = bestInside;
+  return _sample;
 }
 
 /**
@@ -11713,6 +12470,33 @@ export class CaveField {
      * nobody is measuring, which is all of them.
      */
     this.perfUnhide = null;
+  }
+
+  /**
+   * "Is every cave in range finished?" — the third streaming ring's answer to
+   * the question `forest.settled` answers for the other two.
+   *
+   * IT EXISTS BECAUSE ITS ABSENCE FAKED A REGRESSION. `check:potato` measures
+   * each preset and then puts ultra back to prove the new rung cost the ladder
+   * nothing, and for two rounds that comparison reported ultra GAINING 278 384
+   * triangles and four draw calls over the run. Every suspect was in the forest
+   * and every one of them was innocent: the whole difference was `cave`,
+   * `cave-shafts` and `cave-fungi` appearing between the first reading and the
+   * last. A cave is built at 0.6 ms a frame — see BUILD_MS — so the nearest one
+   * takes tens of seconds, and an instrument that waits for `forest.settled`
+   * and then measures is photographing a world with no caves in it.
+   *
+   * That is the same fault this repo has now recorded five times under
+   * `settling-by-frame-count-lies`, with a new twist: the wait was not too
+   * SHORT, it was pointed at the wrong subsystem. A settle signal is only as
+   * complete as the list of things it asks.
+   *
+   * `caves.size === 0` is settled, not unsettled: standing somewhere with no
+   * mouth within BUILD_RANGE is a finished state, not a pending one.
+   */
+  get settled() {
+    for (const cave of this.caves.values()) if (!cave.ready) return false;
+    return true;
   }
 
   /**

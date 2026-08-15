@@ -658,6 +658,18 @@ export class Controller {
     this.caveWall = wall;
     this.caveRadial = s.radial;
     this.cavePost = s.postR;
+    /**
+     * WHICH passage is holding the body, which the three numbers above cannot
+     * say and which is the first thing you want at a junction.
+     *
+     * `-1` is the main line and anything else is the main ring a branch leaves
+     * through, so it names the junction as well as the passage. Two passages
+     * overlap by construction wherever a branch starts, and a stall there reads
+     * identically whether the main tube is holding you out or the branch is
+     * pinning you in. See the selection block at the top of `caveSample`.
+     */
+    this.cavePathBase = s.path ? s.path.base : null;
+    this.caveRing = s.ring;
     if (s.radial > wall && s.radial > 1e-4) {
       const push = Math.min(0.85, (s.radial - wall) / s.radial);
       this.position.x += (s.cx - this.position.x) * push;

@@ -3000,6 +3000,8 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   // -------------------------------------------------------------------------
 
   let elapsed = 0;
+  /** Midges, fireflies and butterflies. See the `small` block in `update`. */
+  let smallLife = true;
 
   /**
    * THE OTHER PEOPLE IN THE WOOD, IF THERE ARE ANY.
@@ -4581,8 +4583,27 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * drag twenty butterflies along inside the ceiling.
        */
       const under = camera.position.y < heightAt(camera.position.x, camera.position.z) - 3;
-      butterflies.count = under ? 0 : BUTTERFLIES;
-      if (!under) followFlutters(camera.position.x, camera.position.z);
+      /**
+       * `smallLife` IS THE SAME SWITCH AS `under`, POINTED AT A DIFFERENT REASON.
+       *
+       * Underground these two clouds are inside solid rock and turning them off
+       * is simply correct. At `potato` they are in the right place and are turned
+       * off anyway, because a midge is the least load-bearing thing in the world
+       * and this is the rung for a machine that has run out of everything.
+       *
+       * IT SAVES THE FOLLOW AND NOT ONLY THE DRAW, which is why it is here rather
+       * than a `visible = false` from outside: `followFlutters` and `followSwarm`
+       * recycle 7 cards and 1340 points against the camera every frame, and that
+       * is main-thread work on a frame that — see `npm run perf:weak` — sits
+       * exactly on the 60 Hz boundary at 8x throttle. The birds and the mammals
+       * are deliberately NOT in here: they are the life of the place, they are
+       * what a person standing still is looking at, and they are simulated
+       * host-authoritatively, so thinning them on one machine would change the
+       * world for everybody in it.
+       */
+      const small = smallLife && !under;
+      butterflies.count = small ? BUTTERFLIES : 0;
+      if (small) followFlutters(camera.position.x, camera.position.z);
       /**
        * Same underground reasoning as the butterflies above, and the same two
        * effects: the cloud is seated against `heightAt`, so down here it is a
@@ -4591,8 +4612,8 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * rather than a count write because this is a `Points` cloud with no
        * count to drop, and false is what keeps it out of `projectObject`.
        */
-      swarm.visible = !under;
-      if (!under) followSwarm(camera.position.x, camera.position.z);
+      swarm.visible = small;
+      if (small) followSwarm(camera.position.x, camera.position.z);
 
       _proj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
       _frustum.setFromProjectionMatrix(_proj);
@@ -4640,6 +4661,20 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         dark,
         listener: camera.position,
       });
+    },
+    /**
+     * Whether the insect clouds exist at all. See the `small` block in `update`.
+     *
+     * Both surfaces are written on the NEXT update rather than here, because
+     * `update` writes them unconditionally from `small` and a value poked in
+     * from this setter would be overwritten within a frame — the same trap the
+     * view-breath switch records in the perf rig. One writer, one place.
+     */
+    setSmallLife(on) {
+      smallLife = !!on;
+    },
+    get smallLife() {
+      return smallLife;
     },
     /** Points are sized in pixels, so they need the ratio the renderer is at. */
     setPixelRatio(r) {

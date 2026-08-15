@@ -66,6 +66,15 @@ const args = argv({
   gpuReps: '4',
   cpuFrames: '24',
   anatomy: 'deep',
+  /**
+   * WHICH RUNG THE ANATOMY IS TAKEN AT, and it is a separate argument from
+   * `levels` because the two questions are different. The ladder wants every
+   * rung; the anatomy wants exactly one, and which one depends on whose frame
+   * you are trying to save. `low` is the historical answer and `potato` is the
+   * one that matters for a machine that is drowning.
+   */
+  anatomyLevel: 'low',
+  levels: 'low,medium,high,ultra',
   only: 'all',
   json: `${PERF_DIR}/presets.json`,
 });
@@ -76,7 +85,8 @@ const REPS = Number(args.reps);
 const BATCH = Number(args.batch);
 const GPU_REPS = Number(args.gpuReps);
 const CPU_FRAMES = Number(args.cpuFrames);
-const LEVELS = ['low', 'medium', 'high', 'ultra'];
+const LEVELS = args.levels.split(',').filter(Boolean);
+const ANATOMY_LEVEL = args.anatomyLevel;
 const want = (s) => args.only === 'all' || args.only === s;
 
 /**
@@ -662,8 +672,13 @@ if (want('ladder')) {
       `${'scene'.padStart(8)}${'post'.padStart(7)}${'shadow'.padStart(8)}` +
       `${'vs high'.padStart(9)}${'draws'.padStart(7)}${'tris'.padStart(9)}`
   );
+  // The rung every other rung is reported relative to: `high` when it is in the
+  // sweep, otherwise the best one that is. A fixed `acc.high` throws when the
+  // sweep is a subset — and a subset sweep is the normal case now that the
+  // ladder has five rungs and only one of them is usually the subject.
+  const REFERENCE = LEVELS.includes('high') ? 'high' : LEVELS[LEVELS.length - 1];
   for (const station of STATIONS) {
-    const high = median(acc.high.stations[station].gpuCached);
+    const high = median(acc[REFERENCE].stations[station].gpuCached);
     for (const level of LEVELS) {
       const b = acc[level].stations[station];
       const gpu = median(b.gpuCached);
@@ -712,10 +727,14 @@ if (want('ladder')) {
           `${(((hi - lo) / hi) * 100).toFixed(0)}%`.padStart(14)
       );
     }
-    const top = median(acc.ultra.stations[station].gpuCached);
-    const bottom = median(acc.low.stations[station].gpuCached);
+    const topLevel = LEVELS[LEVELS.length - 1];
+    const bottomLevel = LEVELS[0];
+    const top = median(acc[topLevel].stations[station].gpuCached);
+    const bottom = median(acc[bottomLevel].stations[station].gpuCached);
     console.log(
-      PAD('    ultra -> low', 22) + NUM(top - bottom, 11) + `${(((top - bottom) / top) * 100).toFixed(0)}%`.padStart(14)
+      PAD(`    ${topLevel} -> ${bottomLevel}`, 22) +
+        NUM(top - bottom, 11) +
+        `${(((top - bottom) / top) * 100).toFixed(0)}%`.padStart(14)
     );
   }
 
@@ -734,30 +753,42 @@ if (want('ladder')) {
  * at Low, so what is left is the four density knobs. Whatever survives that arm
  * is the frame the quality menu cannot reach, which is the whole question.
  */
+const UNDERSTOREY = [
+  'grass', 'ferns', 'meadow', 'bramble', 'bushes', 'saplings',
+  'sticks', 'flowers', 'litter', 'reeds', 'stumps',
+];
+
+/**
+ * The base each `knobs` arm departs from is the ANATOMY RUNG'S OWN VALUES, not a
+ * hand-written copy of Low's.
+ *
+ * `removalPair` restores `baseKnobs` after every arm, so a literal table here is
+ * a second source of truth for what a preset is — and the moment the anatomy is
+ * pointed at a different rung it becomes a wrong one that silently re-writes the
+ * subject halfway through the run. Every arm below therefore reads its base out
+ * of the live settings at the moment the anatomy starts.
+ */
+const KNOB_ARMS = ['shaftDensity', 'mistLayers', 'particleDensity', 'instanceDensity'];
+
 const ARMS = [
   { name: 'canopy (leaves)', kind: 'layers', layers: ['leaves'] },
-  {
-    name: 'understorey',
-    kind: 'layers',
-    layers: ['grass', 'ferns', 'meadow', 'bramble', 'bushes', 'saplings', 'sticks', 'flowers', 'litter', 'reeds', 'stumps'],
-  },
+  { name: 'understorey', kind: 'layers', layers: UNDERSTOREY },
   { name: 'trunks', kind: 'layers', layers: ['trunks'] },
   { name: 'terrain (ground)', kind: 'layers', layers: ['ground'] },
   { name: 'fauna', kind: 'layers', layers: ['birds', 'butterflies', 'mammals', 'swarm', 'shoal'] },
   { name: 'air (mist/shafts/motes)', kind: 'layers', layers: ['mist', 'shafts', 'motes'] },
-  { name: 'sky + water', kind: 'layers', layers: ['sky', 'water'] },
+  { name: 'sky', kind: 'layers', layers: ['sky'] },
+  { name: 'water', kind: 'layers', layers: ['water'] },
+  { name: 'rocks + logs + stumps', kind: 'layers', layers: ['rocks', 'logs', 'stumps'] },
+  { name: 'mushrooms', kind: 'layers', layers: ['mushrooms'] },
+  { name: 'gathering (fires/furniture)', kind: 'layers', layers: ['fires', 'hearths', 'furniture'] },
   { name: 'post chain (all of it)', kind: 'post' },
-  {
-    name: 'preset floor',
-    kind: 'knobs',
-    knobs: { shaftDensity: 0, mistLayers: 0, particleDensity: 0, instanceDensity: 0.25 },
-    baseKnobs: { shaftDensity: 0.3, mistLayers: 1, particleDensity: 0.22, instanceDensity: 0.5 },
-  },
+  { name: 'preset floor', kind: 'knobs', knobs: { shaftDensity: 0, mistLayers: 0, particleDensity: 0, instanceDensity: 0.25 } },
 ];
 
 if (want('anatomy')) {
   const station = args.anatomy;
-  console.log(heading(`what LOW's frame is made of, at ${station}`));
+  console.log(heading(`what ${ANATOMY_LEVEL.toUpperCase()}'s frame is made of, at ${station}`));
   console.log(
     '  Each row is what REMOVING that thing saves, given everything else is\n' +
       '  present, as an A-B-B-A paired difference. They do not sum to the frame\n' +
@@ -765,20 +796,23 @@ if (want('anatomy')) {
       '  than nothing to remove.\n'
   );
 
-  const cfg = await page.evaluate((l) => window.__PRESETS__.setLevel(l), 'low');
+  const cfg = await page.evaluate((l) => window.__PRESETS__.setLevel(l), ANATOMY_LEVEL);
   await page.evaluate(([s, l]) => window.__PRESETS__.arrive(s, l), [station, TRIP]);
+  // The rung's own knob values, read live — see the KNOB_ARMS note.
+  const baseKnobs = Object.fromEntries(KNOB_ARMS.map((k) => [k, cfg.knobs[k]]));
+  for (const arm of ARMS) if (arm.kind === 'knobs') arm.baseKnobs = baseKnobs;
   const base = await page.evaluate(
     (o) => window.__PRESETS__.measure(o),
     { reps: GPU_REPS, batch: BATCH, cpuFrames: CPU_FRAMES }
   );
   const total = median(base.gpuCached);
   console.log(
-    `  low at ${station}: ${total.toFixed(2)} ms GPU, ${median(base.cpu).toFixed(2)} ms CPU, ` +
+    `  ${ANATOMY_LEVEL} at ${station}: ${total.toFixed(2)} ms GPU, ${median(base.cpu).toFixed(2)} ms CPU, ` +
       `${cfg.backbuffer[0]}x${cfg.backbuffer[1]}, ${base.counters.calls} draws, ` +
       `${(base.counters.triangles / 1e6).toFixed(2)}M tris\n`
   );
   console.log(
-    `${PAD('  removing', 26)}${'saves'.padStart(9)}${'of low'.padStart(8)}` +
+    `${PAD('  removing', 30)}${'saves'.padStart(9)}${PAD(`of ${ANATOMY_LEVEL}`, 8).padStart(8)}` +
       `${'draws'.padStart(8)}${'tris'.padStart(9)}   95% interval`
   );
 
@@ -800,7 +834,7 @@ if (want('anatomy')) {
      */
     const inert = census.calls === 0 && census.triangles === 0 && census.points === 0;
     console.log(
-      PAD(`  ${arm.name}`, 26) +
+      PAD(`  ${arm.name}`, 30) +
         (real ? `${ci.median.toFixed(2)} ms`.padStart(9) : '—'.padStart(9)) +
         (real ? `${((ci.median / b) * 100).toFixed(0)}%`.padStart(8) : '—'.padStart(8)) +
         String(census.calls).padStart(8) +
@@ -816,11 +850,11 @@ if (want('anatomy')) {
   const floor = rows.find((r) => r.name === 'preset floor');
   const untouchable = floor?.real ? total - floor.saves : total;
   console.log(
-    `\n  Everything the quality menu can still remove below Low: ` +
+    `\n  Everything the quality menu can still remove below ${ANATOMY_LEVEL}: ` +
       `${floor?.real ? floor.saves.toFixed(2) : '0.00'} ms.\n` +
       `  What is left after that: ${untouchable.toFixed(2)} ms of ${total.toFixed(2)} ` +
-      `(${((untouchable / total) * 100).toFixed(0)}% of Low's frame),\n` +
-      `  at Low's own render scale. NO PRESET IN THE GAME TOUCHES IT.`
+      `(${((untouchable / total) * 100).toFixed(0)}% of ${ANATOMY_LEVEL}'s frame),\n` +
+      `  at ${ANATOMY_LEVEL}'s own render scale. NO PRESET IN THE GAME TOUCHES IT.`
   );
 
   report.anatomy = { station, total, cpu: median(base.cpu), counters: base.counters, config: cfg, rows, untouchable };
@@ -848,13 +882,13 @@ const SCALES = [0.35, 0.5, 0.65, 0.8, 1];
 
 if (want('split')) {
   const station = args.anatomy;
-  console.log(heading(`pixels against geometry at LOW, ${station}`));
+  console.log(heading(`pixels against geometry at ${ANATOMY_LEVEL.toUpperCase()}, ${station}`));
   console.log(
-    '  Preset pinned at low. Only the pixel ratio moves — identical geometry in\n' +
+    `  Preset pinned at ${ANATOMY_LEVEL}. Only the pixel ratio moves — identical geometry in\n` +
       '  every row, so every millisecond of difference is fragment cost.\n'
   );
 
-  await page.evaluate((l) => window.__PRESETS__.setLevel(l), 'low');
+  await page.evaluate((l) => window.__PRESETS__.setLevel(l), ANATOMY_LEVEL);
   await page.evaluate(([s, l]) => window.__PRESETS__.arrive(s, l), [station, TRIP]);
   const sweep = await page.evaluate(
     ([s, o]) => window.__PRESETS__.scaleSweep(s, o),
@@ -972,7 +1006,7 @@ if (want('reach')) {
 
   report.reach = {};
   for (const station of STATIONS) {
-    await page.evaluate((l) => window.__PRESETS__.setLevel(l), 'low');
+    await page.evaluate((l) => window.__PRESETS__.setLevel(l), ANATOMY_LEVEL);
     await page.evaluate(([s, l]) => window.__PRESETS__.arrive(s, l), [station, TRIP]);
     const sweep = await page.evaluate(
       ([a, o]) => window.__PRESETS__.reachSweep(a, o),

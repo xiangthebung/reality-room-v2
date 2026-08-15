@@ -56,7 +56,10 @@
     "check:day": "node scripts/day-check.mjs --only=identity",
     "check:authored": "node scripts/authored-check.mjs",
     "check:terrain": "node scripts/terrain-survey.mjs",
-    "check:cave": "node scripts/cave-check.mjs && node scripts/cave-roof.mjs && node scripts/cave-mouth.mjs && node scripts/cave-floor.mjs && node scripts/cave-walk.mjs && node scripts/cave-seal.mjs && node scripts/cave-end.mjs",
+    "check:cave": "node scripts/cave-check.mjs && node scripts/cave-normals.mjs && node scripts/cave-roof.mjs && node scripts/cave-mouth.mjs && node scripts/cave-floor.mjs && node scripts/cave-walk.mjs && node scripts/cave-branch.mjs && node scripts/cave-seal.mjs && node scripts/cave-end.mjs",
+    "check:cave-normals": "node scripts/cave-normals.mjs",
+    "check:cave-branch": "node scripts/cave-branch.mjs",
+    "shot:cave-junction": "node scripts/cave-junction.mjs",
     "check:cave-seal": "node scripts/cave-seal.mjs",
     "shot:cave-trip": "node scripts/cave-trip.mjs",
     "check:cave-end": "node scripts/cave-end.mjs",
@@ -91,7 +94,9 @@
     "shot:impostor": "node scripts/perf/impostor-shots.mjs",
     "impostor:ab": "node scripts/perf/impostor-ab.mjs",
     "impostor:knee": "node scripts/perf/impostor-knee.mjs",
-    "impostor:fog": "node scripts/perf/impostor-fog.mjs"
+    "impostor:fog": "node scripts/perf/impostor-fog.mjs",
+    "check:branches": "node scripts/perf/branch-visible.mjs",
+    "perf:weak": "node scripts/perf/weak.mjs"
   },
   "dependencies": {
     "three": "0.185.1",

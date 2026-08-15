@@ -134,6 +134,30 @@ try {
   // early frames are a world still arriving, which is a fair thing to pay for
   // and not what this is asking about.
   await page.waitForTimeout(LINGER * 1000);
+  /**
+   * AND THEN WAIT FOR THE CAVES, WHICH IS WHAT MADE THE ASSERTION AT THE BOTTOM
+   * OF THIS FILE RED.
+   *
+   * `menu.calls !== world.calls` is not a cost check — it is "the menu is
+   * drawing a DIFFERENT scene from the world", and it was reporting 139 against
+   * 143 with 16.62 M triangles against 16.90 M. That difference is exactly the
+   * cave: `cave`, `cave-shafts` and `cave-fungi`, 277 964 triangles and four
+   * draw calls, which arrive some tens of seconds into the session because a
+   * cave is built at 0.6 ms a frame. The two readings really were of two
+   * different scenes, and the gate was right; what it was catching was its own
+   * schedule, not a throttle warming the wrong shaders.
+   *
+   * A LINGER LONG ENOUGH WOULD ALSO HAVE DONE IT and is the wrong fix, for the
+   * reason this repo has now recorded six times under
+   * `settling-by-frame-count-lies`: a stopwatch is a guess about somebody else's
+   * subsystem, and the guess goes stale the next time that subsystem changes.
+   * `CaveField.settled` is the cave field's own answer. Bounded, because a
+   * machine that never finishes should say so rather than hang, and permissive
+   * on timeout because the assertion below is what reports the consequence.
+   */
+  await page
+    .waitForFunction(() => window.RR?.caves?.settled === true, null, { timeout: 120000 })
+    .catch(() => console.log('  (caves never settled behind the menu — the draw-call check below will say so)'));
   if (LINGER > 0) {
     rows.push({
       name: 'menu (gate up)',

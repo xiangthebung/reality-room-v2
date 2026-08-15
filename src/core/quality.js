@@ -528,6 +528,60 @@ export const KNOBS = [
     hint: 'How deep the wood is drawn. The only setting here that removes geometry rather than pixels.',
   },
   {
+    /**
+     * THE FIRST TWO KNOBS IN THIS LIST THAT ARE ABOUT DRAW CALLS RATHER THAN
+     * ABOUT PIXELS OR TRIANGLES, and the reason they exist is a measurement this
+     * project had never taken.
+     *
+     * Every instrument in scripts/perf measures GPU time on a desktop part, and
+     * by that measure both of these are free — the five clutter layers are
+     * 0.05 M triangles of a 2.24 M frame and vanish into the noise floor.
+     * `npm run perf:weak` throttles the MAIN THREAD instead, which is the half of
+     * the budget a Chromebook runs out of first, and the picture there is
+     * completely different: at 8x throttle `potato` sits exactly on the 60 Hz
+     * boundary, and removing any fourteen draw calls — it does not matter which
+     * — takes the frame from 33.3 ms to 16.7. A draw is a scene-graph walk, a
+     * render-list insert, a program select and a driver call, and a weak core
+     * pays for all four whatever is in the buffer.
+     *
+     * So these two remove THINGS, not detail. Ground clutter is the sticks,
+     * fallen leaves, wildflowers, bramble and reeds — five layers that are
+     * texture on the floor you are walking over, chosen by the test on the
+     * `understoreyLayers` table in forest.js: would the wood be a different
+     * place without it? The bushes, saplings, palms, bromeliads and giant leaves
+     * are not in that list, because they are shape you walk around.
+     */
+    id: 'groundClutter',
+    group: 'graphics',
+    advanced: true,
+    label: 'Ground clutter',
+    kind: 'toggle',
+    presets: [false, true, true, true, true],
+    hint: 'Sticks, fallen leaves, wildflowers, bramble and reeds on the forest floor.',
+  },
+  {
+    /**
+     * The midges, the fireflies and the butterflies — two point clouds and seven
+     * cards, which is two draws and, more to the point, `followSwarm` and
+     * `followFlutters` recycling 1340 points and 7 quads against the camera on
+     * every single frame.
+     *
+     * THE BIRDS AND THE MAMMALS ARE NOT IN HERE and that is a deliberate line.
+     * They are what somebody standing still in this wood is looking at, and they
+     * are simulated host-authoritatively — one client runs the herd and the rest
+     * derive it — so thinning them on the weakest machine in the room would
+     * change the world for everybody else in it. What is left here is the
+     * scenery of the air.
+     */
+    id: 'smallLife',
+    group: 'graphics',
+    advanced: true,
+    label: 'Insects',
+    kind: 'toggle',
+    presets: [false, true, true, true, true],
+    hint: 'Midges, fireflies and butterflies. Birds and animals are not affected.',
+  },
+  {
     id: 'particleDensity',
     group: 'graphics',
     advanced: true,

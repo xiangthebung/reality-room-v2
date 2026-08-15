@@ -214,12 +214,28 @@ for (const seed of SEEDS) {
       }
       const trunk = stat.per[0];
       const branchLen = stat.per.slice(1).reduce((s, x) => s + x.len, 0);
+      /**
+       * THE BRANCHES' OWN TURNING, WEIGHTED BY LENGTH.
+       *
+       * Reported separately because the two are tuned against completely
+       * different budgets and averaging them hides both. On the trunk a corner
+       * is paid for in metres, and metres are depth, and depth is the chambers
+       * — measured at a quarter of the tall passage for a ninth more turning.
+       * A branch has no depth envelope and no chamber to lose, so a corner
+       * there costs a refusal and nothing else. A change that raises this
+       * number and leaves the trunk's alone is the trade that was wanted.
+       */
+      const branchTurn =
+        branchLen > 1
+          ? stat.per.slice(1).reduce((s, x) => s + x.turnPer100 * x.len, 0) / branchLen
+          : 0;
       return {
         paths: stat.paths,
         trunkLen: trunk.len,
         branchLen,
         totalLen: trunk.len + branchLen,
         turnPer100: trunk.turnPer100,
+        branchTurn,
         corners: trunk.corners,
         tall: Math.max(...stat.per.map((x) => x.tall)),
         wide: Math.max(...stat.per.map((x) => x.wide)),
@@ -240,7 +256,7 @@ for (const seed of SEEDS) {
     console.log(
       `${seed} k=${String(c.k).padStart(2)}  ${r.paths} passages  ` +
         `${r.totalLen.toFixed(0)} m (${r.branchLen.toFixed(0)} branch)  ` +
-        `turn ${r.turnPer100.toFixed(0)} deg/100m  ${r.corners} corners  ` +
+        `turn ${r.turnPer100.toFixed(0)}/${r.branchTurn.toFixed(0)} deg/100m  ${r.corners} corners  ` +
         `tallest ${r.tall.toFixed(1)} m  widest ${r.wide.toFixed(1)} m  ` +
         `${r.tallM.toFixed(0)} m over 15 m tall, ${r.vastM.toFixed(0)} m over 25  ` +
         `${r.tris} tris  overlap ${r.overlap} stacked ${r.stacked}` +
@@ -255,7 +271,7 @@ console.log(
   `\n${all.length} caves:  ` +
     `${mean((x) => x.paths).toFixed(1)} passages  ` +
     `${mean((x) => x.totalLen).toFixed(0)} m  ` +
-    `turn ${mean((x) => x.turnPer100).toFixed(0)} deg/100m  ` +
+    `turn ${mean((x) => x.turnPer100).toFixed(0)} trunk / ${mean((x) => x.branchTurn).toFixed(0)} branch deg/100m  ` +
     `${mean((x) => x.corners).toFixed(1)} corners  ` +
     `tallest ${mean((x) => x.tall).toFixed(1)} m (max ${Math.max(...all.map((x) => x.tall)).toFixed(1)})  ` +
     `${mean((x) => x.tallM).toFixed(0)} m over 15 m tall  ` +

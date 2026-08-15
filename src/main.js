@@ -565,8 +565,45 @@ quality.register('instanceDensity', (v) => forest.culler.setDensity(v));
  * 3.50 M of its 16.08 M triangles, about ten times the cost per triangle of
  * trunk. Bare trunks at the edge of sight are cheap; leaves are not.
  */
+/**
+ * POTATO'S `lod` IS 12 AND NOT 60, AND IT IS THE LARGEST CUT ANY SETTING IN THIS
+ * GAME MAKES TO THE TRIANGLE COUNT.
+ *
+ * The rows below were fitted to a triangle/millisecond curve and the potato row
+ * was fitted along with the rest, at 60 m, which reads as a reasonable half of
+ * its 120. It is not a lever at all at that value. The trunk that a short `lod`
+ * would remove is 4350 triangles on average and 7766 at the worst — at the deep
+ * station potato draws 570 of them, 2.49 M of a 3.44 M frame — so where the
+ * handover sits IS the frame, and 60 m puts it past almost nothing.
+ *
+ * WHAT THE FLOOR IS AND WHY IT IS NOT ZERO. The band is tested per BUCKET
+ * against the bucket's nearest point, and `TREE_BUCKET` is 44 m, so the sphere
+ * is about 41 m of radius: a `lod` of 12 still draws every full trunk out to
+ * about 53 m, and every value below 12 draws exactly the same trees. The curve
+ * flattens there and there is nothing under it.
+ *
+ * MEASURED, `branch-visible.mjs`, against potato as it shipped, one page
+ * session, one camera, one minute of one day — triangle cut and the worst mean
+ * pixel move over four eye-level stations, out of 255:
+ *
+ *     lod 30    30%   0.02        lod 12          40%    0.41
+ *     lod 20    35%   0.22        coarse (lod 0)  67%   14.06
+ *
+ * 12 is chosen and 0 is not available: `coarse` is the arm that abandons the
+ * band entirely and draws the reduced sweep at every distance, and it deletes
+ * the kapok you are standing under. See the block on `coarseTrunks` in
+ * forest.js. Against that, 0.41 of 255 is four times under what the impostor
+ * band's own table accepts, at a station the impostor band is not even at.
+ *
+ * THE OTHER THREE ROWS ARE UNTOUCHED, deliberately. Low, medium and high are
+ * measured baselines that every screenshot and perf script in scripts/ is
+ * reproducible against, and the argument above is about a machine that has run
+ * out of everything else — it is not a general claim that the handover was too
+ * far out. On a rung with shadows on it is also shadow arithmetic, because a
+ * near trunk is the only one of the pair that casts.
+ */
 const REACH_TABLE = new Map([
-  [120, { lod: 60, leafReach: 90 }],
+  [120, { lod: 12, leafReach: 90 }],
   [180, { lod: 90, leafReach: 110 }],
   [250, { lod: 120, leafReach: 150 }],
   [384, { lod: 170, leafReach: 384 }],
@@ -600,6 +637,15 @@ quality.register('treeReach', (v) => {
   treeReach = REACH_TABLE.has(v) ? v : 384;
   applyReach();
 });
+
+/**
+ * The two DRAW-COUNT knobs, which both live in the subsystem that owns the thing
+ * being removed rather than here — see `setClutter` in forest.js for why an
+ * empty band beats a `visible = false` the culler would overwrite, and the
+ * `small` block in fauna.js for why the insect follow has to go with the draw.
+ */
+quality.register('groundClutter', (on) => forest.setClutter(on));
+quality.register('smallLife', (on) => fauna.setSmallLife(on));
 
 /**
  * A SECOND setter on `shadows`, and it has to live down here rather than beside
