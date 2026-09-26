@@ -1,0 +1,12 @@
+=== tol 1.0
+k=0  2397 probes  31 disagree by > 1 m  (3 hovering, 28 wading; 0 of them standing on a breakdown block)  worst hover +1.41 m, worst sunk -5.79 m
+k=-1  1141 probes  24 disagree by > 1 m  (3 hovering, 21 wading; 0 of them standing on a breakdown block)  worst hover +1.52 m, worst sunk -20.61 m
+55 disagreements over 1 m (6 hovering, 49 wading); worst hover +1.52 m  <-- the body stands in mid-air here
+=== tol 1.5
+k=0  2397 probes  11 disagree by > 1.5 m  (0 hovering, 11 wading; 0 of them standing on a breakdown block)  worst hover +0.00 m, worst sunk -5.79 m
+k=-1  1141 probes  13 disagree by > 1.5 m  (2 hovering, 11 wading; 0 of them standing on a breakdown block)  worst hover +1.52 m, worst sunk -20.61 m
+24 disagreements over 1.5 m (2 hovering, 22 wading); worst hover +1.52 m  <-- the body stands in mid-air here
+=== tol 2.0
+k=0  2397 probes  8 disagree by > 2 m  (0 hovering, 8 wading; 0 of them standing on a breakdown block)  worst hover +0.00 m, worst sunk -5.79 m
+k=-1  1141 probes  6 disagree by > 2 m  (0 hovering, 6 wading; 0 of them standing on a breakdown block)  worst hover +0.00 m, worst sunk -20.61 m
+14 disagreements over 2 m (0 hovering, 14 wading); worst hover +0.00 m

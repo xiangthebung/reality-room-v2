@@ -142,6 +142,19 @@ export const BINDINGS = [
   { group: 'together', keys: ['J'], label: 'Open a room, and copy the invite link' },
   { group: 'together', keys: ['Enter', 'T'], label: 'Say something' },
   { group: 'together', keys: ['Tab'], label: 'See who is here', note: 'Hold' },
+  /**
+   * The two hand gestures. Not `essential`, deliberately — the on-screen strip
+   * is persistent chrome and is held to five rows for the reason at the top of
+   * this file, and neither of these is something you need in your first five
+   * seconds.
+   */
+  {
+    group: 'together',
+    keys: ['R'],
+    label: 'Point at what you are looking at',
+    note: 'Hold. Your arm follows your aim, so everybody sees what you see',
+  },
+  { group: 'together', keys: ['H'], label: 'Wave' },
   { group: 'together', keys: ['V'], label: 'Talk', note: 'Hold, or force an open mic through' },
   { group: 'together', keys: ['X'], label: 'Mute yourself' },
   { group: 'together', keys: ['C'], label: 'Switch between open mic and push-to-talk' },

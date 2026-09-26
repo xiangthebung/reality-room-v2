@@ -303,6 +303,7 @@ export class ForestField {
     renderer = null,
     colliders,
     bushZones,
+    snagZones = null,
     patches,
     glow = null,
   }) {
@@ -310,6 +311,15 @@ export class ForestField {
     this.renderer = renderer;
     this.colliders = colliders;
     this.bushZones = bushZones;
+    /**
+     * Standing dead trunks, and a third grid for the same reason there is a
+     * second one: `colliders` answers "is the body allowed here", `bushZones`
+     * answers "is the body near a bush", and this answers "is that tree dead".
+     * Keeping them apart is what lets a snag be BOTH a trunk in the collision
+     * grid and a snag here, without either consumer filtering by kind. Optional
+     * — null simply means nobody asked, and every `addSector` below is guarded.
+     */
+    this.snagZones = snagZones;
     this.patches = patches;
     this.glow = glow;
 
@@ -563,6 +573,7 @@ export class ForestField {
     for (const id of sector.layers) this.packers.get(id)?.remove(key);
     this.colliders.removeSector(key);
     this.bushZones.removeSector(key);
+    this.snagZones?.removeSector(key);
     if (sector.patches) {
       for (let i = this.patches.length - 1; i >= 0; i--) {
         if (this.patches[i].sector === key) this.patches.splice(i, 1);
@@ -691,6 +702,7 @@ export class ForestField {
     }
     this.colliders.addSector(data.key, data.collide);
     this.bushZones.addSector(data.key, data.rustle);
+    if (this.snagZones && data.snags) this.snagZones.addSector(data.key, data.snags);
 
     if (data.patches.length) {
       for (let i = 0; i < data.patches.length; i += 3) {

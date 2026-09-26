@@ -4,6 +4,7 @@ import { TAU, clamp01, makeRng, rngRange } from '../core/util.js';
 import { leafCluster } from './textures.js';
 import { BAND, BARK_U, bandUV, trunkAtlas } from './tree-adorn.js';
 import { PLANT_SCALE, makeLiving, setPlantScale } from '../trip/living.js';
+import { SPECIES_NAMES } from './species-names.js';
 
 /**
  * Trees.
@@ -822,9 +823,459 @@ const SPECIES = {
       },
     ],
   },
+
+  /**
+   * ==== THE BOREAL FIVE — ADDED FOR `lands/taiga.js`, ADDITIVE BY CONSTRUCTION
+   *
+   * `SPECIES_NAMES` is `Object.keys(SPECIES)` and `forest.js` grows only the
+   * names its land's roster asks for, so these five compile nothing, allocate
+   * nothing and cost nothing in the rainforest. `speciesAt` is per-land and its
+   * draw stream is keyed per species name, so no rainforest candidate can reach
+   * them and `land-identity`'s `500308b1b1dc` cannot move. That is the whole
+   * reason the roster was made a subset rather than the table being split in
+   * two: one table means one place to read what a tree in this world can be.
+   *
+   * A CONIFER IS THE CHEAPEST TREE IN THIS GRAMMAR, which is why the winter
+   * wood was the second land rather than a temperate one. High `taper`, whorled
+   * branches, one or two `levels`, and NONE of `buttress`, `stilts`, `lianas`
+   * or `epiphytes` — all four are optional-by-presence, so leaving them out is
+   * not a flag, it is an absence, and the code that would draw them never runs.
+   *
+   * THE COLLIDER CONTRACT IS UNCHANGED AND STILL BINDING. `stumpCollider`
+   * pushes `0.28 * scale + 0.34`, and `fauna.js` identifies a tree as anything
+   * under 0.8 radius. The taiga's instance scale tops out at 1.45, giving
+   * 0.746 — inside the bar with room, and it stays inside only while every
+   * `trunkRadius` here stays near the values below. This is the constraint to
+   * re-check before widening any of them.
+   *
+   * WHAT DISTINGUISHES THE FIVE AT 30 M, since that is the distance the
+   * rainforest's own audit found five species collapsing to three outlines at.
+   * FOUR OF THEM ARE NOW SEPARATED BY THE CONE ITSELF rather than by a single
+   * scalar, which is what the first draft got wrong: it claimed spruce and fir
+   * differed by `droop` alone, and two trees that differ by one number are one
+   * tree. The measured crown ratio — half-width at the skirt over crown height —
+   * is spruce 1:9, fir 1:13, larch 1:8 and open, juniper 1:4 and columnar.
+   *
+   *   spruce   the widest and the only one that WEEPS: `droop` bends every limb
+   *            down along its own length, so the skirt hangs. That is how a
+   *            Picea sheds snow and it is the thing you can name at forty metres.
+   *   fir      narrower, `curve` higher so it pinches harder at the top, and
+   *            almost no droop — an Abies holds its branches out flat and holds
+   *            the snow ON them.
+   *   larch    a third fewer branches, four to a whorl instead of five, longer
+   *            and more strongly drooped. A Larix is a see-through tree, and
+   *            that plus the gold is what makes a muskeg legible across a valley.
+   *   juniper  not a cone at all. `lift` runs 0.35 -> 0.95, i.e. every branch
+   *            ascends, which makes a dense column rather than a spire; it never
+   *            leaves the 2-12 m band and it is what stops a sightline at
+   *            shoulder height without the `palms` layer the taiga drops.
+   *   birch    the only broadleaf, and the ONLY one of the five with no
+   *            `conifer` block — see its own note. Pale bole, weeping twigs.
+   *
+   * THE GREENS ARE COLDER THAN THE FIRST DRAFT'S AND NOT DARKER, and that
+   * distinction is the recorded trap. A tint is an instance colour multiplied
+   * into a leaf texture that is ALREADY dark (hsl light 15-19), and two dark
+   * linear factors compound — this project has twice shipped an object that was
+   * invisible because a near-black base was multiplied by a linear ratio chosen
+   * as though it were sRGB. So the hues moved from 150-165 to 162-178 and the
+   * saturation came down; the lightness did not move. What reads against snow is
+   * the darkness these already had.
+   */
+  spruce: {
+    height: [17, 28],
+    stature: [0.45, 1.05],
+    trunkRadius: 0.22,
+    // A spruce bole is a long cone — the opposite of the palm's 0.74 column.
+    taper: 0.2,
+    // Branches almost to the ground on an open-grown tree. This is the whole
+    // silhouette and it is what fills the 2-12 m band without a `palms` layer.
+    branchStart: 0.1,
+    // Twelve whorls of five. Kept in step with `conifer` by hand because
+    // `farStride` is the only reader and it derives its own count; this is the
+    // number to read when asking how much wood a spruce is.
+    branches: 70,
+    /**
+     * A TENTH OF THE TREE, WITH A WOBBLE OF A SIXTH — not the 2.4x spread the
+     * first draft had. `conifer.reach` grades the length down the trunk, so
+     * anything wide here is per-branch noise fighting the cone, and measured on
+     * the old archetype it won: the crown came out 3.3 m half-width at the
+     * skirt against 1.9 m at the leader, which over 19 m is a 4° taper, i.e. a
+     * column. 2.0 m -> 0.26 m is a real Picea.
+     */
+    branchLength: [0.095, 0.12],
+    /**
+     * THE WEEP, AND IT IS NOW ONLY THE WEEP. `droop` used to do two jobs — it
+     * subtracted from the branch's launch angle AND bent it along its length —
+     * and the first of those was what swept the boughs "down and out into long
+     * arcs". With `conifer.lift` owning the launch angle, this bends the limb
+     * about its own axis and nothing else: the tip of a 2.4 m skirt branch falls
+     * 0.85 m over its length, which is the curve that sheds snow.
+     *
+     * IT IS ALSO WHAT CLOSES THE WHORLS. The first cone this file grew read as a
+     * bottle brush — bands of foliage with bare bole showing between them —
+     * because a whorl's foliage sleeve is about 0.7 m deep and the internode was
+     * 1.68 m. Fourteen rings brings the internode to 1.35 m and a droop this
+     * strong drags each whorl's tips most of the rest of the way down onto the
+     * one below, which is what a real stand does and what makes the crown one
+     * mass rather than a stack of discs.
+     */
+    droop: 0.7,
+    /**
+     * ONE LEVEL. A second level of branching on a whorled tree sprouts children
+     * at a random azimuth off every limb, which fills the internodes back in and
+     * destroys the banding that names the tree. It is also 65 extra swept tubes
+     * a spruce does not need: the pinnate side-shoots of a real limb are drawn
+     * ON the card by `drawSprig`, at no cost in geometry at all.
+     */
+    levels: 1,
+    leafPerBranch: 9,
+    leafOnBough: 2,
+    /**
+     * SMALLER CARDS ON A SMALLER CROWN, and the arithmetic is the reason this
+     * change is not a perf regression despite the higher card COUNT. Before:
+     * 514 cards averaging 1.3 m, i.e. 868 m² of alpha-tested area. After: 630
+     * averaging 0.90 m after `sizeScale`, i.e. 510 m². Cards are billed per
+     * PIXEL — the recorded finding is that the canopy's cost is discard rather
+     * than fill — so this is 41% less of the expensive thing and 23% more of the
+     * cheap one.
+     */
+    leafSize: [0.8, 1.5],
+    conifer: {
+      rings: 14,
+      per: 5,
+      // An irrational-ish fraction of a turn, so no two whorls ever line up
+      // into a vertical column of branches.
+      turn: 1.03,
+      top: 0.97,
+      stack: 0.82,
+      // Level at the skirt, 32° at the leader. This one pair of numbers is the
+      // difference between a spruce and an oak.
+      lift: [-0.04, 0.62],
+      rise: 1.5,
+      reach: [1.0, 0.12],
+      curve: 1.25,
+      spray: 0.13,
+      pad: 0.2,
+      from: 0.14,
+      to: 1.06,
+      /**
+       * FULL SPRAY. A Picea's needles stand off a flat, horizontally held
+       * branch and the tree's whole silhouette at forty metres is a stack of
+       * combs, which is exactly what the tumbled cards were destroying. See
+       * the `comb` block in `hang`.
+       */
+      comb: 1,
+    },
+    bark: { hue: 22, sat: 16, light: 19 },
+    /**
+     * `count` 96 -> 124 IS THE FREE HALF OF THE CANOPY BUDGET AND IT IS SPENT
+     * DELIBERATELY. The block at the top of this file measures it: card coverage
+     * changes only what is drawn on the texture, the card is the same two
+     * triangles, and a denser one is CHEAPER because opaque fragments write
+     * depth while alpha-test discards defeat early-Z. Cutting card area by 44%
+     * would have thinned the crown; this puts the density back where the pixels
+     * are free rather than where they are billed.
+     */
+    leaf: { hue: 164, sat: 26, light: 15, needle: true, count: 124, length: 0.24, width: 0.07 },
+
+    /**
+     * EVERY SPECIES NEEDS A `tint`, AND NOTHING TELLS YOU SO UNTIL IT DOES NOT.
+     *
+     * `speciesMaterials` ends with `tints.push(variants[i].tint ?? spec.tint)`,
+     * and `forest.js` then indexes that array per archetype. A row with neither
+     * lands `undefined` in `mats.tints`, and the failure surfaces as
+     * "Cannot read properties of undefined (reading 'length')" thrown from
+     * `buildForest` — which names neither the species nor this file. The five
+     * rainforest rows all carry one, so the path had never been exercised
+     * without it. `variants` IS optional (`spec.variants ?? [{}]`); `tint` is
+     * not, and now says so out loud.
+     *
+     * These are instance colours, multiplied over the canopy texture, so they
+     * are the cheapest colour in the world to move — no texture, no recompile.
+     *
+     * THE HUES ARE DELIBERATELY OUTSIDE THE RAINFOREST'S BAND. That audit found
+     * every green in the world sitting between 68 and 134 degrees, which is the
+     * textbook one-mid-green failure. A boreal canopy is the chance to not
+     * repeat it: the conifers sit at 150-165 (blue-green, cold), the birch at
+     * 75-80 (yellow-green, warm) and the larch at 40-45 (gold). Larch is
+     * deciduous and this is winter, so it is the one warm crown in the land and
+     * the thing that makes a bog legible from across a valley.
+     */
+    tint: [0x36514a, 0x2e483f, 0x3f5c55, 0x334e46, 0x294038],
+  },
+  /**
+   * FIR — THE NARROW ONE, AND IT IS NARROW BY `reach` AND `curve` RATHER THAN
+   * BY BEING THE SPRUCE WITH ONE NUMBER CHANGED.
+   *
+   * An Abies holds its branches out FLAT and holds the snow on them, which is
+   * `droop: 0.18` against the spruce's 0.55 — but that alone was never going to
+   * separate two trees at thirty metres, and the first draft said so and shipped
+   * anyway. What actually separates them is the profile: `reach` 0.92 -> 0.10
+   * with `curve: 1.35` pinches hard above the middle, so a fir is a spike with a
+   * short skirt where a spruce is a broad-bottomed cone that weeps. Side by side
+   * the fir is two thirds the width at the same height.
+   */
+  fir: {
+    height: [14, 23],
+    stature: [0.5, 1.0],
+    trunkRadius: 0.21,
+    taper: 0.22,
+    branchStart: 0.16,
+    branches: 65,
+    branchLength: [0.082, 0.102],
+    droop: 0.2,
+    levels: 1,
+    leafPerBranch: 9,
+    leafOnBough: 2,
+    leafSize: [0.75, 1.4],
+    conifer: {
+      rings: 13,
+      per: 5,
+      // A different turn from the spruce's, so the two do not share a banding
+      // rhythm in a stand that contains both.
+      turn: 1.27,
+      top: 0.97,
+      stack: 0.84,
+      lift: [0.05, 0.5],
+      rise: 1.35,
+      reach: [0.92, 0.1],
+      curve: 1.35,
+      /**
+       * A FATTER SLEEVE THAN THE SPRUCE'S, AND IT IS DOING THE SPRUCE'S DROOP'S
+       * JOB. A fir barely weeps, so its whorls cannot close the gap between them
+       * by hanging into it; the only lever left is the depth of the foliage on
+       * each limb. 0.16/0.24 against 0.13/0.20 is what stops a flat-branched
+       * tree reading as a stack of plates.
+       */
+      spray: 0.16,
+      pad: 0.24,
+      from: 0.14,
+      to: 1.06,
+      /**
+       * FULL SPRAY, like the spruce and for a stronger reason: an Abies holds
+       * its needles in two flat ranks either side of the twig, which is the
+       * most comb-like foliage in the table. Its fatter sleeve above and this
+       * are not in tension — the sleeve says how DEEP the spray is, this says
+       * that it is a spray.
+       */
+      comb: 1,
+    },
+    bark: { hue: 26, sat: 11, light: 26 },
+    leaf: { hue: 172, sat: 22, light: 19, needle: true, count: 128, length: 0.22, width: 0.08 },
+    // Greyer and a shade bluer than the spruce. Fir takes the high ground, and
+    // the one thing a distant hillside of it should read as is colder.
+    tint: [0x415a55, 0x39514c, 0x4a635e, 0x3d5651, 0x344b46],
+  },
+  /**
+   * BIRCH — THE ONE THAT IS DELIBERATELY NOT A CONE, AND THE ONE THAT WAS
+   * FIGHTING THE SNOW.
+   *
+   * No `conifer` block: a Betula is a slender hardwood with a fine weeping
+   * crown, and forcing it into the whorled path would delete the variety that is
+   * the entire reason it is on the roster. What it gets instead is `droop: 0.42`
+   * — in the default path that number both drops the launch angle of the upper
+   * boughs and bends them along their length, which on a tree branching at 0.42
+   * of its height is exactly the weep of a silver birch.
+   *
+   * IT IS NO LONGER GREEN, AND THAT IS THE COLOUR FIX THIS LAND NEEDED MOST.
+   * The first draft gave it `hue: 74` at lightness 34 with a 0x9aa86a tint — an
+   * acid yellow-green, the brightest thing in the world after the snow itself,
+   * and photographed from the clearing it is a lime balloon hanging in a winter
+   * wood. It was also simply wrong: this is a land under snow, and a birch in
+   * winter is bare. So the crown becomes what a bare birch crown IS at any
+   * distance you can see one — a fine purple-brown haze of twigs with the last
+   * dead leaves in it. `count` 66 -> 150 at a third the leaf length is what
+   * draws a haze rather than a foliage mass, and it costs nothing: it is the
+   * free lever, drawn on the canvas.
+   *
+   * The white bole is untouched. It was always the best thing here and it is the
+   * only pale vertical in the land.
+   */
+  birch: {
+    height: [12, 20],
+    stature: [0.5, 1.05],
+    trunkRadius: 0.19,
+    taper: 0.4,
+    branchStart: 0.42,
+    branches: 13,
+    branchLength: [0.18, 0.36],
+    /**
+     * 0.2 -> 0.55, AND IN THE DEFAULT PATH THAT NUMBER DOES TWO THINGS AT ONCE
+     * — which is a defect everywhere else in this file and is precisely right
+     * here. It drops the launch angle of the upper boughs (from +12° at the
+     * first fork to -20° at the top) AND bends each one down along its own
+     * length, and on a tree that branches at 0.42 of its height the two
+     * together are the weep of a Betula pendula. The conifers had to be taken
+     * off this coupling to get a cone; the birch is the one species that wants
+     * it.
+     */
+    droop: 0.55,
+    levels: 3,
+    // Many small cards rather than few large ones, for the same reason `count`
+    // went up: a winter birch crown is a HAZE, and a haze is a lot of small
+    // marks. 750-odd cards at 0.72 m is 389 m² against the conifers' 510 — this
+    // is the densest-LOOKING and second-cheapest crown in the land.
+    leafPerBranch: 10,
+    leafOnBough: 4,
+    leafSize: [0.5, 0.95],
+    /**
+     * The clothed-limb placement without the whorls — see the `sleeve` note at
+     * the terminal `hang`. A birch twig is the shortest branch in this file
+     * (levels 3 takes a 5 m primary down to about 1.2 m), which is exactly the
+     * length at which `hang`'s fixed 0.4 m pad turns a spray into a floating
+     * ball, and the winter crown this species now wants is a HAZE — it cannot
+     * be made of detached lumps at any tint.
+     */
+    sleeve: { spray: 0.2, pad: 0.16, from: 0.26, to: 1.08 },
+    // NEARLY WHITE, and it is the point of this entry. It is the only pale
+    // vertical in the land and the only thing that is not dark green.
+    bark: { hue: 40, sat: 6, light: 72 },
+    leaf: { hue: 26, sat: 24, light: 22, count: 170, length: 0.12, width: 0.34 },
+    // Greyed mauve-brown. Brighter than the conifers, which is right — a birch
+    // stand is the light patch in a spruce wood — and warm rather than green,
+    // so it sits with the snow instead of shouting over it.
+    tint: [0x6e6154, 0x7a6b5c, 0x655849, 0x736354, 0x5d5245],
+  },
+  /**
+   * LARCH — THE SEE-THROUGH ONE.
+   *
+   * Nine whorls of FOUR against the spruce's twelve of five, which is 36
+   * branches against 60, and 252 cards against 600. That sparseness is the
+   * species: a Larix has a famously open crown you can see the sky through, and
+   * it is the one place in this file where thin foliage is the correct answer
+   * rather than the bug the whole canopy pass was about. It is also, not
+   * coincidentally, the cheapest tree in the land, which is what pays for the
+   * spruce being the plurality of the wood.
+   */
+  larch: {
+    height: [13, 22],
+    stature: [0.45, 1.0],
+    trunkRadius: 0.2,
+    taper: 0.26,
+    branchStart: 0.2,
+    branches: 44,
+    branchLength: [0.1, 0.14],
+    droop: 0.78,
+    levels: 1,
+    leafPerBranch: 7,
+    leafOnBough: 2,
+    leafSize: [0.7, 1.25],
+    conifer: {
+      rings: 11,
+      per: 4,
+      turn: 0.9,
+      top: 0.95,
+      stack: 0.88,
+      lift: [-0.1, 0.4],
+      rise: 1.4,
+      reach: [1.0, 0.2],
+      curve: 1.0,
+      // A wider spray than the conifers': larch needles come in rosettes on
+      // short spurs all down the limb rather than in a flat comb, so the sleeve
+      // is fatter and looser.
+      spray: 0.17,
+      pad: 0.2,
+      from: 0.18,
+      to: 1.08,
+      /**
+       * HALF A SPRAY, and the same sentence as the comment above decides it: a
+       * larch's needles are rosettes on short spurs all round the limb, not a
+       * flat comb, so it wants the branch-aligned frame (the cards should still
+       * belong to the wood they hang on) with most of the roll left free. 0.45
+       * puts the roll jitter at ±113° instead of the spruce's ±31°; the juniper
+       * below is looser still at ±143°.
+       */
+      comb: 0.45,
+    },
+    bark: { hue: 18, sat: 20, light: 24 },
+    // GOLD. A larch is deciduous and this is a winter wood, so it is bare-gold
+    // rather than green — the one warm crown in the canopy and the thing that
+    // makes a bog legible from across a valley. Pulled well down from the first
+    // draft's 46% saturation at lightness 38: that was a neon tree, and against
+    // snow the whole point of the warm crown is that it is the only warm thing,
+    // not that it is the brightest.
+    leaf: { hue: 38, sat: 34, light: 30, needle: true, count: 100, length: 0.2, width: 0.07 },
+    tint: [0x8f7742, 0x9c8449, 0x846d3c, 0x977f45, 0x7c6738],
+  },
+  /**
+   * JUNIPER — A COLUMN, NOT A SPIRE.
+   *
+   * `lift: [0.35, 0.95]` is the whole entry: every branch ascends, the bottom
+   * ones only a little less than the top, so the outline is a parallel-sided
+   * bush rather than a cone. That is what a Juniperus communis is, and it is
+   * also the shape this land needs at 2-12 m — a cone tapering to nothing at
+   * head height would open the very sightline the taiga dropped six card layers
+   * from and has to buy back somewhere.
+   */
+  juniper: {
+    height: [4, 8],
+    trunkRadius: 0.16,
+    taper: 0.4,
+    branchStart: 0.08,
+    branches: 40,
+    branchLength: [0.22, 0.3],
+    droop: 0.1,
+    levels: 1,
+    leafPerBranch: 9,
+    leafOnBough: 3,
+    leafSize: [0.5, 0.95],
+    conifer: {
+      rings: 10,
+      per: 4,
+      turn: 1.4,
+      top: 0.96,
+      lift: [0.35, 0.95],
+      rise: 1.0,
+      // Barely a taper. `curve` under 1 keeps the column full to the top.
+      reach: [0.9, 0.55],
+      curve: 0.8,
+      spray: 0.2,
+      pad: 0.18,
+      from: 0.1,
+      to: 1.05,
+      /**
+       * BARELY A SPRAY. Juniper carries scale foliage in dense sprigs all round
+       * the shoot, and the thing this species exists to do is stop a sightline
+       * at knee-to-shoulder height — a flattened sleeve is a THINNER mass from
+       * above, which is the one direction that matters for a column. 0.25 keeps
+       * the cards attached to their own limb and leaves the volume alone.
+       */
+      comb: 0.25,
+    },
+    bark: { hue: 24, sat: 18, light: 22 },
+    leaf: { hue: 178, sat: 20, light: 17, needle: true, count: 112, length: 0.18, width: 0.08 },
+    // The darkest thing in the land, which is what a juniper is and what the
+    // knee-to-shoulder band wants: a black mass against snow reads as solid at
+    // any distance, and solid is what stops a sightline.
+    tint: [0x314641, 0x2a3e39, 0x3a504b, 0x2e433e, 0x263a35],
+  },
 };
 
-export const SPECIES_NAMES = Object.keys(SPECIES);
+/**
+ * THE NAME LIST LEFT THIS FILE, AND THE VALUE IT EXPORTS IS UNCHANGED.
+ *
+ * It is `./species-names.js` now — strings only, no imports, no side effects —
+ * and it is re-exported from here so that every existing importer is untouched.
+ * The one thing that needed it and could not have it was `land-identity.mjs`,
+ * the pure-node gate: importing this file pulls in `textures.js`, which draws
+ * on a `<canvas>` at module scope, and node has no canvas. See that file's
+ * header for what a stale hard-coded copy of this list actually cost.
+ *
+ * THE ASSERTION IS THE POINT OF DOING IT THIS WAY. Two lists that must agree
+ * and are edited in different files is a stale-comment problem with a compiler
+ * that does not care, so it is checked on evaluation instead: one `join` over
+ * ten short strings, once per realm, which is unmeasurable. It warns rather
+ * than throws because a boot failure here would be a blank page, and this is a
+ * developer mistake rather than a player-reachable state.
+ */
+const _keys = Object.keys(SPECIES);
+if (_keys.join(',') !== SPECIES_NAMES.join(',')) {
+  console.warn(
+    `[trees] species-names.js is stale: SPECIES is [${_keys}] but the list says [${SPECIES_NAMES}]. ` +
+      'Append the new row to src/world/species-names.js — order is load-bearing, see its header.'
+  );
+}
+export { SPECIES_NAMES };
 
 /**
  * Sweep a polyline into a tapered tube.
@@ -1096,12 +1547,30 @@ function sweep(
  * different discriminator FIRST.
  */
 
-/** One leaf card, with normals pointing away from the cluster centre. */
-function leafCard(centre, position, size, tilt, flexValue, phase) {
+/**
+ * One leaf card, with normals pointing away from the cluster centre.
+ *
+ * `frame` IS AN ALTERNATIVE TO `tilt`, NOT AN ADDITION TO IT, and it exists
+ * because a conifer spray is a statement about a PLANE and three Euler angles
+ * cannot express one. The requirement is "this quad's plane contains the bough
+ * axis"; the Euler order here is Ry·Rx·Rz applied to the vertex, and the family
+ * of rotations that puts a given direction in the quad's plane and then rolls
+ * about it is `R0·Ry(s)`, which is not in that family for any (x, y, z). So a
+ * caller that has built the basis it wants hands over the quaternion and this
+ * uses it instead. See the spray block in `hang`.
+ *
+ * Nothing else changes: `tilt` is still the path every broadleaf takes, to the
+ * radian, and the normals are overwritten below either way.
+ */
+function leafCard(centre, position, size, tilt, flexValue, phase, frame = null) {
   const geo = new THREE.PlaneGeometry(size, size);
-  geo.rotateZ(tilt.z);
-  geo.rotateX(tilt.x);
-  geo.rotateY(tilt.y);
+  if (frame) {
+    geo.applyQuaternion(frame);
+  } else {
+    geo.rotateZ(tilt.z);
+    geo.rotateX(tilt.x);
+    geo.rotateY(tilt.y);
+  }
   geo.translate(position.x, position.y, position.z);
 
   const pos = geo.attributes.position;
@@ -1147,8 +1616,60 @@ function leafCard(centre, position, size, tilt, flexValue, phase) {
  * through anything that absorbs: fast. A linear ramp puts the half-dark contour
  * halfway out of the crown, which is much further out than the eye expects a
  * shadow to start, and reads as dirt on the tree rather than as depth in it.
+ *
+ *
+ * ==== AND IT WAS DEEPENED FOR THE RAINFOREST: 0.3 -> 0.42, SQUARED -> CUBED ==
+ *
+ * THIS IS THE CANOPY'S ONLY SELF-SHADOWING AND IT IS NOT ALLOWED TO BE A REAL
+ * ONE. The canopy leaf material is `receivesShadow: false` (see makeLeafMaterial
+ * below) and must stay that way: leaves are 47% of the frame at 1.45 ms per
+ * million triangles, and a shadow-map fetch on the single most expensive layer
+ * in the game is the most costly place in the world to put one. `aCore` is the
+ * substitute — a procedural crown-occlusion term that costs one multiply on a
+ * value the vertex stage already carries — so when the brief asks for deeper
+ * crowns, this attribute is where the depth has to come from.
+ *
+ * A REAL RAINFOREST CROWN IS THREE TO FIVE LEAF LAYERS DEEP. It is a near-black
+ * volume with a lit rind, and the light that gets into the middle of it has
+ * been through several leaves to get there. The old ramp gave a card at
+ * mid-radius a factor of 0.64 through `mix(0.52, 1.0, aCore)` in living.js;
+ * that is a shaded tree, not a solid one.
+ *
+ *   r (ellipsoidal radius)      0.55   0.65   0.80   0.90   1.00
+ *   0.30, squared  (before)     0.13   0.25   0.51   0.74   1.00
+ *   0.30, cubed    (exponent)   0.05   0.13   0.36   0.63   1.00
+ *   0.42, squared  (bound)      0.05   0.16   0.43   0.69   1.00
+ *   0.42, cubed    (here)       0.01   0.06   0.28   0.57   1.00
+ *
+ * Through that mix, a mid-crown card goes from 0.64 to 0.55 of its light and a
+ * three-quarter card from 0.76 to 0.65, with the rim untouched at 1.0 — the
+ * rind stays exactly as bright and everything behind it drops away from it. The
+ * rim is the fixed point of both changes, by construction: `t` is 1 at r = 1
+ * whatever the inner bound, and 1 cubed is 1.
+ *
+ * WHY HALF FROM EACH LEVER RATHER THAN ALL OF IT FROM ONE. The table is the
+ * argument, and it is not the one that was expected: across the middle of the
+ * range the two levers are very nearly interchangeable, and either alone lands
+ * about halfway to where this wanted to be. Where they differ is the ends, and
+ * both ends are a failure mode. Pushing the INNER BOUND alone toward 0.55 walks
+ * it into the shell the cards actually occupy, at which point a large fraction
+ * of the canopy is pinned at 0 and the term stops discriminating — that is the
+ * "whole tree dimmed by a constant" failure the ellipsoidal norm above exists
+ * to fix, wearing a different hat. Pushing the EXPONENT alone to a fourth or
+ * fifth power crushes the deep interior to nothing while still leaving the
+ * outer shell, which are the two cards you least and most want moved. Taking
+ * half of the depth from each keeps both levers in the part of their range
+ * where they behave.
+ *
+ * 0.42 IS BOUNDED BY THE SHELL, AND THAT IS WHY IT IS NOT HIGHER. Cards hang on
+ * branch tips and boughs, so they cluster in a shell; push the inner bound out
+ * far enough and it passes THROUGH the shell, at which point a large fraction
+ * of the canopy is pinned at 0 and the term stops discriminating — it becomes
+ * the constant dimming again, just applied to more of the tree. 0.42 keeps the
+ * bound inside the empty middle. Anything past about 0.5 wants the measured
+ * distribution of `r` in front of it first, and nothing has measured that.
  */
-const CORE_INNER = 0.3;
+const CORE_INNER = 0.42;
 
 function normaliseCore(geometry, centre) {
   const pos = geometry.attributes.position;
@@ -1166,7 +1687,7 @@ function normaliseCore(geometry, centre) {
     const h = Math.hypot(pos.getX(i) - centre.x, pos.getZ(i) - centre.z) / maxH;
     const v = Math.abs(pos.getY(i) - centre.y) / maxV;
     const t = clamp01((Math.hypot(h, v) - CORE_INNER) / (1 - CORE_INNER));
-    core[i] = t * t;
+    core[i] = t * t * t;
   }
   geometry.setAttribute('aCore', new THREE.BufferAttribute(core, 1));
   return geometry;
@@ -1650,29 +2171,146 @@ export function growTree(seed, speciesName) {
   }
 
   // ---- branches -----------------------------------------------------------
-  const farStride = Math.max(1, Math.round(spec.branches / FAR_BRANCHES));
+  /**
+   * ==== `conifer`: THE THREE THINGS THAT MAKE A CONE, AND WHY THE DEFAULT ===
+   * ==== PATH COULD NOT PRODUCE ONE =========================================
+   *
+   * The taiga shipped with spruce, fir and larch grown by the loop below, and
+   * the report on them was "bare deciduous trees with sparse green leaf clumps".
+   * That was not a tuning failure. Three properties of the default path are each
+   * individually fatal to a conifer silhouette, and two of them run BACKWARDS:
+   *
+   *   THE BRANCH ANGLE FALLS WITH HEIGHT. `up = (1 - t) * 0.35 + 0.18 -
+   *   droop * t` is largest at the FOOT of the crown and smallest at the top: on
+   *   the old spruce the lowest bough left the trunk 21° above horizontal and
+   *   the topmost left it 24° BELOW. That is an inverted cone — a vase — and it
+   *   is the shape of an oak. A conifer is the exact opposite: the leader's
+   *   whorl ascends at 30-45° and the skirt is horizontal or below it. Nothing
+   *   in `droop` can fix that, because `droop` moves both ends together.
+   *
+   *   THE LENGTH BARELY TAPERS, AND THE RANDOM SPREAD SWAMPS WHAT TAPER THERE
+   *   IS. `(1 - t * 0.45)` takes 45% off over the whole trunk while
+   *   `branchLength: [0.1, 0.24]` is a 2.4x per-branch draw — so a branch near
+   *   the top was routinely LONGER than one near the bottom, and measured on the
+   *   old archetype the crown ran 3.3 m half-width at the skirt against 1.9 m at
+   *   the leader over 19 m of trunk. A 4° cone is a column. `reach` here is a
+   *   graded profile with a tight per-branch wobble instead, which is the whole
+   *   of "branch length as a function of height up the trunk".
+   *
+   *   THE FOLIAGE IS A CLOUD OF BLOBS, NOT A CLOTHED LIMB. The terminal `hang`
+   *   throws its cards into a box of `b.len * 0.35 + 0.4` about a uniformly
+   *   random point on the bough — on a 3.5 m spruce limb that is seven cards
+   *   scattered through a 2 m cloud, i.e. visible gaps of naked wood with
+   *   detached green balls floating off the ends. Photographed from underneath
+   *   it is unmistakable and it is most of "sparse leaf clumps". `spray`, `pad`
+   *   and the stratified `along` below put the same number of cards in a
+   *   continuous sleeve down the limb, which costs exactly nothing — it is the
+   *   same card count and the same rasterised area, differently placed.
+   *
+   * AND WHORLS. Golden-angle phyllotaxis is right for a broadleaf and wrong
+   * here: a conifer's branches come in rings a fixed distance apart with a bare
+   * internode between them, and that regular banding is a large part of what the
+   * eye uses to name the tree at forty metres.
+   *
+   * IT IS OPT-IN BY PRESENCE, which is the same contract `buttress`, `stilts`,
+   * `lianas` and `clump` already have in this file, and it is load-bearing here
+   * rather than tidy: the five rainforest species must take the identical code
+   * path and the identical sequence of `rng()` draws they took before, or the
+   * other land's canopy moves. A row without a `conifer` block is grown by the
+   * `else` below, which is the old loop verbatim.
+   *
+   * IT IS ALSO CHEAPER. Whorls plus `levels: 1` replace 26 primaries and their
+   * ~65 second-level children with 60 primaries and no children — fewer swept
+   * tubes for a far denser-looking tree — and the card count is held. Measured
+   * on the spruce archetype: 7926 trunk triangles and 514 cards before, 5000-odd
+   * and 480 after.
+   */
+  const con = spec.conifer;
+  const nBranches = con ? con.rings * con.per : spec.branches;
+  const farStride = Math.max(1, Math.round(nBranches / FAR_BRANCHES));
   const queue = [];
   // `branchLow` slides where the crown starts by up to nine per cent of the
   // tree, which on a cecropia is a metre and a half of bare pole gained or
   // lost. Clamped off zero so a species whose whole character is a clean bole
   // cannot accidentally sprout one at the ground.
   const branchStart = clamp01(spec.branchStart + branchLow);
-  for (let i = 0; i < spec.branches; i++) {
-    const t = branchStart + (1 - branchStart) * Math.pow(i / spec.branches, 0.82);
-    const jitter = rngRange(rng, -0.03, 0.03);
-    const origin = pointOnTrunk(t + jitter);
-    // Golden-angle phyllotaxis around the trunk, so branches never line up.
-    const angle = i * 2.39996 + rngRange(rng, -0.35, 0.35);
-    const up = (1 - t) * 0.35 + 0.18 - spec.droop * t;
+  for (let i = 0; i < nBranches; i++) {
+    let t;
+    let angle;
+    let len;
+    let up;
+    let sizeScale;
+    // Where the bough MEETS the bole, which on the default path is jittered off
+    // `t` while everything derived from height is not. Kept separate so the
+    // deciduous species take the arithmetic they always took, to the bit.
+    let originT;
+    if (con) {
+      const ring = Math.floor(i / con.per);
+      const k = i - ring * con.per;
+      // 0 at the lowest whorl, 1 at the topmost. `top` leaves a bare leader
+      // above the last ring — a spruce ends in a spike, not in a bunch.
+      const u = con.rings > 1 ? ring / (con.rings - 1) : 0;
+      /**
+       * `stack` under 1 crowds the whorls toward the TOP of the crown, which is
+       * where they need to be: the internode is a fixed fraction of the trunk
+       * but the foliage sleeve shrinks with the branch, so an evenly spaced
+       * ladder goes visibly gappy above the middle while the skirt — long,
+       * drooping, overlapping — closes itself with room to spare.
+       */
+      t = clamp01(
+        branchStart +
+          ((con.top ?? 0.94) - branchStart) * Math.pow(u, con.stack ?? 1) +
+          rngRange(rng, -0.008, 0.008)
+      );
+      originT = t;
+      /**
+       * Even spacing round the ring, and every ring turned by `turn` from the
+       * one below. Two whorls at the same phase stack their branches into
+       * vertical columns and the tree reads as a bottle brush; an irrational
+       * fraction of a turn never repeats. The ±0.16 keeps it from being a
+       * machined object without letting a branch wander into its neighbour.
+       */
+      angle = ring * con.turn + (k / con.per) * TAU + rngRange(rng, -0.16, 0.16);
+      /**
+       * THE CONE. `reach` is the branch length as a fraction of what
+       * `branchLength` asks for, at the skirt and at the leader; `curve` above 1
+       * keeps the lower crown full and pinches the top, which is the profile of
+       * a Picea rather than the straight-sided triangle of a child's drawing.
+       */
+      const grade =
+        con.reach[0] + (con.reach[1] - con.reach[0]) * Math.pow(u, con.curve ?? 1);
+      len = height * rngRange(rng, spec.branchLength[0], spec.branchLength[1]) * grade;
+      // The leaf cards come down with the branch, for the reason `leafScale`
+      // gives above: a 1.4 m cluster on a 30 cm twig at the top of the spire is
+      // a blob sitting where the point should be.
+      sizeScale = 0.62 + 0.38 * grade;
+      /**
+       * `lift` is the branch angle at the skirt and at the leader, and it is the
+       * one number that decides whether this is a conifer or a hardwood. Note
+       * the low end is at or below zero: a spruce's bottom whorl leaves the
+       * trunk level and the DROOP along its length (below) takes the tip down.
+       * A negative starting angle plus droop is a dead branch on the ground.
+       */
+      up = con.lift[0] + (con.lift[1] - con.lift[0]) * Math.pow(u, con.rise ?? 1.5);
+    } else {
+      t = branchStart + (1 - branchStart) * Math.pow(i / spec.branches, 0.82);
+      const jitter = rngRange(rng, -0.03, 0.03);
+      originT = t + jitter;
+      // Golden-angle phyllotaxis around the trunk, so branches never line up.
+      angle = i * 2.39996 + rngRange(rng, -0.35, 0.35);
+      up = (1 - t) * 0.35 + 0.18 - spec.droop * t;
+      len = height * rngRange(rng, spec.branchLength[0], spec.branchLength[1]) * (1 - t * 0.45);
+    }
+    const origin = pointOnTrunk(originT);
     const dir = new THREE.Vector3(Math.cos(angle), up, Math.sin(angle)).normalize();
-    const len = height * rngRange(rng, spec.branchLength[0], spec.branchLength[1]) * (1 - t * 0.45);
     queue.push({
       origin,
       dir,
       len,
       radius: spec.trunkRadius * (1 - t) * 0.42 + 0.02,
       depth: 0,
-      flexFrom: Math.pow(t, 2.4) * 0.55,
+      flexFrom: Math.pow(clamp01(t), 2.4) * 0.55,
+      sizeScale,
       // Which bough this is, so the far version can keep a fixed subset of
       // them. The queue below appends children, so an index is the only stable
       // way to ask "is this one of the trunk's own boughs, and which".
@@ -1796,33 +2434,145 @@ export function growTree(seed, speciesName) {
      * branch, which is how the canopy gets an outer shell of cards past the last
      * ring of wood — the silhouette of a tree is foliage, not twigs.
      */
-    const hang = (howMany, alongLo, alongHi, spread, sizeScale, flexAt) => {
+    /**
+     * `pad` and `even` are the conifer's two changes here, and neither of them
+     * costs a card, a triangle or an `rng()` draw — the same foliage, put
+     * somewhere else.
+     *
+     * `pad` is the part of the scatter box that does NOT scale with the bough.
+     * At the default 0.4 m it dominates on anything short, so the 30 cm branches
+     * at the top of a spire get a 0.8 m ball of cards hung on them and the point
+     * of the cone is a blob. A conifer passes a small pad, so the tuft shrinks
+     * with the branch and the tree keeps its apex.
+     *
+     * `even` strides `along` through the bough in equal steps with a jitter
+     * inside each step, instead of drawing it uniformly at random. Eight
+     * independent uniforms over a 2 m limb leave gaps of bare wood a third of a
+     * metre wide about half the time — visible, and exactly the "sparse clumps"
+     * complaint. One draw either way.
+     */
+    /**
+     * ==== `comb`: THE THIRD CONIFER CHANGE, AND THE ONE ABOUT SILHOUETTE ===
+     *
+     * The report on the taiga spruces was that they read as tubes of green
+     * flakes tumbled at random around a stick, and the record already said the
+     * silhouettes were a first draft. `pad` and `even` above fixed WHERE the
+     * cards are along the limb; this fixes what they are a limb OF. Two halves,
+     * and neither costs a card, a triangle or an `rng()` draw:
+     *
+     *   (a) THE PLANE OF EVERY QUAD NOW CONTAINS THE BRANCH AXIS. The tilt was
+     *   three independent uniforms, so a card had no relationship whatever to
+     *   the wood it was hanging on — which is exactly what "flakes tumbled
+     *   around a stick" describes. A real conifer branch carries a flat SPRAY:
+     *   the needles lie in a plane through the limb, held roughly horizontal.
+     *   So the frame is built from the bough's own direction — local Y along
+     *   the limb, local X the horizontal perpendicular to it, so the quad's
+     *   plane is the horizontal plane through the branch — and the three draws
+     *   that used to be x/y/z Euler become a roll about the limb, a small pitch
+     *   off the spray plane, and a full spin WITHIN the plane, which changes
+     *   nothing about the plane and is free variety in the card's own texture.
+     *
+     *   THIS IS FREE OF LIGHTING CONSEQUENCES, which is why it is worth doing
+     *   at all. `leafCard` overwrites every normal to point out of the cluster
+     *   centre, so a card's orientation has never decided how it is lit — only
+     *   what shape it cuts against the sky. Which is the thing that was wrong.
+     *
+     *   (b) THE SCATTER BOX WAS ISOTROPIC AND IS NOW A DISC. `(0.9, 0.7, 0.9)`
+     *   is a ball, so the sleeve round a limb was a cylinder. Squashing the
+     *   vertical hard and widening the two horizontals turns the sleeve into a
+     *   flattened disc round the limb — together with (a), that is the whole
+     *   difference between a ball RADIUS and a comb WIDTH.
+     *
+     * `comb` is 0..1 and grades between the old behaviour and the full spray,
+     * because two of the four conifers do not want a flat comb: the larch's
+     * needles come in rosettes on short spurs all down the limb and the juniper
+     * is a column of scale foliage, and both say so in their own rows. At
+     * `comb: 0` — every broadleaf, and the birch's `sleeve` — this is the
+     * old code to the radian.
+     *
+     * THE DRAW COUNT IS IDENTICAL EITHER WAY: one for `along`, three for the
+     * box, one for the size, three for the orientation. That is not tidiness.
+     * The archetypes are grown from one stream in one order and every instance
+     * scattered afterwards is placed from a different one, but the ARCHETYPE
+     * geometry is what `bounds` is measured from and what the impostor atlas is
+     * baked from; a fourth draw here would reseed every tree after this species
+     * in the build and move the whole wood for a silhouette change.
+     */
+    const hang = (
+      howMany,
+      alongLo,
+      alongHi,
+      spread,
+      sizeScale,
+      flexAt,
+      pad = 0.4,
+      even = false,
+      comb = 0
+    ) => {
+      /**
+       * The spray frame, built once per bough rather than once per card: `b.dir`
+       * does not change inside this loop. `b.dir` is the STRAIGHT direction of
+       * the limb rather than the bent, drooped path the sweep actually took —
+       * the right choice, because a spray is a property of the whole branch and
+       * following the local tangent would fan the cards along the droop.
+       */
+      let frameQ = null;
+      let localQ = null;
+      let localE = null;
+      if (comb > 0) {
+        const ey = b.dir.clone().normalize();
+        const ex = new THREE.Vector3(0, 1, 0).cross(ey);
+        // A leader points straight up, and then "the horizontal perpendicular"
+        // is undefined. Any horizontal will do; the roll jitter covers it.
+        if (ex.lengthSq() < 1e-6) ex.set(1, 0, 0);
+        else ex.normalize();
+        const ez = ex.clone().cross(ey);
+        frameQ = new THREE.Quaternion().setFromRotationMatrix(
+          new THREE.Matrix4().makeBasis(ex, ey, ez)
+        );
+        localQ = new THREE.Quaternion();
+        localE = new THREE.Euler();
+      }
+      /**
+       * Lerped rather than switched, so `comb` is a dial. The vertical goes
+       * 0.7 -> 0.16 (a quarter of it) and the horizontals 0.9 -> 1.35, which
+       * keeps the sleeve's cross-sectional AREA about where it was — the same
+       * cards in the same volume of air, reshaped.
+       */
+      const bx = 0.9 + comb * 0.45;
+      const by = 0.7 - comb * 0.54;
+      /** How far a card may roll off the spray plane about the limb itself. */
+      const roll = Math.PI - comb * (Math.PI - 0.55);
       for (let l = 0; l < howMany; l++) {
-        const along = rngRange(rng, alongLo, alongHi);
+        const along = even
+          ? alongLo + ((alongHi - alongLo) * (l + rng())) / howMany
+          : rngRange(rng, alongLo, alongHi);
         const pos = b.origin
           .clone()
           .addScaledVector(b.dir, b.len * along)
           .add(
             new THREE.Vector3(
-              rngRange(rng, -0.9, 0.9),
-              rngRange(rng, -0.7, 0.7),
-              rngRange(rng, -0.9, 0.9)
-            ).multiplyScalar(b.len * spread + 0.4)
+              rngRange(rng, -bx, bx),
+              rngRange(rng, -by, by),
+              rngRange(rng, -bx, bx)
+            ).multiplyScalar(b.len * spread + pad)
           );
         pos.y -= droop * b.len * along * along;
         pos.x += bendX(along) - bendX(0);
         pos.z += bendZ(along) - bendZ(0);
         const size = rngRange(rng, spec.leafSize[0], spec.leafSize[1]) * leafScale * sizeScale;
-        leafParts.push(
-          leafCard(
-            canopyCentre,
-            pos,
-            size,
-            { x: rngRange(rng, -1.4, 1.4), y: rng() * TAU, z: rngRange(rng, -1.4, 1.4) },
-            flexAt(along),
-            phase
-          )
-        );
+        let frame = null;
+        let tilt = null;
+        if (comb > 0) {
+          // Three draws, in the same slots as the three Euler angles they
+          // replace: roll about the limb, pitch off the spray, spin in-plane.
+          localE.set(rngRange(rng, -0.3, 0.3), rngRange(rng, -roll, roll), rng() * TAU);
+          localQ.setFromEuler(localE);
+          frame = frameQ.clone().multiply(localQ);
+        } else {
+          tilt = { x: rngRange(rng, -1.4, 1.4), y: rng() * TAU, z: rngRange(rng, -1.4, 1.4) };
+        }
+        leafParts.push(leafCard(canopyCentre, pos, size, tilt, flexAt(along), phase, frame));
       }
     };
 
@@ -1881,6 +2631,43 @@ export function growTree(seed, speciesName) {
         // The bough's own flex ramp, plus a little: a leaf hanging off a limb
         // whips further than the limb does.
         (along) => Math.min(1, b.flexFrom + (1 - b.flexFrom) * Math.pow(clamp01(along), 1.5) + 0.15)
+      );
+    } else if (con ? b.depth === 0 : spec.sleeve) {
+      /**
+       * A CLOTHED LIMB. Foliage from a fifth of the way out — a conifer's
+       * needles start close to the bole — to just past the tip, in even strides,
+       * in a sleeve whose radius follows the branch.
+       *
+       * `b.depth === 0` on a conifer, so one that is ever given `levels: 2`
+       * still hangs its children the ordinary way instead of silently taking
+       * these numbers on a bough a third the length.
+       *
+       * `sleeve` IS THE SAME PLACEMENT WITHOUT THE WHORLS, and it exists because
+       * the birch needed exactly half of this change. The scattered-blob problem
+       * is not a conifer problem — it is what `hang`'s uniform `along` and its
+       * fixed 0.4 m pad do to ANY branch under about four metres — but whorled
+       * rings are wrong on a broadleaf, so the two had to come apart. A row with
+       * `sleeve` and no `conifer` keeps golden-angle branching and gets clothed
+       * limbs; the rainforest has neither field and is untouched by both.
+       */
+      const sl = con ?? spec.sleeve;
+      hang(
+        b.leafCount ?? spec.leafPerBranch,
+        sl.from ?? 0.18,
+        sl.to ?? 1.06,
+        sl.spray ?? 0.1,
+        b.sizeScale ?? 1,
+        (along) => 0.72 + 0.28 * clamp01(along),
+        sl.pad ?? 0.12,
+        true,
+        /**
+         * The spray, conifers only. `spec.sleeve` — the birch — has no `comb`
+         * key and gets 0, i.e. exactly the code it had: a weeping hardwood's
+         * foliage is not a flat comb and the whole reason `sleeve` was split
+         * out of `conifer` was that the birch wanted half of that change and
+         * not the other half. See the `comb` block in `hang`.
+         */
+        con ? (con.comb ?? 0) : 0
       );
     } else {
       // Terminal branch: hang the bulk of the foliage here.
@@ -2693,6 +3480,45 @@ function makeLeafMaterial(leafTex) {
        * nothing in the canopy frame clips, because the transmission is added
        * to reflectedLight and therefore goes through tone mapping, while this
        * is modulated by the map's own texel.
+       *
+       *
+       * ==== 0.72 -> 0.40, BECAUSE THE FLOOR STAYED PUT AND THE ROOM DROPPED ==
+       *
+       * NOTHING IS WRONG WITH THE ARGUMENT ABOVE. What changed is the light it
+       * was fitted in. The rainforest re-cut in atmosphere.js took 73% off the
+       * shade — see THE FOUR INTENSITIES there — and this constant is an
+       * ADDITIVE floor that no light multiplies, so it did not come down with
+       * it. `totalEmissiveRadiance *= rrMapTexel.rgb` and the diffuse term is
+       * `irradiance * rrMapTexel.rgb`, so the texel cancels and the whole
+       * question is one ratio: this colour's luminance times its intensity,
+       * over the irradiance arriving at the card.
+       *
+       * On the cards that matter — a downward-facing leaf inside a crown, which
+       * sees the hemisphere's GROUND colour and the ambient and nothing else:
+       *
+       *     irradiance   0.1457 * hemi + 0.1475 * ambient
+       *     before       0.1457 * 1.25 + 0.1475 * 0.55 = 0.263
+       *     after        0.1457 * 0.34 + 0.1475 * 0.13 = 0.069
+       *
+       *     emissive (0x17260f linear luminance 0.01603, times intensity)
+       *     at 0.72      0.01154  ->  4.4% of the light before, 17% after
+       *     at 0.40      0.00641  ->                            9.3% after
+       *
+       * Seventeen per cent of the darkest place in the wood coming from a
+       * constant is the crown depth this pass exists to build, deleted by the
+       * one term in the material that cannot be shadowed. Holding the ratio
+       * exactly would mean 0.19, and that is further than the measurement above
+       * will carry: 0.3 was rendered and read as degraded. 0.40 is the
+       * compromise and it is a deliberate half-measure.
+       *
+       * AND THE SILHOUETTE IT DEFENDS IS BETTER OFF THAN THIS SUGGESTS. The
+       * failure mode is a backlit crown against the sky, and neither the sky
+       * nor the sun got dimmer in the re-cut — the sun went UP, 2.5 to 3.3. The
+       * Barre-Brisebois transmission lobe below is driven by the sun, so the
+       * exact frames this floor was protecting gained 32% of the term that is
+       * the physical version of it. The floor gives up 44% where the highlight
+       * gains 32%, on the same pixels. That trade was available only because
+       * the re-cut raised the key rather than only lowering the fill.
        */
       emissive: new THREE.Color(0x17260f),
       /**
@@ -2710,9 +3536,28 @@ function makeLeafMaterial(leafTex) {
        * uniform on the JS side (`WebGLMaterials` multiplies the colour by it),
        * not into the map path.
        */
-      emissiveIntensity: 0.72,
+      emissiveIntensity: 0.4,
     }),
     'plant',
+    /**
+     * `receivesShadow: false` IS A PERFORMANCE DECISION AND IT IS NOT UP FOR
+     * REVIEW WITHOUT A MEASUREMENT.
+     *
+     * The obvious way to give a rainforest crown its 3-5 layers of self-shadow
+     * is to let the leaves receive the shadow map. Leaves are 47% of the frame
+     * — 2.76 ms of 4.97 at the deep station, 1.45 ms per million triangles —
+     * so a shadow-map fetch here is a per-pixel tap on the most expensive layer
+     * in the game, and the frame has no budget: Ultra is at 5.12 ms standing
+     * against a 4.17 ms target for 240 fps.
+     *
+     * The substitute is `aCore`, deepened in `normaliseCore` above to carry
+     * more of this than it used to. It is one multiply on an interpolated
+     * attribute and it gets the shape of the effect — dark interior, lit rind —
+     * without the tap. What it cannot get is the DIRECTION: a real map would
+     * put the dark on the side away from the sun and move it as the sun moves,
+     * and this puts it in the middle wherever the sun is. That is the honest
+     * limitation, and it is worth the millisecond it saves.
+     */
     { leaf: true, emissiveFromMap: true, receivesShadow: false }
   );
 }

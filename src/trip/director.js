@@ -503,6 +503,27 @@ export class Director {
     return this.state.phase;
   }
 
+  /**
+   * The ego-death envelope, 0..1, faded exactly as the shaders see it.
+   *
+   * `state.dissolve` is a raised cosine over one phase and zero everywhere else
+   * (see `dissolveAt`); `this.fade` is the same damped gate `_update` multiplies
+   * it by before writing `uDissolve`, so a grounded trip releases the world and
+   * the animals together instead of leaving a herd frozen after the visuals have
+   * gone. Exposed because `fauna.js` consumes it as an ABSOLUTE OVERRIDE rather
+   * than as a second intensity — above 0.5 nothing in the wood leaves and every
+   * animal faces you, and on the frame it falls back through the whole herd goes
+   * at once. See HOLD_LEVEL in that file for the argument.
+   *
+   * NOT gated on `this.switches.world`. That switch turns off the world SHADER
+   * for the debug panel, and an animal's mind is not a shader; a person
+   * measuring the trip's fill cost with the world uniforms off should still get
+   * a wood that behaves like one.
+   */
+  get dissolve() {
+    return clamp01(this.state.dissolve) * this.fade;
+  }
+
   eat(seed) {
     if (this.state.active) this.state.redose();
     else this.state.begin(seed ?? `trip-${Math.floor(Math.random() * 1e9)}`);
@@ -511,7 +532,29 @@ export class Director {
   }
 
   ground() {
-    if (!this.state.active && this.state.override === null) return false;
+    /**
+     * THE AFTERGLOW GOES FIRST, AND UNCONDITIONALLY.
+     *
+     * The early return below is right about the trip: there is nothing to end
+     * if nothing is running, and returning false is what lets `N` fall through
+     * to whatever else wants it. It was wrong about the afterglow, which
+     * OUTLIVES the trip by up to eighteen minutes — so pressing `N` a minute
+     * after coming down did nothing at all, and the field's own comment says
+     * "an escape hatch that leaves a residue is not an escape hatch".
+     *
+     * Measured before the fix: at the peak, `N` gives active false and after 0,
+     * which was always correct. Sixty seconds after a natural end it gave after
+     * 0.985 — i.e. the one moment somebody is most likely to press it, because
+     * it is the only moment they can still see something and be unsure whether
+     * it is really there.
+     *
+     * `end(false)` would do this too, but only by way of resetting a trip that
+     * has already reset; this says what it means and cannot be broken by a
+     * future change to `end`.
+     */
+    const hadGlow = this.state.after > 0;
+    this.state.after = 0;
+    if (!this.state.active && this.state.override === null) return hadGlow;
     this.state.end();
     this.audio?.end();
     return true;
@@ -594,8 +637,47 @@ export class Director {
     this.fade = damp(this.fade, target > 0.001 ? 1 : 0, 0.05, dt);
     const L = clamp01(this.eased);
     const dissolve = clamp01(state.dissolve) * this.fade;
+    /**
+     * ---- the settle --------------------------------------------------------
+     *
+     * The comedown's own curve. See settleAt in state.js for what it is and why
+     * the comedown needed one; the three things it is spent on are the fog
+     * (further down, in _updateAtmosphere), the melt and the view breath and
+     * the camera (all damped by 1 - settle below), and a bird chorus overshoot
+     * in ambience.js. `* this.fade` for the same reason the dissolve has it:
+     * grounding yourself has to take this with it rather than leaving the wood
+     * unnaturally clear for the next twenty seconds.
+     */
+    const settle = clamp01(state.settle) * this.fade;
+    /**
+     * ---- the afterglow -----------------------------------------------------
+     *
+     * `state.after` is 1 the moment a trip reaches its own end and decays with
+     * a 360 s time constant; the N key sets it to zero outright. 0.055 is what
+     * a full afterglow is worth in level units — about a fifteenth of the peak,
+     * which is below the level at which anything in this project is legible as
+     * an effect and is exactly the point. You cannot tell whether it is really
+     * there or whether you are still looking differently.
+     *
+     * THE FLOOR IS APPLIED PER FAMILY, HERE, RATHER THAN TO THE EASED LEVEL.
+     * `G` goes into the four gentle families and nowhere else — saturation,
+     * warmth, emergent detail and the self-luminous light, plus the ground's
+     * lushness, which reads it through uAfter in the shader. uFlow, uBreathAmp,
+     * uLean, uHills, uViewWarp, the whole camera family, the pipeline's trail
+     * and the jukebox detune all keep reading `L` and are therefore at exactly
+     * zero: the wood is solid, nothing is breathing, and the greens are still
+     * a little too deep.
+     *
+     * The choice of which families is the whole design and it is not arbitrary:
+     * an afterglow is what is left when the STRANGENESS has gone and only the
+     * looking is different. Anything that moves is strangeness.
+     */
+    const after = this.switches.world ? clamp01(state.after) : 0;
+    const AFTER_FLOOR = 0.055;
+    const G = Math.max(L, after * AFTER_FLOOR);
 
     tripUniforms.uLevel.value = this.switches.world ? L : 0;
+    tripUniforms.uAfter.value = after * AFTER_FLOOR;
     tripUniforms.uDissolve.value = this.switches.world ? dissolve : 0;
 
     /**
@@ -657,22 +739,47 @@ export class Director {
      * zero intensity on a curve that is steep at the bottom, and the flow and
      * the organising follow it in.
      */
+    /**
+     * ---- AND THE SURGE GETS A FRONT ----------------------------------------
+     *
+     * Five of the six families a surge rides on are also written with a
+     * COMPANION uniform carrying the surge's coefficient on its own, so the
+     * shader can decide how much of the wave has reached each piece of world.
+     * See rrSurgeAt in living.js for the wave and the uniform block there for
+     * why the split is written as a deficit — the five uniforms below still
+     * carry exactly what they carried before, so nothing outside living.js
+     * needs to know this happened.
+     *
+     * THE TRAIL AND THE BLOOM LIFT ARE NOT IN THIS LIST, AND THAT IS A RULE
+     * RATHER THAN AN OVERSIGHT. Both are in the output pass, and both are
+     * properties of an EYE: a pupil that will not close and a smear left by a
+     * retina, not something happening to a tree. Glare must not acquire a
+     * location, because the moment it does it is a bright patch sitting in one
+     * part of the frame, which is the screen-locked artefact this whole layer
+     * exists to avoid. It is the same argument the view breath is allowed
+     * under, run the other way.
+     */
     const morph = (this.switches.morph ? 1 : 0) * this.gain.morph;
     tripUniforms.uSwell.value = MAX_SWELL * (Math.pow(L, 0.7) + SURGE_SWELL * surge) * morph;
+    tripUniforms.uSwellSurge.value = MAX_SWELL * SURGE_SWELL * morph;
     tripUniforms.uCreep.value = MAX_CREEP * clamp01((L - 0.1) / 0.9) * morph;
-    tripUniforms.uDetail.value = MAX_DETAIL * Math.pow(L, 0.8) * morph;
+    tripUniforms.uDetail.value = MAX_DETAIL * Math.pow(G, 0.8) * morph;
     // The canopy pulse rides the breath, so the wave crossing the wood and the
     // trunks swelling underneath it are one event rather than two.
     tripUniforms.uPulse.value =
       MAX_PULSE *
       (clamp01((L - 0.08) / 0.92) * (0.6 + 0.4 * state.breath) + SURGE_PULSE * surge) *
       morph;
+    tripUniforms.uPulseSurge.value = MAX_PULSE * SURGE_PULSE * morph;
 
     const colour = (this.switches.colour ? 1 : 0) * this.gain.colour;
     tripUniforms.uGlow.value =
-      MAX_GLOW * (Math.pow(L, 1.35) + SURGE_GLOW * surge) * this.gain.glow * (colour > 0 ? 1 : 0);
-    tripUniforms.uWarmth.value = MAX_WARMTH * L * colour;
-    tripUniforms.uSat.value = MAX_SAT * (L + SURGE_SAT * surge) * colour;
+      MAX_GLOW * (Math.pow(G, 1.35) + SURGE_GLOW * surge) * this.gain.glow * (colour > 0 ? 1 : 0);
+    tripUniforms.uGlowSurge.value =
+      MAX_GLOW * SURGE_GLOW * this.gain.glow * (colour > 0 ? 1 : 0);
+    tripUniforms.uWarmth.value = MAX_WARMTH * G * colour;
+    tripUniforms.uSat.value = MAX_SAT * (G + SURGE_SAT * surge) * colour;
+    tripUniforms.uSatSurge.value = MAX_SAT * SURGE_SAT * colour;
     /**
      * The contour arrives with the rest of the peak rather than with the
      * come-up. An outline on everything at 20% is the effect that most readily
@@ -695,11 +802,17 @@ export class Director {
      * the colour family off still switches the rim off outright and this cannot
      * resurrect it.
      */
+    const unedge = 1 - clamp01(this.ego.unedge * ego);
     tripUniforms.uRim.value =
       MAX_RIM *
       (Math.pow(clamp01((L - 0.25) / 0.75), 1.5) + SURGE_RIM * surge) *
       colour *
-      (1 - clamp01(this.ego.unedge * ego));
+      unedge;
+    // The companion carries every factor uRim carries EXCEPT the surge itself,
+    // including the ego-death subtraction — otherwise a wave arriving during
+    // ego death would restore the outlines the dissolve is taking away, at the
+    // one moment in the trip where that would read as the effect breaking.
+    tripUniforms.uRimSurge.value = MAX_RIM * SURGE_RIM * colour * unedge;
 
     /**
      * Melt arrives late and the wake later still.
@@ -709,9 +822,20 @@ export class Director {
      * intensity just looks like a bug in the renderer, because there is not
      * enough of anything else happening to explain it.
      */
+    /**
+     * AND IT LEAVES FIRST, WHICH IS WHAT MAKES THE COMEDOWN A PHASE.
+     *
+     * `1 - settle` is a raised cosine over the last phase, so at t = 263 the
+     * melt is off entirely while the level is still around 0.5 and the colour
+     * is still most of the way up. That ordering is the reported shape of a
+     * comedown and it is the opposite of what a single envelope can express:
+     * the strangeness goes and the beauty stays. The same factor is on the view
+     * breath below and on the camera, so what stops is everything that MOVES,
+     * in one gesture, several minutes before the trip ends.
+     */
     const meltCurve = clamp01((L - 0.2) / 0.8);
     tripUniforms.uFlow.value = this.switches.melt
-      ? MAX_FLOW * (Math.pow(meltCurve, 1.4) + SURGE_FLOW * surge) * this.gain.melt
+      ? MAX_FLOW * (Math.pow(meltCurve, 1.4) + SURGE_FLOW * surge) * this.gain.melt * (1 - settle)
       : 0;
 
     /**
@@ -741,6 +865,7 @@ export class Director {
       MAX_VIEW_WARP *
       (Math.pow(clamp01((L - 0.35) / 0.65), 1.3) + SURGE_VIEW * surge) *
       view *
+      (1 - settle) *
       (VIEW_MOVING_FLOOR + (1 - VIEW_MOVING_FLOOR) * this._stillness);
 
     // ---- the pass ----------------------------------------------------------
@@ -755,10 +880,14 @@ export class Director {
     this._updateGaze(dt, camera, L * morph);
 
     // ---- light and air -----------------------------------------------------
-    this._updateAtmosphere(dt, L, dissolve, surge);
+    this._updateAtmosphere(dt, L, dissolve, surge, settle);
 
     // ---- the camera --------------------------------------------------------
-    if (this.switches.camera) this._updateCamera(dt, camera, L, dissolve, state);
+    // The camera family takes the same (1 - settle) the melt and the view
+    // breath do, so the picture stops moving as one thing rather than in three
+    // stages. The dissolve's own contribution to the fov is passed separately
+    // and is untouched — settle is zero everywhere the dissolve is not.
+    if (this.switches.camera) this._updateCamera(dt, camera, L * (1 - settle), dissolve, state);
     else {
       camera.fov = this._baseFov;
       camera.updateProjectionMatrix();
@@ -789,6 +918,14 @@ export class Director {
         intensity: L,
         dissolve,
         breath: state.breath,
+        /**
+         * The afterglow, raw, for the reverb only — trip-audio holds a tenth of
+         * its hall on the same decay the visuals are on, so the wood keeps a
+         * little more space in it than it should for a few minutes. It is the
+         * one audible thing that survives the end of a trip, and it is the one
+         * that survives longest in the reports.
+         */
+        after: clamp01(state.after),
         phase: state.phase.id,
         /**
          * The same attack detector the shaders read for their flicker — see
@@ -818,7 +955,7 @@ export class Director {
        * the comedown uses, which is also what a debug switch should have done
        * from the start.
        */
-      this.audio.update(dt, { intensity: 0, dissolve: 0, breath: state.breath, phase: '', transient: 0 });
+      this.audio.update(dt, { intensity: 0, dissolve: 0, breath: state.breath, after: 0, phase: '', transient: 0 });
     }
 
     /**
@@ -912,7 +1049,7 @@ export class Director {
     tripUniforms.uDwell.value = clamp01(this._dwell) * clamp01(amount);
   }
 
-  _updateAtmosphere(dt, L, dissolve, surge = 0) {
+  _updateAtmosphere(dt, L, dissolve, surge = 0, settle = 0) {
     const atmos = this.atmosphere;
     if (!atmos) return;
     const base = atmos.base;
@@ -1001,12 +1138,38 @@ export class Director {
      * closes again. Opening the depth of a forest is the largest single change
      * available to this function.
      */
+    /**
+     * AND THE COMEDOWN TAKES IT BELOW SOBER, WHICH NOTHING ELSE HERE DOES.
+     *
+     * Every other term in this product THICKENS the air — that is what the come
+     * up, the plateau and the peak all do to it, and it is why the surge thins
+     * it: going the other way is the only direction left that reads as an event.
+     * The comedown gets the same move at a slower rate and takes it further,
+     * past the density the wood has when you are sober, which is a thing no
+     * amount of intensity can be mistaken for. The far ridge resolves, the light
+     * reaches further into the wood than it has all day, and you stand there for
+     * a minute feeling like the forest is pleased with you.
+     *
+     * 22% IS SIZED AGAINST THE LEVEL TERM IT HAS TO OVERCOME, and the sums are
+     * worth writing down because the two curves overlap. Taking the breath wave
+     * at its mean, the product relative to sober runs 1.43 at the start of the
+     * comedown, 0.95 at t = 263, a minimum of 0.92 at t = 268, and back to 1.00
+     * at the end; at the trough of the breath wave the minimum is 0.83. So the
+     * air is at its clearest about half a minute after the melt has stopped,
+     * which is exactly where the clarity is supposed to land — after the
+     * strangeness and before the end.
+     *
+     * WHAT THIS CAN COST: impostors fade against the fog, so thinning it below
+     * sober can pop a distant one into existence. See the risks in the report
+     * that landed this.
+     */
     const breathe = Math.sin(clock * 0.14) * 0.5 + 0.5;
     const density =
       base.fogDensity *
       (1 + L * (0.12 + breathe * 0.62)) *
       (1 - surge * 0.32) *
-      (1 - dissolve * 0.55);
+      (1 - dissolve * 0.55) *
+      (1 - settle * 0.22);
     if (atmos.fog) atmos.fog.density = density;
 
     atmos.skyUniforms.uTop.value.copy(base.skyTop);
@@ -1115,6 +1278,9 @@ export class Director {
       level: this.eased,
       raw: s.level,
       dissolve: s.dissolve,
+      /** The comedown's curve and the afterglow, for the debug panel's readout. */
+      settle: s.settle,
+      after: s.after,
       surge: this.surge ?? 0,
       doses: s.doses,
       active: s.active || s.override !== null,

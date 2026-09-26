@@ -306,7 +306,19 @@ const posed = await waitFor(
     (await ev(b, () => {
       const id = window.RR.net.peers[0]?.id;
       const g = window.RR.scene.getObjectByName(`avatar:${id}`);
-      return g ? (g.children[0]?.parent?.position.y ?? 0) : 0;
+      /**
+       * `g.children[0]` IS THE ROOT, AND `.parent` WAS THE GROUP.
+       *
+       * This read `g.children[0].parent.position.y`, which is `g` — the outer
+       * group — whose y is the avatar's WORLD HEIGHT. That is the terrain under
+       * whichever seat the test picked, so the assertion was passing or failing
+       * on the elevation of a bench rather than on whether anybody sat on it:
+       * green while the chosen seat happened to stand below -0.2 m, red the day
+       * the site plan moved it uphill, and never once a statement about the
+       * pose. `root.position.y` is `lerp(bob, -0.44, sit)`, which is the number
+       * the comment above has always claimed to be testing.
+       */
+      return g ? (g.children[0]?.position.y ?? 0) : 0;
     })) < -0.2,
   6000,
   'the seated pose'

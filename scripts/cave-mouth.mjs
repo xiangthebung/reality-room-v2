@@ -28,6 +28,26 @@ import { caveReady } from './_cave-ready.mjs';
  * the mound and a probe that trusted it would fail a fixed build for ever.
  *
  *   node scripts/cave-mouth.mjs [--seed=grove-01] [--caves=2] [--rings=70]
+ *                              [--max-breach=0]
+ *
+ * …AND FOR ITS WHOLE LIFE IT ONLY GATED ON ONE OF THEM.
+ *
+ * Read the paragraph above and then read the last line of this file as it was:
+ * `process.exit(totalLit > 0 ? 1 : 0)`. BREACH was counted, accumulated into
+ * `totalGone`, printed with its own banner in capitals — and `totalGone` was
+ * never once read again. The script says in its own header that the two
+ * failures are each other's cure and that the breach is "the worse of the two
+ * to look at", and it failed on the mound and passed on the hole.
+ *
+ * That is the most dangerous shape a gate can have, because the untested
+ * direction is exactly the direction a fix for the tested one pushes. Every
+ * over-eager attempt at deleting the mound trades blocked rings for breached
+ * ones, and this would have gone green for all of them.
+ *
+ * Zero by default because a breach is a hole in a mountain with the sky behind
+ * it — there is no tolerable number of those — and `--max-breach` exists only so
+ * that a build already carrying some can be measured against a moving baseline
+ * rather than being unmeasurable.
  */
 
 const args = Object.fromEntries(
@@ -42,6 +62,8 @@ const CAVES = Number(args.caves ?? 2);
 const RINGS = Number(args.rings ?? 70);
 /** How far above the floor counts as standing in the way, in metres. */
 const TOL = Number(args.tol ?? 0.35);
+/** Rings allowed to have no ground drawn where the hill clears the roof. */
+const MAX_BREACH = Number(args['max-breach'] ?? 0);
 
 setWorldSeed(SEED);
 const near = cavesNear(0, 0, 900);
@@ -67,6 +89,8 @@ await page.waitForTimeout(2000);
 let totalLit = 0;
 let totalGone = 0;
 let worst = 0;
+/** Mouths that actually reported. Zero is a failure, not a quiet pass. */
+let probed = 0;
 for (const c of near.slice(0, CAVES)) {
   await page.evaluate(
     (s) => {
@@ -216,6 +240,7 @@ for (const c of near.slice(0, CAVES)) {
     console.log(`k=${c.k} not built`);
     continue;
   }
+  probed++;
   const blind = report.blind;
   const bad = report.rows.filter((r) => r.inCount > 0);
   const lit = bad.filter((r) => r.along < blind);
@@ -247,4 +272,18 @@ await browser.close();
 console.log(
   `\n${totalLit} lit rings have the height field standing inside the passage; worst +${worst.toFixed(2)} m`
 );
-process.exit(totalLit > 0 ? 1 : 0);
+console.log(
+  `${totalGone} rings are BREACHED — no ground drawn where the hillside stands clear of the roof ` +
+    `(bar: ${MAX_BREACH})`
+);
+const fails = [];
+if (totalLit > 0) fails.push(`${totalLit} lit rings blocked by the height field`);
+if (totalGone > MAX_BREACH) fails.push(`${totalGone} breached rings, over the ${MAX_BREACH} bar`);
+if (!probed) fails.push('no cave mouth reported at all — nothing was measured');
+if (fails.length) {
+  console.log(`\nFAIL cave-mouth`);
+  for (const f of fails) console.log(`  ${f}`);
+  process.exit(1);
+}
+console.log(`\nPASS cave-mouth  ${probed} mouth${probed === 1 ? '' : 's'} measured`);
+process.exit(0);

@@ -6,16 +6,57 @@ import { SPEAKER_STAND_HEIGHT, buildSpeakers } from './world/speakers.js';
 import { aimGround } from './world/aim.js';
 import { buildFauna } from './world/fauna.js';
 import { buildShoal } from './world/shoal.js';
-import { groundUnder, setWorldSeed, streamPointNear, wetness } from './world/terrain.js';
+import { buildRipples, ripple } from './world/ripples.js';
+import { cavesNear, groundUnder, setWorldSeed, streamPointNear, wetness } from './world/terrain.js';
 import { buildCaves, caveFloorUnder, caveWarmupObjects } from './world/caves.js';
 import { videoWarmupObjects } from './world/video-surface.js';
 import { CaveAudio, pinkBuffer as caveNoise } from './audio/cave.js';
 import { buildGathering } from './world/gathering.js';
+import { spawnLook } from './world/sites.js';
+/**
+ * WHERE THINGS ARE, FOR THE LINE THAT SAYS SO WHEN YOU ARRIVE.
+ *
+ * Both are free at the moment `arrivalLine()` runs. `sitePlan()` memoises on
+ * the world seed and has already been computed hundreds of thousands of times
+ * over — `scatter.js` asks it for every candidate in every streamed sector —
+ * and `bareSeed` is a string slice. Nothing here builds anything: the arrival
+ * line is a READING of a world that was decided before anybody clicked.
+ */
+import { enteredPlace, sitePlan } from './world/sites.js';
+/**
+ * WHETHER A PLACE IS ALLOWED TO SAY ITS OWN NAME.
+ *
+ * Pinned under `navigator.webdriver` the way `dayPhase` and the weather are,
+ * and for the same reason rather than a different one: the toast fires on the
+ * frame the body crosses into one of nine places, a shot script that teleports
+ * a camera to the commons crosses into it, and every stored screenshot taken at
+ * a fire or a landing would gain a line of HUD text at once. It is not a
+ * time-varying global, so the pinning rule does not strictly require this — it
+ * is a cheaper insurance policy than re-capturing the shots.
+ *
+ * `?places=1` opts back in, so a script that wants to PHOTOGRAPH the feature
+ * can, which is the lesson of `probes-that-cannot-hear-the-real-thing`: a probe
+ * that cannot reach the thing it is measuring reports zero and sounds
+ * confident.
+ */
+const PLACE_NAMES =
+  typeof navigator === 'undefined' ||
+  !navigator.webdriver ||
+  new URLSearchParams(location.search).has('places');
+import { bareSeed } from './world/lands/index.js';
 import { buildFerry } from './world/ferry.js';
 import { SeatRegistry, Sitting } from './player/seats.js';
 import { Fishing } from './player/fishing.js';
+import { PlayerBody } from './player/body.js';
 import { Social } from './ui/social.js';
-import { FAUNA_MS, FLAG_BITE, FLAG_FISHING, FLAG_SITTING } from './net/protocol.js';
+import {
+  FAUNA_MS,
+  FLAG_BITE,
+  FLAG_FISHING,
+  FLAG_POINTING,
+  FLAG_SITTING,
+  FLAG_WAVING,
+} from './net/protocol.js';
 import { Controller } from './player/controller.js';
 import { Pipeline } from './render/pipeline.js';
 import { Director, EGO_DEFAULT } from './trip/director.js';
@@ -42,7 +83,7 @@ import { pinWorldClock, tickWorldClock, worldClock, worldOrigin } from './core/w
  * there and nowhere else, the same arrangement the settings panel has with
  * `core/quality.js`.
  */
-import { arrivalOrigin, lobbyCode } from './core/identity.js';
+import { arrivalId, arrivalOrigin, lobbyCode } from './core/identity.js';
 /**
  * The clock itself, for the one thing the menu can ask of it. Imported directly
  * rather than through `atmosphere.day`, which exists for test scripts driving
@@ -124,9 +165,16 @@ const FPS_LIMIT_UNCAPPED = 145;
 /**
  * IS THE MENU STILL COVERING THE WORLD? See the draw throttle in frame().
  *
- * `#gate` is an opaque full-page panel — its last background layer is a solid
- * colour, so nothing behind it reaches the screen — and it stays up for as long
- * as somebody takes to read a title, type a name and pick a dye. Underneath it,
+ * `#gate` USED TO BE an opaque full-page panel — its last background layer was
+ * a solid colour, so nothing behind it reached the screen. It is a window now:
+ * the opaque layer is gone and what is left is a vignette over a heavy
+ * backdrop blur, so these frames are the thing the player is actually looking
+ * at while they choose a name. That makes the throttle MORE important rather
+ * than less, not because the frames are wasted but because they are cheap to
+ * make convincing — the camera does not move and the blur is 20px, so nobody
+ * can tell 24 fps from 240. See the ladder at `GATE_DRAW_HZ` below and the
+ * long note above `.gate` in src/style.css. It stays up for as long as
+ * somebody takes to read a title, type a name and pick a dye. Underneath it,
  * this loop was drawing the entire forest at whatever rate the display would
  * accept: measured at 159 draw calls and 12.6M triangles per frame, which is
  * 100% of what the world costs while 0% of it is visible. A player who opens the
@@ -182,6 +230,15 @@ const camera = new THREE.PerspectiveCamera(66, window.innerWidth / window.innerH
 const forest = buildForest(scene, SEED);
 const atmosphere = buildAtmosphere(scene, renderer, SEED);
 /**
+ * Rings on the water, for everything that touches it.
+ *
+ * One draw call, twenty-four quads, no per-frame update — see the header of
+ * ripples.js for why there is no update() to call and why the pool is fixed.
+ * It has to be built before anything can call `ripple()`; before it is, that
+ * function is a documented no-op, which is what a headless build gets.
+ */
+const ripples = buildRipples(scene);
+/**
  * The stereo pair, standing where the machine used to.
  *
  * This is only where they START. The player arranges them with `G` from here on
@@ -190,7 +247,28 @@ const atmosphere = buildAtmosphere(scene, renderer, SEED);
  * arriving to a rig already set up is a better first thirty seconds than
  * arriving to two boxes in a heap.
  */
-const speakers = buildSpeakers(scene, new THREE.Vector3(1.2, 0, -6.0));
+/**
+ * THE SPAWN CORRIDOR DECIDES WHERE THESE STAND NOW.
+ *
+ * There is a trodden way out of the clearing toward the commons (see the paths
+ * block in sites.js), and (1.2, 0, -6.0) was straight down the middle of it on
+ * any seed whose commons happens to lie that way. Two cabinets planted in the
+ * one path every player is guaranteed to walk is the worst possible opening
+ * frame, and it is not fixable by a constant because the corridor's bearing is
+ * seeded. So the 5.2 m is measured along the path's LATERAL — `(sx, sz)` is the
+ * corridor turned a quarter turn, and 5.2 clears the 3.4 m bare half-width plus
+ * most of its rim — and the 5.0 m along it is what keeps the pair ahead of you
+ * rather than beside you, which is what the old -6.0 was doing.
+ */
+const _spawnWay = spawnLook();
+const speakers = buildSpeakers(
+  scene,
+  new THREE.Vector3(
+    _spawnWay.sx * 5.2 + _spawnWay.dx * 5.0,
+    0,
+    _spawnWay.sz * 5.2 + _spawnWay.dz * 5.0
+  )
+);
 /**
  * Everything that is alive but is not a plant.
  *
@@ -285,6 +363,18 @@ const ferry = buildFerry(scene, {
 });
 
 const controller = new Controller(camera, canvas);
+/**
+ * FACE DOWN THE PATH.
+ *
+ * `Controller` spawns at yaw 0, i.e. looking along -Z, which was as good as any
+ * bearing while the wood was homogeneous in every direction. It is not any more:
+ * there is a trodden corridor leaving the clearing toward the commons and a path
+ * is only legible ALONG its own axis — this forest hides everything past forty
+ * metres, so a player who arrives facing across the line never learns there is
+ * one. Here rather than in controller.js so that the player layer does not have
+ * to know the world has gathering places in it.
+ */
+controller.yaw = _spawnWay.yaw;
 const pipeline = new Pipeline(renderer, scene, camera);
 const hud = new Hud();
 
@@ -319,6 +409,13 @@ const net = attachMultiplayer({ scene, camera, controller, audio, hud });
  * whole of what they need and none of what they could break.
  */
 const sitting = new Sitting(controller, seats);
+/**
+ * Scratch for the "who is sitting at which fire" tally below. `seatedBodies`
+ * holds references to live Vector3s rather than copies, so the tally allocates
+ * nothing of its own.
+ */
+const seatedBodies = [];
+let companyTick = 0;
 const fishing = new Fishing({
   scene,
   controller,
@@ -342,6 +439,21 @@ const fishing = new Fishing({
    */
   disturb: (x, z, radius, strength) => shoal.startle(x, z, radius, strength),
 });
+
+/**
+ * …and you, from the inside.
+ *
+ * `new Avatar` had exactly one call site and it was the peer list, so in a game
+ * whose whole subject is being somewhere with other people you were the only
+ * person in the wood who was not present in it. This is two legs, two arms, a
+ * cut-off torso and a painted shadow, standing at `controller.position`.
+ *
+ * The camera is handed over for its FIELD OF VIEW and nothing else — the body
+ * is anchored to the controller, exactly as `fishing.js` anchors the rod and
+ * for the reason its header gives: the trip dollies the camera up to 1.35 m
+ * away from the body, and anything pinned to the camera slides off its owner.
+ */
+const body = new PlayerBody({ scene, controller, camera });
 
 /**
  * The chat, the roster and the share readout.
@@ -602,20 +714,50 @@ quality.register('instanceDensity', (v) => forest.culler.setDensity(v));
  * far out. On a rung with shadows on it is also shadow arithmetic, because a
  * near trunk is the only one of the pair that casts.
  */
+/**
+ * THE TOP ROW LOST ITS ASYMMETRY LAST AND IT WAS ALWAYS THE ONE THAT COULD
+ * AFFORD IT LEAST.
+ *
+ * `[384, { lod: 170, leafReach: 384 }]` was the only row on this table where
+ * the canopy reached as far as the trunks. That is a deliberate-looking choice
+ * and it was not one — it is what "Full" meant before `leafReach` existed, and
+ * the three rows above it were cut one at a time while the top row stayed as it
+ * was found. The consequences were larger than the entry looks: `leafReach ===
+ * reach` also makes `setReach` compute an impostor band of `(384, 384]`, so
+ * Ultra was the single rung in the game with no silhouette band at all, drawing
+ * full 240-516-triangle crowns at 380 m where every other rung drew two
+ * triangles.
+ *
+ * `leafReach` MUST STAY AT OR ABOVE `lod`, and that is a hard rule rather than a
+ * preference. Set it below and `geoReach` clamps up to `lod` while the leaf band
+ * does not, which leaves a ring of BARE BOLES standing between the two — the
+ * exact artifact the impostor band exists to prevent. Every row here satisfies
+ * it, and a new one must too.
+ *
+ * The top row went to `{ lod: 120, leafReach: 160 }` in two steps and the second
+ * step is the one that reads oddly: Ultra and Medium now share a `lod`. That is
+ * because `lod` is not a detail setting, it is where 2160-5940 triangles a tree
+ * hand over to 216-594, and the ring between 120 and 170 m holds enough trees
+ * that the difference was half a millisecond at the deep station. Ultra keeps
+ * 10 m more canopy and 10 m more of the reduced sweep than Medium and nothing
+ * else. See the `treeReach` block in quality.js for the measurements and for
+ * why the 300 m row written for High was taken out again.
+ */
 const REACH_TABLE = new Map([
   [120, { lod: 12, leafReach: 90 }],
   [180, { lod: 90, leafReach: 110 }],
   [250, { lod: 120, leafReach: 150 }],
-  [384, { lod: 170, leafReach: 384 }],
+  [384, { lod: 120, leafReach: 160 }],
 ]);
 
 let treeReach = 384;
 let shadowsOn = true;
 
 /**
- * `alwaysNear` IS SHADOW ARITHMETIC, SO IT FOLLOWS THE SHADOW SWITCH.
+ * `alwaysNear` IS SHADOW ARITHMETIC, SO IT FOLLOWS THE SHADOW SWITCH — AND THE
+ * SHADOW BOX, WHICH IS WHY IT IS 61 AND NOT 82.
  *
- * 82 m is 58 m of shadow half-extent plus 6 m of anchor trail plus ~15 m of
+ * 61 m is 40 m of shadow half-extent plus 6 m of anchor trail plus ~15 m of
  * canopy lean, and inside it a bucket skips the frustum test entirely — a tree
  * behind your head must still exist or its shadow vanishes off the ground in
  * front of you as you turn. With the shadow map off there is no shadow to
@@ -630,7 +772,7 @@ let shadowsOn = true;
  */
 function applyReach() {
   const { lod, leafReach } = REACH_TABLE.get(treeReach) ?? REACH_TABLE.get(384);
-  forest.setReach(lod, treeReach, { leafReach, alwaysNear: shadowsOn ? 82 : 0 });
+  forest.setReach(lod, treeReach, { leafReach, alwaysNear: shadowsOn ? 61 : 0 });
 }
 
 quality.register('treeReach', (v) => {
@@ -926,7 +1068,24 @@ function findInteractable() {
 
 function interact() {
   const target = findInteractable();
-  if (!target) return;
+  /**
+   * NOTHING IN REACH IS NOT NOTHING TO DO.
+   *
+   * E already means "do the thing in front of me", and when there is nothing in
+   * front of you the thing in front of you is your hands. Reusing the dead
+   * branch of an existing binding rather than claiming a fourteenth letter is
+   * the whole point: `core/keys.js`, both README control tables and
+   * `scripts/keys-check.mjs` are untouched by this, and there is nothing new for
+   * a player to learn.
+   *
+   * The body raises both shoulders for a couple of seconds and lowers them
+   * again. It is only visible if you are looking down, which is the only
+   * position from which you would have pressed it.
+   */
+  if (!target) {
+    body.lookAtHands();
+    return;
+  }
   switch (target.kind) {
     case 'fish':
       fishing.act();
@@ -1517,7 +1676,52 @@ window.addEventListener('keydown', (e) => {
 // entry
 // ---------------------------------------------------------------------------
 
+/**
+ * How long the arrival line stays up, in ms.
+ *
+ * Nine seconds rather than the 5.2 the old single toast used. It is a name and
+ * three clauses instead of one sentence, and unlike almost anything else the
+ * game says it is worth reading twice — the second reading is the one where you
+ * turn round and look for the thing it named. A toast is dismissed by time and
+ * by nothing else, so this number is a reading speed and not a preference.
+ */
+const ARRIVAL_TOAST_MS = 9000;
+
 const gate = document.getElementById('gate');
+
+/**
+ * THE BUFFERS ARE BUILT WHEN YOU TOUCH THE MENU, NOT WHEN YOU LEAVE IT.
+ *
+ * The AudioContext gesture requirement is satisfied by ANY click, not only the
+ * one on Enter — and `createContext()` does not even need that much: it is
+ * split out of `start()` precisely so the context can exist, and hand over its
+ * sample rate, long before anything is resumed. See its header in
+ * audio/engine.js, which says it is safe to call more than once.
+ *
+ * So the whole of `warmAudioBuffers` — four impulse responses and four noise
+ * beds — moves onto the seconds somebody spends typing a name, where the main
+ * thread is idle and there is nothing on screen that a hitch could spoil. It
+ * used to run during the post-click wait, which is idle too but is the one
+ * stretch of the session the player is being asked to sit through.
+ *
+ * NOT `audio.start()`. Resuming builds the entire bus graph and every module
+ * downstream of it is constructed in a fixed order inside the enter handler; a
+ * partial early start is a rewrite of that ordering for a benefit this already
+ * collects most of. What is deliberately NOT here is the ambience fading up
+ * under the menu, which is the version of this idea worth doing next.
+ */
+let audioWarmed = false;
+function warmAudioEarly() {
+  if (audioWarmed) return;
+  audioWarmed = true;
+  const ctx = audio.createContext();
+  if (ctx) warmAudioBuffers(ctx);
+}
+if (gate) {
+  for (const type of ['pointerdown', 'keydown', 'input']) {
+    gate.addEventListener(type, warmAudioEarly, { capture: true, passive: true, once: true });
+  }
+}
 /**
  * Generate every noise buffer and impulse response the audio graph needs,
  * spread across idle time instead of in one block.
@@ -1566,12 +1770,168 @@ function warmAudioBuffers(ctx) {
   idle(step);
 }
 
-document.getElementById('enter').addEventListener('click', async () => {
-  // Before anything that awaits, while the click's transient activation is
-  // still live.
-  if (!navigator.webdriver) {
-    canvas.requestPointerLock();
+/* ---- the line that says where you have arrived --------------------------- */
+
+/**
+ * WHAT IS NEAR YOU, THE MOMENT YOU ARRIVE.
+ *
+ * There was one toast here — "Somewhere in the trees, a jukebox is playing" —
+ * and it was the only thing the game ever said about the world. It was also
+ * describing the two cabinets eleven metres in front of the spawn camera,
+ * filling the middle of the frame, as "somewhere in the trees".
+ *
+ * NOTHING HERE IS COMPUTED FOR THIS LINE. The site plan is memoised on the
+ * world seed and has been consulted by every scatter candidate in every sector
+ * that has streamed in; `streamPointNear` is a solve against the channel that
+ * `ambience.build` is about to run anyway; `cavesNear` is a slot lookup over a
+ * few dozen integers. This is a reading of a world that was decided before
+ * anybody clicked, which is what makes it affordable on the worst frame in the
+ * session.
+ *
+ * WHY DIRECTIONS AND NOT A MAP. A compass word is the answer to "which way do I
+ * walk", and it is the same arithmetic the `nearest cave` readout in
+ * ui/debug.js uses — quoted rather than shared, because that one formats
+ * initials into a debug row and this one needs a word that reads inside a
+ * sentence. A minimap would be persistent screen-locked chrome, which this
+ * project forbids outright, and a compass rose would be the same thing smaller.
+ *
+ * TWO OR THREE CLAUSES, NEAREST FIRST, and never more. Five facts is a briefing
+ * and gets skimmed; three is a thing you can hold while you turn round and look
+ * for them. The distance is given only for the river, because a river is a LINE
+ * and "60 m east" is the whole instruction, whereas a fire is a point you will
+ * see the glow of once you are pointed at it.
+ */
+const COMPASS = [
+  'north',
+  'north-east',
+  'east',
+  'south-east',
+  'south',
+  'south-west',
+  'west',
+  'north-west',
+];
+
+/** Screen north is -z and the compass runs clockwise from it. See ui/debug.js. */
+function bearingWord(dx, dz) {
+  const deg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  return COMPASS[Math.round(((deg + 360) % 360) / 45) % 8];
+}
+
+/**
+ * The wood's own name, as a title.
+ *
+ * `ash-hollow-4471` is a string you can read down a telephone, and that is what
+ * it is FOR — but it is not a thing you would call a place out loud. The
+ * trailing number is what makes the seed unique and contributes nothing to the
+ * name, so it is dropped and the words are capitalised: "Ash Hollow".
+ *
+ * This is the second job the line does. Printing the wood's name at the moment
+ * of arrival teaches, without a word of instruction, that the string in the
+ * Wood box is a real place with a name that you can keep and come back to —
+ * which is the single most valuable thing the menu knows and the one nothing
+ * ever told anybody.
+ *
+ * `bareSeed` first, so `taiga:fen-mire-3204` is "Fen Mire" and not "Taiga Fen
+ * Mire". An all-digit seed keeps its digits rather than becoming empty, and a
+ * seed with no characters at all falls back to a phrase rather than to nothing.
+ * Capped at 28 characters because a seed may be 64 and a toast may not be.
+ */
+function woodTitle() {
+  const bare = bareSeed(worldSeed());
+  const parts = bare.split(/[-_\s]+/).filter(Boolean);
+  const words = parts.filter((w) => !/^\d+$/.test(w));
+  const source = words.length ? words : parts;
+  if (!source.length) return 'This wood';
+  return source
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+    .slice(0, 28);
+}
+
+function arrivalLine() {
+  const px = controller.position.x;
+  const pz = controller.position.z;
+  /** @type {{d: number, say: string}[]} */
+  const found = [];
+  const offer = (x, z, say) => {
+    const dx = x - px;
+    const dz = z - pz;
+    const d = Math.hypot(dx, dz);
+    // Rounded to ten metres, with a floor, because "the river lies 3 m east"
+    // is a measurement and not a direction — and because a false precision
+    // invites somebody to test it.
+    found.push({ d, say: say(bearingWord(dx, dz), Math.max(10, Math.round(d / 10) * 10)) });
+  };
+
+  const bank = streamPointNear(px, pz);
+  if (bank && Number.isFinite(bank.x)) {
+    offer(bank.x, bank.z, (dir, d) => `The river lies ${d} m ${dir}.`);
   }
+
+  const plan = sitePlan();
+  const nearest = (list) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const s of list ?? []) {
+      const d = Math.hypot(s.x - px, s.z - pz);
+      if (d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return best;
+  };
+
+  const fire = nearest(plan?.hearths);
+  if (fire) offer(fire.x, fire.z, (dir) => `A fire burns ${dir} through the trees.`);
+
+  const high = nearest(plan?.viewpoints);
+  if (high) offer(high.x, high.z, (dir) => `There is high ground ${dir} to look out from.`);
+
+  const landing = nearest(plan?.jetties);
+  if (landing) offer(landing.x, landing.z, (dir) => `A raft calls at a landing ${dir}.`);
+
+  /**
+   * 900 m rather than the 460 m default, because a cave is the one thing on
+   * this list that is worth being told about from a long way off — it is the
+   * only feature you cannot stumble into, and the ridge it is in is visible
+   * from anywhere in the wood. `cavesNear` returns live slots sorted by
+   * distance, so index 0 is the answer.
+   */
+  const cave = cavesNear(px, pz, 900)[0];
+  if (cave) offer(cave.x, cave.z, (dir) => `Something is open in the ridge to the ${dir}.`);
+
+  found.sort((a, b) => a.d - b.d);
+  return `<b>${woodTitle()}.</b> ${found.slice(0, 3).map((f) => f.say).join(' ')}`.trim();
+}
+
+/**
+ * ONE ENTRY PER SESSION, EVER.
+ *
+ * There was no guard at all, and the button gave no sign of having been
+ * pressed for the two-and-a-half to four seconds that follow. So the obvious
+ * thing an impatient person does — click it again — re-ran the whole handler:
+ * `net.openRoom` a second time, a second pre-warm racing the first for the
+ * renderer's state, and a second `audio.createContext()`. It is a module-level
+ * flag rather than a check on `disabled`, because `disabled` is a statement
+ * about the DOM and this is a statement about the handler.
+ */
+let entering = false;
+
+document.getElementById('enter').addEventListener('click', async () => {
+  if (entering) return;
+  entering = true;
+  /**
+   * THE FIRST OF THREE STAGES, NAMED HONESTLY.
+   *
+   * Every label below is the name of a real await that follows it — the ground
+   * ring settling, the shader programs linking, the last frames being drawn.
+   * Nothing here is a fake stage inserted to make a bar move, which matters
+   * because the bar is real too: the settle poll already knows how many sectors
+   * are outstanding.
+   */
+  hud.entering('Letting the ground arrive…', 0);
 
   /**
    * FULL RATE FROM HERE, WHICH IS EARLIER THAN THE GATE ACTUALLY LIFTS.
@@ -1604,9 +1964,24 @@ document.getElementById('enter').addEventListener('click', async () => {
    * applied on the way in — inside the click, while it is still a user gesture,
    * because opening a room writes the clipboard.
    *
-   * Both are no-ops on a bare click, which is what keeps the thirty scripts in
-   * scripts/ that click `#enter` on a fresh profile measuring exactly what they
-   * measured before: nothing has chosen an hour, and nothing has chosen a room.
+   * The room is a no-op on a bare click — nothing has chosen one — and the hour
+   * is a no-op under automation, which between them is what keeps the thirty
+   * scripts in scripts/ that click `#enter` on a fresh profile measuring
+   * exactly what they measured before.
+   *
+   * THE HOUR IS NO LONGER A NO-OP FOR A PERSON, and that is deliberate: a fresh
+   * profile now defaults to `morning` rather than to `whenever`, because
+   * `whenever` is a uniform random hour and roughly two first-ever players in
+   * five were landing in a pitch-dark wood. See `FIRST_ARRIVAL` in
+   * core/identity.js for why that default is not written to storage. Scripts
+   * are untouched regardless: `dayPhase` returns AUTHORED_PHASE whenever
+   * `navigator.webdriver` is set, whatever origin this sets.
+   *
+   * By the time this runs the origin has almost certainly already been applied
+   * — the frame loop applies the menu's current choice on every heartbeat so
+   * the sky behind the panel is the hour you picked. This is idempotent and is
+   * kept as the authoritative application, not as the only one. See
+   * `applyArrivalPreview`.
    */
   {
     /**
@@ -1628,8 +2003,21 @@ document.getElementById('enter').addEventListener('click', async () => {
      * the sun and eased the sky hundreds of times. The first frame anybody sees
      * is already the hour they asked for.
      */
-    const origin = arrivalOrigin(Date.now(), dayScale(), CYCLE_SECONDS);
-    if (origin !== null) setDayOrigin(origin);
+    /**
+     * NOT IF SOMEBODY ELSE IS ALREADY IN THE ROOM.
+     *
+     * An invite link autojoins during module evaluation, so by the time this
+     * runs the room's `welcome` has very likely already called `setDayOrigin`
+     * with the room's own hour — and a guest who once picked dusk stomping that
+     * is precisely the "two people in one wood at two hours" failure that path
+     * exists to prevent. Someone OPENING a lobby is still `off` here, because
+     * `net.openRoom` is called a few lines below rather than above, so their
+     * chosen hour is theirs and rides out on the socket's `dayAge` thunk.
+     */
+    if (net.status === 'off') {
+      const origin = arrivalOrigin(Date.now(), dayScale(), CYCLE_SECONDS);
+      if (origin !== null) setDayOrigin(origin);
+    }
 
     /**
      * The room, if one was chosen and the URL did not already deal with it.
@@ -1646,8 +2034,11 @@ document.getElementById('enter').addEventListener('click', async () => {
   // below, so its sample rate can drive the noise/impulse generation while
   // that wait gives the main thread room to do it without a hitch. See
   // `warmAudioBuffers`.
-  const audioCtx = audio.createContext();
-  if (audioCtx) warmAudioBuffers(audioCtx);
+  // Almost always already done — the first touch of any menu control creates
+  // the context and warms every buffer. See `warmAudioEarly`. Kept here because
+  // it is idempotent and because a synthetic click straight onto `#enter`, which
+  // is how every script in scripts/ enters, may not have touched anything else.
+  warmAudioEarly();
 
   /**
    * Warm every shader program BEFORE the gate comes down.
@@ -1709,6 +2100,23 @@ document.getElementById('enter').addEventListener('click', async () => {
      * non-empty and quiet for three consecutive frames covers both.
      */
     let quiet = 0;
+    /**
+     * THE BAR IS DRIVEN BY SECTORS, WHICH IS WHY IT IS A BAR AND NOT A SPINNER.
+     *
+     * `pending` is the number of sectors the two rings still owe, and it RISES
+     * as `cull()` queues more — so `1 - pending/peak` is a fraction of the
+     * largest backlog seen rather than of a known total, and it can want to go
+     * backwards. `shown` is a ratchet, because a bar that retreats is worse
+     * than one that pauses: it reads as the machine losing ground.
+     *
+     * The elapsed term is not padding. This stage has a hard 6 s bound below,
+     * so time-since-start really is a lower bound on progress toward the thing
+     * resolving, and taking the max of the two means a worker that never
+     * answers still shows a bar creeping to the timeout instead of a bar stuck
+     * at 4%.
+     */
+    let peak = 0;
+    let shown = 0;
     const poll = () => {
       const ground = forest.groundField;
       const trees = forest.field;
@@ -1726,6 +2134,16 @@ document.getElementById('enter').addEventListener('click', async () => {
         trees.pending === 0 &&
         trees.built > 0;
       quiet = settled ? quiet + 1 : 0;
+
+      const pending = ground.pending + trees.pending;
+      if (pending > peak) peak = pending;
+      const bySector = peak > 0 ? 1 - pending / peak : 0;
+      const byClock = (performance.now() - started) / 6000;
+      shown = Math.max(shown, Math.min(1, bySector, 1), Math.min(byClock, 1));
+      // The settle is the first of three stages and is given the first half of
+      // the track; the two compile passes below take it the rest of the way.
+      hud.entering(null, shown * 0.5);
+
       // Bounded for the same reason the compile below is: a worker that never
       // answers must cost a colder forest, not a game that will not start.
       // 6 s rather than 4 — the first fill is ~76 sectors across two grids.
@@ -1779,6 +2197,8 @@ document.getElementById('enter').addEventListener('click', async () => {
    * is three's compiled-program cache, which is keyed on the shader source
    * rather than on the material instance.
    */
+  hud.entering('Warming the light…', 0.55);
+
   const warm = new THREE.Scene();
   for (const o of [...caveWarmupObjects(), ...videoWarmupObjects()]) warm.add(o);
 
@@ -1933,6 +2353,8 @@ document.getElementById('enter').addEventListener('click', async () => {
    * to 67 ms with one program compiled on the frame, which is the variant pass
    * one had built and pass two had thrown away.
    */
+  hud.entering(null, 0.82);
+
   for (const enterVariant of [
     () => {
       renderer.shadowMap.enabled = false;
@@ -1960,6 +2382,36 @@ document.getElementById('enter').addEventListener('click', async () => {
 
   renderer.setRenderTarget(null);
   for (const o of warm.children) o.geometry?.dispose();
+
+  hud.entering('Almost.', 1);
+
+  /**
+   * THE CURSOR GOES AT THE LAST POSSIBLE MOMENT, NOT THE FIRST.
+   *
+   * This used to be the first statement in the handler, taken while the click's
+   * transient activation was unambiguously live. That is correct by the letter
+   * of the API and it is most of what made the wait feel like a crash: the
+   * pointer vanished instantly and then nothing on the screen changed for three
+   * seconds, so the one moving thing the player still had — their own cursor —
+   * was taken away before the thing replacing it existed.
+   *
+   * Here it lands within a frame of the gate beginning to fade, which is the
+   * moment there is a world to look at. THE COST IS THAT THIS IS NO LONGER
+   * INSIDE A TRANSIENTLY-ACTIVE TASK and a browser is entitled to refuse.
+   * Chromium grants it on sticky activation; Firefox and Safari are UNVERIFIED
+   * — I could not run this. The refusal is survivable rather than fatal, and
+   * that is the only reason it is written this way round: `Controller._bind`
+   * already requests the lock on any click on the canvas, so the worst case is
+   * one click in the wood, which is what most games ask for anyway. If it ever
+   * has to move back, move it back to the top and keep everything else here.
+   */
+  if (!navigator.webdriver) {
+    try {
+      canvas.requestPointerLock();
+    } catch {
+      /* see above — the canvas click handler in player/controller.js is the fallback */
+    }
+  }
 
   gate.classList.add('gone');
 
@@ -2059,9 +2511,37 @@ document.getElementById('enter').addEventListener('click', async () => {
     const bank = streamPointNear(controller.position.x, controller.position.z);
     ambience.build(new THREE.Vector3(bank.x, bank.y, bank.z));
   }
+  /**
+   * `max(wetness, wetFeet)`, AND THE `max` IS A BUG FIX.
+   *
+   * `wetness(x, z)` is `clamp01(1 - streamBank(x, z) / 11)` — the horizontal
+   * distance to the channel, which is the right question for damp ground near a
+   * river and is the WRONG one for whether your boots are full of it. It has
+   * been selecting the wet footstep for every stride within eleven metres of the
+   * bank, on dry gravel, and reporting exactly the same thing when the water is
+   * up to your chest. `controller.wade` is the depth, published on the frame the
+   * movement and the audio both read it, and `wetFeet` is that plus the couple
+   * of dozen strides of wet prints you leave after climbing out.
+   */
   controller.onStep = (strength) =>
-    ambience.step(strength, wetness(controller.position.x, controller.position.z));
+    ambience.step(
+      strength,
+      Math.max(wetness(controller.position.x, controller.position.z), controller.wetFeet)
+    );
   controller.onBrush = (position, strength) => ambience.brush(position, strength);
+  /**
+   * The ground arriving, pushing off it, and the water.
+   *
+   * All optional-chained into `ambience` for the same reason the rod's `sound`
+   * closure is: none of these exists until the audio gate has been clicked
+   * through, and a jump in a silent world must still be a jump. The scuff has a
+   * real fallback rather than an optional chain because a quiet footstep IS a
+   * scuff, and half a jump having a sound is worse than none.
+   */
+  controller.onLand = (impact) => ambience.land?.(impact);
+  controller.onJump = () =>
+    ambience.scuff ? ambience.scuff(0.5) : ambience.step(0.35, controller.wetFeet);
+  controller.onWade = (at, strength, depth) => ambience.wade?.(at, strength, depth);
 
   /**
    * THE RECORDED BED, FETCHED LATE AND ON PURPOSE.
@@ -2101,6 +2581,21 @@ document.getElementById('enter').addEventListener('click', async () => {
   caveAudio = new CaveAudio(audio);
   caveAudio.build();
   caveAudio.captureStep(controller);
+
+  /**
+   * THE ROOST. `CaveField.update` fires this once, on the frame a ceiling comes
+   * off, from one squared-distance test per roost — see `Cave.checkFlush`. It
+   * is a callback rather than an import because the world module must not know
+   * about the audio graph; this is the one place that holds both.
+   *
+   * It is a ONE-SHOT and cannot repeat: a roost latches when it flushes, so
+   * there is no rate to guard here. It is also off entirely under
+   * `navigator.webdriver` — see `CaveField.autoFlush`, which pins it the way
+   * `dayPhase` and `rainAtTime` are pinned so that the pixel-diffing scripts
+   * still photograph one fixed world.
+   */
+  caves.onFlush = () => caveAudio?.flush();
+  caveAudio.captureLand(controller);
 
   tripAudio = new TripAudio(audio);
   tripAudio.build();
@@ -2142,15 +2637,53 @@ document.getElementById('enter').addEventListener('click', async () => {
    * rather than a truthiness check, because `null` here means somebody turned
    * the music off and we must not start it again.
    */
+  /**
+   * THE ARRIVAL LINE COMES FIRST, AND THE JUKEBOX WAITS ITS TURN.
+   *
+   * Nine seconds because it is three clauses and a name, and because it is the
+   * only thing on the screen — a toast is dismissed by time and by nothing
+   * else, so the number is a reading speed. See `arrivalLine`.
+   */
+  hud.toast(arrivalLine(), ARRIVAL_TOAST_MS);
+
+  let playing = false;
   if (roomMusic !== undefined && net.status === 'live') {
     applyMusic(roomMusic);
-    if (roomMusic) hud.toast('Somewhere in the trees, a jukebox is playing.', 5200);
+    playing = !!roomMusic;
   } else {
     music.start();
     musicAt = worldClock();
     speakers.setPlaying(true);
     announceMusic();
-    hud.toast('Somewhere in the trees, a jukebox is playing.', 5200);
+    playing = true;
+  }
+
+  /**
+   * THE JUKEBOX SENTENCE, DEMOTED AND CORRECTED.
+   *
+   * It said "Somewhere in the trees, a jukebox is playing" about two cabinets
+   * standing eleven metres in front of the spawn camera and filling the middle
+   * of the frame. It was written when the rig was a single machine somewhere
+   * else in the wood and never revisited when the pair was placed at the
+   * clearing, so for a long time the game's first and only sentence was one the
+   * player could see was wrong.
+   *
+   * It now says what they ARE and what can be done with them — which is the
+   * one thing about the speakers a player will not discover by looking, since
+   * `G` is a verb on a page of the settings menu they have not opened yet.
+   *
+   * Fired on a timer rather than chained, because `hud.toast` replaces whatever
+   * is on screen: it has to land after the first line has faded (9 s up plus
+   * the 600 ms fade the Hud runs), not on top of it.
+   */
+  if (playing) {
+    setTimeout(() => {
+      if (!music) return;
+      hud.toast(
+        'The music is coming from those two cabinets. <kbd>G</kbd> stands one wherever you like.',
+        5200
+      );
+    }, ARRIVAL_TOAST_MS + 900);
   }
 
 });
@@ -2160,7 +2693,157 @@ document.getElementById('enter').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 
 const clock = new Clock();
+/** Last frame's `ferry.state.moving`, for the cast-off edge. See the bell. */
+let ferryWasMoving = false;
 const _streamPoint = new THREE.Vector3();
+const _firePoint = new THREE.Vector3();
+
+/**
+ * ==== TWO NUMBERS THE SOUNDSCAPE HAD NEVER BEEN GIVEN ======================
+ *
+ * `ambience.update` has taken a `canopy` parameter documented as "0..1, how
+ * much foliage is overhead" since the file was written, and this one has passed
+ * the literal 0.6 for the whole of that time — so a clearing has always sounded
+ * exactly like a thicket. And nothing anywhere could hear the player STOP:
+ * every call in `wildlife.js` is scheduled at a radius drawn from a fixed band
+ * that has never known what you are doing.
+ *
+ * Both computations belong HERE and not in the audio, for the same reason the
+ * stream's nearest point does: this is the only file with the collider grid,
+ * the terrain and the body's speed in one scope. The audio layers take them as
+ * parameters and spend them.
+ *
+ * PINNED UNDER `navigator.webdriver`, AND ONLY THE STILLNESS IS. `audio-probe`
+ * loads the page, does not move, and measures for the better part of a minute —
+ * which IS a player who has been standing still for a minute, which is exactly
+ * the state this feature changes the wood in. Left live it would re-weight the
+ * bird roster under every stored audio expectation at once. `?still=1` opts
+ * back in, so a script that wants to measure the feature can, which is the
+ * lesson of `probes-that-cannot-hear-the-real-thing`.
+ *
+ * The CANOPY is deliberately NOT pinned. It is a pure function of position,
+ * automation always stands in the same place, so it is already reproducible —
+ * and pinning it would make `npm run audio` blind to the one change in this
+ * pass most likely to move its numbers.
+ */
+const AUTOMATED =
+  typeof navigator !== 'undefined' &&
+  Boolean(navigator.webdriver) &&
+  !new URLSearchParams(location.search).has('still');
+
+/**
+ * Seconds of near-zero speed to reach full stillness, and seconds to lose it.
+ *
+ * Twenty-five up and one and a half down, and the asymmetry is the feature. A
+ * wood takes a long time to accept that you are furniture and no time at all to
+ * stop again — one step is enough. 0.25 m/s rather than zero as the test,
+ * because the controller damps its speed toward zero asymptotically (`damp(this
+ * .speed, 0, 0.001, dt)`) and a strict `=== 0` would never latch.
+ */
+const STILL_RISE = 25;
+const STILL_FALL = 1.5;
+let stillness = 0;
+
+/**
+ * HOW CLOSED IT IS OVERHEAD. Counted, smoothed, evaluated at 5 Hz.
+ *
+ * Counted rather than raycast: trunk-radius entries in the collider grid within
+ * fourteen metres. That is not what a canopy is and it is a very good proxy for
+ * one, because in this world a trunk implies its own crown — there is no such
+ * thing here as a bare pole. A real overhead test would need the canopy cards,
+ * which live in a worker, in a packer, on the GPU.
+ *
+ * FOURTEEN METRES is roughly the crown radius of the big archetypes: a tree
+ * further away than its own crown is not over your head. `ColliderGrid.near`
+ * gathers a fixed three-by-three of sixteen-metre cells, so a fourteen-metre
+ * query is entirely covered by the cheap cached path and never walks wider.
+ *
+ * 0.45 AND 0.8 ARE COPIED FROM fauna.js DELIBERATELY. `c.r` in that grid is the
+ * trunk radius PLUS the body's own 0.34 — see `trunkIndex`, which reads the
+ * same list — so 0.45 is a trunk of eleven centimetres' radius, a tree rather
+ * than a sapling, and 0.8 is fauna.js's own upper bound, above which an entry
+ * is a rock or a campfire and has no crown at all. Two files disagreeing about
+ * which colliders are trees shows up a month later as "the birds perch in the
+ * wrong places".
+ *
+ * CANOPY_HALF IS AN ESTIMATE AND IT IS THE KNOB. Five trunks inside fourteen
+ * metres reads as half a canopy; the curve saturates, so twelve reads 0.81 and
+ * an open meadow reads 0. It was NOT measured — nobody has ever counted this
+ * wood. The literal it replaces was 0.6, which was somebody's guess at the
+ * average bit of this forest, so the curve is meant to land near that under
+ * closed canopy and spend its range on telling a clearing from a thicket rather
+ * than on making the whole wood louder. If `npm run audio` moves, this is the
+ * line to move first: read `RR.ambience.canopyValue` standing in the commons
+ * and again under trees and check the two numbers are on opposite sides of 0.6.
+ */
+const CANOPY_HALF = 5;
+const CANOPY_RADIUS2 = 14 * 14;
+/** Four points at twelve metres, for the exposure term. See `sampleCanopy`. */
+const CANOPY_RING = [
+  [12, 0],
+  [-12, 0],
+  [0, 12],
+  [0, -12],
+];
+let canopyNow = 0.6;
+let canopyTarget = 0.6;
+let canopyAt = 0;
+
+/**
+ * THE GUST THE TREES ARE ACTUALLY BENDING TO, EVALUATED AT YOUR EAR.
+ *
+ * `ambience.js`'s header claims its gust is "the SAME gust the trees are
+ * visually bending to". It never has been. What this line used to hand it was
+ *
+ *     clamp01(0.35 + 0.4 * Math.sin(uWind.x * 0.35))
+ *
+ * — a 32.6-second sine with NO SPATIAL TERM AT ALL, against the shader's
+ * 11.4-second wave at your own position. Two different periods, two different
+ * amplitudes, and no reason for a peak in one ever to coincide with a peak in
+ * the other. So the canopy surge has been firing at moments when nothing on
+ * screen was moving, and the tree directly overhead has been bending in
+ * silence, for the whole life of the file.
+ *
+ * This is the shader's own expression, character for character, evaluated once
+ * per frame at the eye instead of per vertex — `sin(dot(xz, k) - uWind.x)`
+ * mapped to 0.35..1.0 — times `uGust`, the lull envelope, which is the term
+ * that decides how hard the whole wood is being leaned on right now.
+ *
+ * IT IS ONE SINE AND ONE DOT PRODUCT. The alternative — publishing the value
+ * out of living.js — was rejected because living.js computes it in GLSL and
+ * there would be nothing to publish without adding a second CPU copy there
+ * instead of here; a comment naming the shader line as the authority is the
+ * cheaper guard, and the two expressions are three lines apart in this file's
+ * git history for whoever changes one of them.
+ */
+const WIND_K = new THREE.Vector2(0.055, 0.037);
+let gustNow = 0.675;
+
+function sampleCanopy(x, z) {
+  let count = 0;
+  for (const c of forest.colliderGrid.near(x, z)) {
+    if (c.r < 0.45 || c.r >= 0.8) continue;
+    const dx = c.x - x;
+    const dz = c.z - z;
+    if (dx * dx + dz * dz < CANOPY_RADIUS2) count++;
+  }
+  const density = 1 - Math.pow(0.5, count / CANOPY_HALF);
+  /**
+   * THE EXPOSURE TERM, and it is the half that makes a ridge sound like a
+   * ridge. A count cannot tell a hollow full of trees from a knoll with the
+   * same trees on it, and those are not the same place: on a rise the trees
+   * around you sit BELOW their own crowns relative to you and there is far more
+   * sky. Four `groundUnder` samples at twelve metres; how far the ground falls
+   * away is how exposed you are. Six metres of prominence is a bald hilltop,
+   * and it takes at most HALF the canopy off rather than all of it, because a
+   * hill in this world still has trees on it.
+   */
+  const h = groundUnder(x, z);
+  let drop = 0;
+  for (const [dx, dz] of CANOPY_RING) drop += Math.max(0, h - groundUnder(x + dx, z + dz));
+  const exposed = clamp01(drop / 4 / 6);
+  return clamp01(density * (1 - exposed * 0.5));
+}
 
 const PROMPT_JUKEBOX_PLAYING = `<kbd>E</kbd> stop · <kbd>Q</kbd> next track · <kbd>U</kbd> paste a link`;
 const PROMPT_JUKEBOX_STOPPED = `<kbd>E</kbd> play the music · <kbd>U</kbd> paste a link`;
@@ -2338,6 +3021,100 @@ let lastFrameAt = 0;
 const GATE_DRAW_HZ = 10;
 let lastGateDraw = 0;
 
+/**
+ * …AND A LADDER ON TOP OF IT, BECAUSE THE MENU STOPPED BEING OPAQUE.
+ *
+ * Ten a second was chosen when these frames were invisible and existed only to
+ * keep arriving terrain chunks close to their GPU upload. They are visible now
+ * — see the header above `.gate` in src/style.css — so while somebody is
+ * actually at the keyboard the rate goes up, and once they have plainly gone it
+ * goes further down than it ever did.
+ *
+ *   24 Hz for the first 45 s after any input. Not 60: the camera is static and
+ *   the backdrop blur is 20px, so the only thing moving is leaves under a
+ *   dozen pixels of smear. Choppiness is not detectable, and I would rather
+ *   spend the difference on the machine than on a frame nobody can distinguish.
+ *
+ *   10 Hz — the original constant, unchanged — for the next quarter of a
+ *   minute, as a decay rather than a plateau. A single step from 24 to 4 is
+ *   visible as a change of behaviour; two steps are not.
+ *
+ *   4 Hz after a minute of nothing at all. This is the tea case the original
+ *   header was written to protect, and it is now better protected than it was.
+ *   The upload argument that fixed the floor at 10 does not apply down here:
+ *   the first fill settles in two to six seconds, so at sixty seconds idle
+ *   there is no chunk arriving to be close to.
+ *
+ * The clock starts at page load rather than at zero, because opening the game
+ * IS the first input — the alternative opens the menu at 4 Hz for anyone who
+ * reads the title before touching anything.
+ */
+const GATE_LIVELY_HZ = 24;
+const GATE_ASLEEP_HZ = 4;
+const GATE_LIVELY_MS = 45000;
+const GATE_ASLEEP_MS = 60000;
+let lastGateInput = performance.now();
+
+function gateDrawHz(now) {
+  const since = now - lastGateInput;
+  if (since < GATE_LIVELY_MS) return GATE_LIVELY_HZ;
+  if (since < GATE_ASLEEP_MS) return GATE_DRAW_HZ;
+  return GATE_ASLEEP_HZ;
+}
+
+/**
+ * Listened for on `#gate` rather than asked of `ui/menu.js`.
+ *
+ * The menu's header rules out the two files referring to each other at all, and
+ * this needs no cooperation from it: every control on the panel is a descendant
+ * of `#gate`, so one capturing listener per event type sees all of them,
+ * including controls that do not exist yet. `pointermove` is in the list on
+ * purpose — somebody hunting for the button with the mouse is present, and a
+ * timestamp store is free.
+ */
+if (gate) {
+  const noteInput = () => {
+    lastGateInput = performance.now();
+  };
+  for (const type of ['pointerdown', 'pointermove', 'keydown', 'input']) {
+    gate.addEventListener(type, noteInput, { capture: true, passive: true });
+  }
+}
+
+/**
+ * THE ARRIVAL HOUR, APPLIED WHILE THE PLAYER IS STILL CHOOSING A NAME.
+ *
+ * Clicking "Dusk" now takes the forest behind the menu to dusk, which is the
+ * entire reason the gate was made transparent: an hour you can see before you
+ * commit to it is a choice, and an hour you find out about after a four-second
+ * load is a surprise. The enter handler still applies the same origin and
+ * becomes idempotent — `setDayOrigin` is a single assignment.
+ *
+ * ONLY WHEN NOBODY ELSE IS IN THE ROOM, and this is the part that is easy to
+ * get wrong. `net`'s `welcome` handler sets the day origin from the room's own
+ * `dayAgeMs`, because two people in one wood at two hours is the exact failure
+ * that path exists to prevent. An invite link autojoins during module
+ * evaluation, so by the first frame the status is already `joining` — which is
+ * why the guard is `status === 'off'` rather than a check on `lobbyCode()`.
+ * Someone opening a lobby is still `off` here (`net.openRoom` is not called
+ * until Enter, and the handler applies the hour before it), so a host's chosen
+ * dusk is theirs and is published as an age when the socket opens.
+ *
+ * `arrivalOrigin` returns null for "whenever", and null means the raw epoch
+ * rather than "leave it alone" — the same convention net/index.js uses when it
+ * calls `setDayOrigin(0)` for a room with no shared hour. Without that, picking
+ * Dusk and then Whenever would leave you at dusk.
+ */
+let previewArrival = null;
+function applyArrivalPreview() {
+  if (net.status !== 'off') return;
+  const want = arrivalId();
+  if (want === previewArrival) return;
+  previewArrival = want;
+  const origin = arrivalOrigin(Date.now(), dayScale(), CYCLE_SECONDS);
+  setDayOrigin(origin === null ? 0 : origin);
+}
+
 function frame() {
   requestAnimationFrame(frame);
 
@@ -2438,6 +3215,16 @@ function frame() {
    * body has to resume from somewhere.
    */
   sitting.update(dt);
+  /**
+   * Your own body, after `sitting` for the same reason the camera is: sitting is
+   * the more specific constraint and it wins, so anything drawn from the
+   * controller has to be drawn from the post-seat position or it lags the seat
+   * by a frame — which on the moving ferry is 3 cm a frame of visible drift.
+   *
+   * `sitting.blend` rather than `sitting.seated`, because the pose is eased and
+   * the boolean would fold the legs in one frame.
+   */
+  body.update(dt, { sit: sitting.blend, rodOut: fishing.state !== 'off' });
   controller.applyToCamera();
 
   // Wind runs on its own clock and never stops, so the forest is alive when
@@ -2456,7 +3243,14 @@ function frame() {
   // this knob and the trip's gust — accumulate. Passing `dt * windScale` would
   // scale the deviations and silently leave the baseline at 1x, which looks
   // like the knob half working. See `updateWind`.
-  updateWind(probe.frozen ? 0 : dt, director.level, debug.windScale);
+  // The SQUALL is the fourth argument and it is the weather, not the wind: it
+  // is `atmosphere.squallLevel`, the world's own rain curve evaluated 40 s in
+  // the future — half the lead the cloud deck runs on. So a front arrives sky
+  // first, then wind, then rain, which is the order it happens in and the order
+  // that makes it read as one event with a direction rather than three
+  // switches. Read from the layer that owns the weather rather than recomputed
+  // here, for the same reason the rain level below is.
+  updateWind(probe.frozen ? 0 : dt, director.level, debug.windScale, atmosphere.squallLevel ?? 0);
 
   const levels = audio.ready ? audio.sampleLevels(dt) : null;
 
@@ -2468,6 +3262,53 @@ function frame() {
   // The sky rides on the camera; the shadow volume rides on the BODY. The
   // camera is up to 1.35 m of trip dolly away from the body and swings around
   // it as you turn, and every time that crossed an anchor boundary the whole
+  /**
+   * The two facts the soundscape is about to be told. See the block by
+   * `_streamPoint` for what they are and why they are computed in this file.
+   *
+   * The stillness is one compare a frame. The canopy is at 5 Hz because it
+   * walks a collider cell and takes five terrain samples — at 340 fps that
+   * would be seventeen hundred `groundUnder` calls a second to describe
+   * something that cannot change faster than you can walk. The smoothing is a
+   * 1.5-second exponential: slow enough that stepping out from under one tree
+   * is not audible as an event, fast enough that walking out of the wood is.
+   */
+  if (!AUTOMATED) {
+    if (controller.speed < 0.25) stillness = Math.min(1, stillness + dt / STILL_RISE);
+    else stillness = Math.max(0, stillness - dt / STILL_FALL);
+  }
+  canopyAt -= dt;
+  if (canopyAt <= 0) {
+    canopyAt = 0.2;
+    /**
+     * ROOFED IS ITS OWN ANSWER, and it is not a nicety. A cave is the most
+     * enclosed place in this world, and the collider grid underground still
+     * returns the trees on the hill above you — `xz distance reaches through
+     * mountains`, and `controller.roofed` is the guard this project already
+     * uses everywhere else for exactly that.
+     */
+    canopyTarget = controller.roofed
+      ? 1
+      : sampleCanopy(controller.position.x, controller.position.z);
+  }
+  canopyNow += (canopyTarget - canopyNow) * (1 - Math.exp(-dt / 1.5));
+
+  /**
+   * …and the wind, at the ear. See `gustNow` for why this is not the expression
+   * that used to be here. `uWind.x` has already been advanced this frame by
+   * `updateWind`, so this reads the same phase the vertex stage will.
+   */
+  gustNow = clamp01(
+    (0.35 +
+      0.65 *
+        (0.5 +
+          0.5 *
+            Math.sin(
+              controller.position.x * WIND_K.x + controller.position.z * WIND_K.y - tripUniforms.uWind.value.x
+            ))) *
+      tripUniforms.uGust.value
+  );
+
   // shadow map re-rendered — while standing still. See atmosphere.follow.
   atmosphere.follow(camera, controller.position);
   atmosphere.tick(dt);
@@ -2529,9 +3370,58 @@ function frame() {
       _streamPoint.set(bank.x, bank.y, bank.z);
       ambience.setStreamPosition(_streamPoint);
       ambience.setListenerDistanceToStream(camera.position.distanceTo(_streamPoint));
+      /**
+       * How hard you have been working, every frame.
+       *
+       * `controller.exertion` rises over about seven seconds of running and
+       * falls over twenty-three of standing still, so it is a state rather than a
+       * speedometer — you can be out of breath at the top of the hill you just
+       * ran up. The cycle's timing belongs to the ambience; this only says how
+       * hard. Optional-chained so it is inert until that method exists.
+       */
+      ambience.breath?.(controller.exertion);
+
+      /**
+       * THE NEAREST FIRE. `gathering.nearestFire` has sat in that file since it
+       * was written, with a comment saying it is "for the audio, and for the
+       * prompt", and nothing in the repository has ever called it. Nine
+       * gathering places exist specifically so that people have somewhere to be
+       * and not one of them made a sound.
+       *
+       * Handed over exactly as the stream is — a coordinate and a distance,
+       * every frame — so `ambience.js` needed no new plumbing and gets a hearth
+       * that follows whichever fire is nearest as you walk between them.
+       *
+       * ROOFED CANCELS IT, and that is load-bearing: `nearestFire` measures xz
+       * distance, which reaches straight through a mountain. Standing in a cave
+       * under the commons you would otherwise be sitting in a campfire. See
+       * `xz-distance-reaches-through-mountains`.
+       *
+       * The fire is heard 0.35 m above its site because that is where the
+       * flames are; at ground level the panner puts a campfire under your feet
+       * when you stand over it.
+       */
+      const nearFire = controller.roofed
+        ? null
+        : gathering.nearestFire(controller.position.x, controller.position.z);
+      if (nearFire) {
+        _firePoint.set(nearFire.fire.x, nearFire.fire.y + 0.35, nearFire.fire.z);
+        ambience.setFirePosition(_firePoint);
+        ambience.setListenerDistanceToFire(camera.position.distanceTo(_firePoint));
+      } else {
+        ambience.setListenerDistanceToFire(999);
+      }
+
       ambience.update(dt, {
-        gust: clamp01(0.35 + 0.4 * Math.sin(tripUniforms.uWind.value.x * 0.35)),
-        canopy: 0.6,
+        gust: gustNow,
+        /**
+         * The real number, at last. This parameter has been documented in
+         * ambience.js as "how much foliage is overhead" since the file was
+         * written and has been fed the literal 0.6 for the whole of that time,
+         * so that file's canopy expression has been computing a constant and a
+         * clearing has sounded exactly like a thicket. See `sampleCanopy`.
+         */
+        canopy: canopyNow,
         tripLevel: director.level,
         /**
          * The weather, read from the layer that owns it rather than recomputed.
@@ -2543,6 +3433,19 @@ function frame() {
          * cycle already had once.
          */
         rain: atmosphere.rainLevel ?? 0,
+        /**
+         * THE STRIKE, IF THERE WAS ONE THIS FRAME.
+         *
+         * Read off the layer that owns the weather rather than recomputed, for
+         * the identical reason the rain above is: the world is a pure function
+         * of the seed and the clock, and two people in one wood must see the
+         * same flash and then count the same number of seconds before the bang.
+         * If main.js formed a second opinion about how far away it was, each
+         * client would be individually convincing and the two would disagree.
+         *
+         * `?? null` so this is a no-op until `atmosphere.lightning` exists.
+         */
+        lightning: atmosphere.lightning ?? null,
       });
     }
     /**
@@ -2586,7 +3489,17 @@ function frame() {
    * block instead of being handed the director.
    */
   net.setPose(
-    (sitting.seated ? FLAG_SITTING : 0) |
+    /**
+     * The two hand gestures, read straight off the controller.
+     *
+     * `pointing` is the key held; `waving` is a 1.6 s latch the controller keeps
+     * so that a tap survives the 18 Hz tick — see WAVE_HOLD over there. Both are
+     * bits in a number the server already sends and already copies through
+     * unmasked, so the whole transport cost of this is zero bytes.
+     */
+    (controller.pointing ? FLAG_POINTING : 0) |
+      (controller.waving ? FLAG_WAVING : 0) |
+      (sitting.seated ? FLAG_SITTING : 0) |
       (fishing.state !== 'off' ? FLAG_FISHING : 0) |
       /**
        * The bite bit covers the fight too, and no new bit was needed: the flag
@@ -2612,8 +3525,121 @@ function frame() {
    * because a screen somebody is carrying is positioned from an avatar the net
    * layer has only just interpolated.
    */
+  /**
+   * WHO IS SITTING AT WHICH FIRE — four times a second, not sixty.
+   *
+   * `net.peers` builds a fresh array of plain objects each time it is read, so
+   * it is a getter to sample rather than to poll: a dozen small allocations four
+   * times a second is nothing, sixty times a second is a garbage source for a
+   * value the fire takes six seconds to respond to.
+   *
+   * NOTHING GOES ON THE WIRE FOR THIS. Positions and a sitting flag are already
+   * in every 18 Hz pose row, so each client runs this same loop over the same
+   * interpolated positions and arrives at the same number — the same zero-byte
+   * trick gathering.js already uses to put two people at the same fire without
+   * either of them saying which fire it is.
+   */
+  companyTick -= dt;
+  if (companyTick <= 0) {
+    companyTick = 0.25;
+    seatedBodies.length = 0;
+    if (sitting.seated) seatedBodies.push(camera.position);
+    for (const peer of net.peers) {
+      if (peer.flags & FLAG_SITTING) seatedBodies.push(peer.position);
+    }
+    gathering.setCompany(seatedBodies);
+  }
   gathering.update(probe.frozen ? 0 : dt, camera);
   gathering.setNight(atmosphere.day.dark());
+  /**
+   * AND THE PLACE SAYS ITS NAME.
+   *
+   * Nine places in this world have names — see the block at `namePlaces` in
+   * sites.js — and until now nothing said any of them out loud. `Seat.label`
+   * had carried three of them since the furniture was built and was read by
+   * nobody. `enteredPlace` is the edge: it returns a name on the one frame you
+   * cross into a place and null on every other, holds a set of the places you
+   * are currently inside so that standing on a boundary cannot stutter, and
+   * lets a place speak again only after you have left it and come back.
+   *
+   * IT IS A REMARK, NOT A LABEL. 3200 ms, which is a reading speed for three
+   * words — the same currency `ARRIVAL_TOAST_MS` is quoted in, scaled to a
+   * third of the text — and then it fades and there is nothing on the screen. A
+   * place that kept its name up would be persistent screen-locked chrome, which
+   * this project forbids outright.
+   *
+   * THE BODY, NOT THE CAMERA. The camera is up to 1.35 m of trip dolly away
+   * from where the player actually is, and "which place am I in" is a question
+   * about the person, not about the viewpoint — the same reading `shoal.update`
+   * takes a few lines further down.
+   *
+   * `controller.roofed` IS THE GUARD, and it is the one this project always
+   * reaches for: xz distance reaches through mountains, so a passage running
+   * under the commons would otherwise announce it to somebody forty metres
+   * below the fire.
+   */
+  if (PLACE_NAMES && !controller.roofed) {
+    const here = enteredPlace(controller.position.x, controller.position.z);
+    if (here) hud.toast(here, 3200);
+  }
+  /**
+   * THE ONE LAMP THE RIVER IS ALLOWED.
+   *
+   * The water shader lays a specular path down the stream from a single point
+   * source — six lines of arithmetic on a surface it is already shading, and
+   * emphatically NOT a scene light, because a second real light recompiles
+   * every material in the forest. The price of that is that somebody has to
+   * CHOOSE, and it has to be here.
+   *
+   * Half the answer is already finished elsewhere: `gathering.hearths.light` is
+   * a point light that campfire.js has already moved to the nearest fire, and
+   * whose intensity already carries the flicker, the night curve and the 26 m
+   * reach. The ferry's lantern is emissive rather than a light (see ferry.js),
+   * so its share is built here from the same two facts a light would have used
+   * — how dark it is and how far away it is.
+   *
+   * READ OFF matrixWorld RATHER THAN getWorldPosition INTO A SCRATCH: the same
+   * three numbers, no allocation and no matrix walk, and no scratch vector that
+   * would then have to live at module scope. It is one frame stale because the
+   * graph is updated inside render(); at the raft's speed that is a couple of
+   * centimetres, against a highlight whose attenuation halves over four metres.
+   */
+  {
+    const fire = gathering.hearths?.light;
+    let lampX = 0;
+    let lampY = 0;
+    let lampZ = 0;
+    // The fire's intensity peaks near 2.7 and the shader wants about 1 for a
+    // strong path, so this is the curve the light is already on, halved.
+    let lampPower = fire ? Math.min(1.4, fire.intensity * 0.5) : 0;
+    if (lampPower > 0) {
+      lampX = fire.position.x;
+      lampY = fire.position.y;
+      lampZ = fire.position.z;
+    }
+    const lantern = ferry?.lantern;
+    if (lantern) {
+      const e = lantern.matrixWorld.elements;
+      const dx = e[12] - controller.position.x;
+      const dz = e[14] - controller.position.z;
+      // Linear in distance, not inverse-square: the shader's own attenuation is
+      // the inverse square, and this is only deciding which source is worth
+      // being the one lamp. Past 40 m the raft's lantern never is.
+      const reach = Math.max(0, 1 - Math.hypot(dx, dz) / 40);
+      const lanternPower = atmosphere.day.dark() * reach * 1.15;
+      if (lanternPower > lampPower) {
+        lampPower = lanternPower;
+        lampX = e[12];
+        lampY = e[13];
+        lampZ = e[14];
+      }
+    }
+    // Nothing lights the river from inside a mountain, and nothing needs to:
+    // roofed means the water is not in the frame at all. This is the same guard
+    // every other xz-distance test in this file has had to grow.
+    if (controller.roofed) lampPower = 0;
+    atmosphere.water.setLamp(lampX, lampY, lampZ, lampPower);
+  }
   /**
    * The shared screens want the same curve the fires do, from the other end.
    *
@@ -2639,13 +3665,48 @@ function frame() {
   if (ferry?.state.arrived && ferry.distanceTo(controller.position.x, controller.position.z) < 46) {
     hud.toast('The ferry comes alongside.', 3200);
   }
+  /**
+   * AND NOW IT RINGS. Two strikes alongside, one as it pulls out.
+   *
+   * NOT GATED ON THE 46 m THE TOAST IS. A toast is chrome and has to be earned;
+   * a bell is an object in the world making a noise, and the whole reason a
+   * ferry has one is to be heard by somebody who is NOT on it. The rolloff and
+   * the distance low-pass in `ambience.bell` do the gating instead, which is the
+   * honest place for it — past two hundred metres it is almost entirely its
+   * fundamental and then it is nothing, without a radius written anywhere.
+   *
+   * The departure edge is derived here rather than added to ferry.js: that file
+   * publishes `arrived` (true for one frame) and `moving`, and stopped-to-moving
+   * is the whole of what "casting off" means. One boolean, no new state on the
+   * raft, and it cannot disagree with the position because it is read from it.
+   */
+  if (ferry && ambience) {
+    if (ferry.state.arrived) ambience.bell(ferry.group.position, 1, 2);
+    else if (ferry.state.moving && !ferryWasMoving) ambience.bell(ferry.group.position, 0.8, 1);
+  }
+  ferryWasMoving = !!ferry?.state.moving;
 
   // Frozen by the same switch as the wind, so `isolate.mjs` can hold a deer
   // still to photograph it. The trip level reaches the animals as well as the
   // plants — a forest whose trees breathe while its birds fly on rails reads
   // as two worlds superimposed.
   fauna.setObservers(faunaObservers());
-  fauna.update(probe.frozen ? 0 : dt, { camera, tripLevel: director.level });
+  /**
+   * `dissolve` beside `tripLevel`, and they are not the same quantity.
+   *
+   * `level` is how far into the trip you are and the animals spend it as a
+   * multiplier — bolder, longer stares, a wider notice radius. `dissolve` is the
+   * ego-death envelope and they spend it as an OVERRIDE: above half of it every
+   * percher holds and faces you, the herd's flee transition is suppressed
+   * outright, and on the frame the curve falls back through the threshold the
+   * whole wood goes at once. See HOLD_LEVEL in world/fauna.js.
+   */
+  fauna.update(probe.frozen ? 0 : dt, {
+    camera,
+    tripLevel: director.level,
+    dissolve: director.dissolve,
+    stillness,
+  });
   /**
    * The river's own fish, after the rod so a cast that has just landed has
    * already told them about it, and frozen by the same switch as the rest of the
@@ -2662,13 +3723,17 @@ function frame() {
   /**
    * The trip readout does not need to be redrawn 240 times a second.
    *
-   * setTrip writes four DOM properties — two inline opacities, a text node and
-   * a bar width — and every one of them is a style invalidation that the
-   * browser has to reconcile against the compositor before the frame goes out.
-   * It is describing a five-minute envelope on a bar a few hundred pixels
-   * wide, so a sixth of a second between updates is under one pixel of travel
-   * and nobody can see the difference. `describe()` also allocates, which at
-   * frame rate is a steady drip into the nursery for no reason.
+   * setTrip used to write four DOM properties every time — two inline
+   * opacities, a text node and a progress bar's width — and every one of them
+   * is a style invalidation the browser has to reconcile against the compositor
+   * before the frame goes out. The bar is gone and the label is a one-shot per
+   * phase now (see src/ui/hud.js), so on almost every call it writes one
+   * opacity and returns; the throttle survives for the two things that did not
+   * change. `describe()` allocates, which at frame rate is a steady drip into
+   * the nursery for no reason, and the help strip's opacity is still written
+   * continuously. A sixth of a second is imperceptible on a curve that takes
+   * five minutes to run, and it bounds the cost of a phase transition landing
+   * on a bad frame.
    */
   hudAccum += dt;
   if (hudAccum >= HUD_INTERVAL) {
@@ -2784,6 +3849,23 @@ function frame() {
         ? clamp01(enclosed * (0.25 + 0.75 * Math.min(1, controller.caveDepth / 26)))
         : 0;
     caveMix += (target - caveMix) * Math.min(1, dt * 3.2);
+    /**
+     * …AND THE EYE, WHICH IS A SECOND AND MUCH SLOWER FILTER ON THE SAME NUMBER.
+     *
+     * `caveMix` says where the BODY is and everything above rides on it at one
+     * time constant. Dark adaptation is a property of the EYE and has two
+     * different ones — about four seconds opening, three quarters of a second
+     * closing — and that asymmetry IS the percept: walking in goes dark and
+     * then slowly resolves, walking out blows the frame white for half a second
+     * and snaps back. A symmetric filter is a brightness slider and reads as
+     * one. The state and the constants live in pipeline.js beside the exposure
+     * they drive; see `setCaveAdaptation`, which holds the whole argument.
+     *
+     * It multiplies the debug panel's `uExposure` rather than writing it, so
+     * the exposure knob still means what it says — the same rule `atmosphere
+     * .setCave` follows about the fog density.
+     */
+    pipeline.setCaveAdaptation(caveMix, dt);
     // Composed inside atmosphere's `_recompose` alongside the hour and the
     // view-distance knob, because all three write the same fog and none of them
     // may assign it. Verified to return bit-exact to the authored density at
@@ -2910,13 +3992,34 @@ function frame() {
      * scan a few lines later would be a frame behind on the one transition
      * (walking into a squeeze) the whole thing exists to make audible.
      */
+    /**
+     * …and two more, both of which are about the cave being a PLACE rather than
+     * a length of corridor.
+     *
+     * `caveDeep` is the descent, 0 at the mouth and 1 at forty-five metres
+     * below it. It is not `caveDepth`: that is metres WALKED, and the shapes
+     * header in caves.js is blunt that walked distance is the wrong measure —
+     * "you can walk a hundred metres of level tube and be nowhere". The drip
+     * rate, which is the one cue in the sound that says how far into the world
+     * you are, was keyed to the wrong one for its whole life.
+     *
+     * `nearestMouth` is the outside voice's only input, and it is the only
+     * argument here that matters when you are NOT in a cave. Everything else in
+     * that file is silent whenever the mix is zero, which is everywhere a
+     * player normally stands; a doorway you cannot hear until you are inside it
+     * is a doorway nobody finds, and this project has three recorded failures
+     * at making one visible through the canopy. Sound is the medium that
+     * reaches. Returns a reused object or null and allocates nothing.
+     */
     caveAudio?.update(
       dt,
       caveMix,
       controller.caveDepth,
       controller.caveTight,
       controller.caveRoom,
-      controller.caveWater
+      controller.caveWater,
+      controller.caveDeep,
+      caves.nearestMouth(camera.position.x, camera.position.z)
     );
   }
 
@@ -2954,8 +4057,14 @@ function frame() {
    */
   if (gateUp) {
     const now = performance.now();
-    if (now - lastGateDraw < 1000 / GATE_DRAW_HZ) return;
+    if (now - lastGateDraw < 1000 / gateDrawHz(now)) return;
     lastGateDraw = now;
+    /**
+     * The hour the menu is currently pointing at, applied to the sky behind it.
+     * A string compare on all but the frame it changes. See
+     * `applyArrivalPreview`.
+     */
+    applyArrivalPreview();
     /**
      * AND THE TWO READOUTS ARE NOT TOLD ABOUT IT.
      *
@@ -3314,6 +4423,14 @@ window.RR = {
   seats,
   sitting,
   fishing,
+  /**
+   * Your own body and its painted shadow. Exposed for the same reason `sitting`
+   * and `fishing` are: the only way to check that the visibility gate is doing
+   * its job is to ask whether `body.rig.visible` is false at a level pitch and
+   * true at −0.7, and a pixel diff cannot tell "not drawn" from "drawn and
+   * off-screen".
+   */
+  body,
   social,
   get caveAudio() {
     return caveAudio;

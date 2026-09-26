@@ -13,6 +13,7 @@ import {
   setPlayerName,
 } from '../core/identity.js';
 import { inventSeed, worldSeed } from '../core/world-seed.js';
+import { LAND_LIST, landOf, withLand } from '../world/lands/index.js';
 import { normalizeRoomCode } from '../net/protocol.js';
 
 /**
@@ -73,6 +74,54 @@ const LOOK_DEBOUNCE_MS = 400;
 /** How long "Copied" stays on the button before it goes back to saying Copy. */
 const COPIED_MS = 1600;
 
+/**
+ * ONE FACT ABOUT THE WORLD, UNDER THE TITLE.
+ *
+ * This is the entire answer to "does this game ever tell you what it contains",
+ * and until it existed the answer was no. The Controls page of the settings
+ * menu lists every key, which is a list of VERBS; nothing anywhere — not the
+ * title card, not the arrival toast, not the help strip — ever said that this
+ * world has caves that go a long way in, a river with fish in it, a raft, three
+ * fires, two viewpoints or a mushroom that is not decorative. A player could
+ * finish a whole session having seen a clearing, two speakers and some trees.
+ *
+ * EVERY LINE IS A FACT AND NONE OF THEM IS AN INSTRUCTION. "There are
+ * mushrooms. They are not decorative." is a description of the wood; "eat a
+ * mushroom to start the trip" is a tutorial, and a tutorial on a title card is
+ * both the wrong voice and a promise the rest of the screen does not keep. The
+ * register is the one every other string in this project uses — plain, a
+ * little dry, nothing sold.
+ *
+ * ONE PER PAGE LOAD RATHER THAN A ROTATING CAROUSEL. A line that changes while
+ * you are reading it is a thing on the screen demanding attention, and this
+ * panel's whole job is to hold still while thirty-nine shader programs compile
+ * behind it. Eight lines against a session that starts with one page load means
+ * a returning player meets most of them over a week without ever being shown a
+ * list.
+ *
+ * PINNED UNDER AUTOMATION, following the three precedents in `daylight.js`,
+ * `world-seed.js` and `quality.js`: a random string on the one screen every
+ * pixel-diffing script passes through would be a nondeterministic first frame.
+ * Index 0 rather than "hidden", so a script still photographs the real layout.
+ *
+ * THE THREE NUMBERS BELOW ARE `planSites` IN world/sites.js: three hearths, two
+ * viewpoints, three landings, written as literal loop bounds there. They are
+ * quoted rather than counted because this module deliberately imports nothing
+ * that touches terrain — it has to be usable before a forest exists. If that
+ * file's counts ever move, these sentences are the fifth place to update and
+ * the only one that will not fail a gate when it is missed.
+ */
+const WONDERS = [
+  'There are caves in the ridge, and they go a long way in.',
+  'The river has fish in it, and a raft that calls at three landings.',
+  'Somebody else can walk here with you — open a lobby and read out the code.',
+  'There are mushrooms. They are not decorative.',
+  'Every wood has a name. Keep it and you can come back.',
+  'Fires burn in three clearings, and you can sit down at any of them.',
+  'Two places in this wood are high enough to see the rest of it from.',
+  'The jukebox will play a link you paste into it, out loud, to everyone.',
+];
+
 const $ = (id) => document.getElementById(id);
 
 class MainMenu {
@@ -93,9 +142,12 @@ class MainMenu {
     this.seedInput = $('menu-seed');
     this.seedRoll = $('menu-seed-roll');
     this.seedNote = $('menu-seed-note');
+    this.landHost = $('menu-lands');
+    this.landNote = $('menu-land-note');
     this.arrivalHost = $('menu-arrivals');
     this.arrivalNote = $('menu-arrival-note');
     this.settingsButton = $('menu-settings');
+    this.wonderEl = $('gate-wonder');
 
     /** 'alone' | 'host' | 'join' */
     this.mode = 'alone';
@@ -134,7 +186,9 @@ class MainMenu {
      */
     this._listeners = new AbortController();
 
+    this._buildWonder();
     this._buildDyes();
+    this._buildLands();
     this._buildArrivals();
     this._bind();
     this._seedFromUrl();
@@ -142,6 +196,20 @@ class MainMenu {
   }
 
   /* ---- construction ---------------------------------------------------- */
+
+  /**
+   * The line under the subtitle. See `WONDERS`.
+   *
+   * `textContent`, not `innerHTML`: these are authored strings today and there
+   * is no reason for them to be able to carry markup tomorrow. Chosen against
+   * `WONDERS.length` rather than a written-down count, because a hard-coded
+   * table size has been the bug twice in this project.
+   */
+  _buildWonder() {
+    if (!this.wonderEl) return;
+    const i = navigator.webdriver ? 0 : Math.floor(Math.random() * WONDERS.length);
+    this.wonderEl.textContent = WONDERS[i] ?? '';
+  }
 
   _buildDyes() {
     this.dyeButtons = [];
@@ -161,6 +229,46 @@ class MainMenu {
       });
       this.dyeHost.appendChild(b);
       this.dyeButtons.push({ dye, el: b });
+    }
+  }
+
+  /**
+   * WHICH KIND OF PLACE, and why this is not four buttons that set a setting.
+   *
+   * A land is a prefix on the seed string — `taiga:fen-mire-3204` — so picking
+   * one is picking a WOOD, not a mode, and it has to behave exactly like typing
+   * a seed does: it navigates. Nothing can rebuild a forest around you; the
+   * world is built from `worldSeed()` during main.js's module evaluation, which
+   * is the same reason `_commitSeed` navigates and `_peek` navigates.
+   *
+   * IT KEEPS THE WOOD AND CHANGES THE LAND, which is the one design decision
+   * here. `withLand` swaps the prefix and leaves the rest of the string alone,
+   * so clicking through the lands is a way of seeing the same named wood in
+   * different weather rather than being thrown somewhere new each time. (The
+   * hills differ — the whole string is the terrain seed, see `landOf` — but the
+   * NAME persists, which is what a player is actually keeping hold of.)
+   *
+   * IT DROPS ANY LOBBY, for the reason `_commitSeed` gives at length: the room
+   * you were in is in a forest you have just chosen to leave.
+   *
+   * Built from `LAND_LIST` rather than from a hard-coded pair, so a third land
+   * is one import in `lands/index.js` and nothing here.
+   */
+  _buildLands() {
+    this.landButtons = [];
+    for (const land of LAND_LIST) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.land = land.id;
+      b.textContent = land.label;
+      b.addEventListener('click', () => {
+        const want = withLand(land.id, this.seedInput.value.trim() || worldSeed());
+        if (want === worldSeed()) return;
+        this.landNote.textContent = 'Going there…';
+        this._goTo({ room: null, seed: want });
+      });
+      this.landHost.appendChild(b);
+      this.landButtons.push({ land, el: b });
     }
   }
 
@@ -224,6 +332,18 @@ class MainMenu {
     this.codeInput.readOnly = this.mode === 'host';
     this.codeCopy.hidden = this.mode !== 'host';
     this.codeLabel.textContent = this.mode === 'host' ? 'Your lobby code' : 'Lobby code';
+
+    /**
+     * Which land is lit is decided by the WOOD BOX, not by `worldSeed()`, so a
+     * half-typed `taiga:...` lights the winter wood before it is committed. It
+     * is the same courtesy `_seedTouched` exists for: the box is the player's
+     * intention and the panel should agree with it.
+     */
+    const shownLand = landOf(this.seedInput.value.trim() || worldSeed());
+    for (const { land, el } of this.landButtons) {
+      el.classList.toggle('on', land.id === shownLand);
+    }
+    this.landNote.textContent = LAND_LIST.find((l) => l.id === shownLand)?.blurb ?? '';
 
     for (const { arrival, el } of this.arrivalButtons) {
       el.classList.toggle('on', arrival.id === arrivalId());
@@ -546,7 +666,10 @@ class MainMenu {
     on(this.codeCopy, 'click', () => this._copyInvite());
 
     on(this.seedRoll, 'click', () => {
-      this.seedInput.value = inventSeed();
+      // Another wood IN THE SAME KIND OF PLACE. Rolling the dice should not
+      // also change the weather — that is what the buttons above are for — so
+      // the land the box currently names is carried onto the new name.
+      this.seedInput.value = inventSeed(landOf(this.seedInput.value.trim() || worldSeed()));
       this._seedTouched = true;
       this._paintSeedNote();
       this.seedInput.focus();
@@ -674,6 +797,7 @@ function install() {
   window.RRMainMenu?.dispose?.();
   document.getElementById('menu-dyes')?.replaceChildren();
   document.getElementById('menu-arrivals')?.replaceChildren();
+  document.getElementById('menu-lands')?.replaceChildren();
   const menu = new MainMenu();
   window.RRMainMenu = menu;
   return menu;

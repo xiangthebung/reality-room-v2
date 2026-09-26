@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getWorldSeed, gridGeometry, heightGrid } from './terrain.js';
+import { currentLand } from './lands/index.js';
 
 /**
  * The endless ground.
@@ -346,6 +347,16 @@ export class GroundField {
    */
   _dispatch() {
     const seed = getWorldSeed();
+    /**
+     * The land travels beside the seed because the seed sent here is a NUMBER
+     * and a land is a prefix on the STRING. One short string in a payload that
+     * already carries five typed arrays; the worker re-applies it only when it
+     * changes. See the block in terrain-worker.js for what goes wrong without
+     * it, and note it is the same failure the seed itself has recorded: ground
+     * built for the wrong world, in whichever chunks a worker happened to take,
+     * with no error and no console warning.
+     */
+    const land = currentLand().id;
     while (this.idle.length && this.queue.length) {
       const job = this.queue.shift();
       if (this.chunks.has(job.key) || this.inflight.has(job.key)) continue;
@@ -358,6 +369,7 @@ export class GroundField {
         seg: SEG,
         cell: CELL,
         seed,
+        land,
       });
     }
     /**

@@ -1,5 +1,20 @@
 import * as THREE from 'three';
 import { clamp, clamp01, fbm2, hashString, lerp, makeRng, noise2, rngRange, smoothstep } from '../core/util.js';
+/**
+ * The ground PALETTE is the land's; the height field is not, and never will be.
+ *
+ * `lands/index.js` imports nothing from this file, so this is a leaf import and
+ * not a cycle. That is why the land modules take their terrain functions as an
+ * injected kit rather than importing them — see the `K` block in scatter.js.
+ *
+ * Nothing about the SHAPE of the world is parameterised by a land and nothing
+ * should be. `softFloor(h, WATER_LEVEL + 1.9)` forbids cliffs and lakes by
+ * construction, the height field is single-surface (which is why caves.js is
+ * twelve thousand lines), and `ground.js` insists this stays one ridge and one
+ * river. A land changes what grows on the world and what colour it is, not
+ * where the hills are.
+ */
+import { currentLand, setLandFromSeed } from './lands/index.js';
 
 /**
  * The ground.
@@ -429,6 +444,22 @@ export function normalizeSeed(seed) {
  * worker without having to know how a string becomes a world.
  */
 export function setWorldSeed(seed) {
+  /**
+   * A STRING SEED ALSO CHOOSES A LAND, because the land IS a prefix on it.
+   *
+   * `landOf` returns the default for anything without a registered prefix, so a
+   * bare `grove-01` is the rainforest exactly as it has always been. Doing it
+   * here rather than making every caller remember means the two cannot come
+   * apart in a realm — and the recorded failure mode when they do is the one
+   * `forest-worker.js` has a long block about: a worker building one world's
+   * scatter against another world's ground, which past 170 m is a bank of
+   * trunks hanging in mid-air with their shadows on the ground below them.
+   *
+   * A NUMBER carries no land, and that is not an oversight either: `ground.js`
+   * posts `getWorldSeed()` to the terrain worker, which is the one realm that
+   * never sees the string. It is told separately, per chunk, alongside the seed.
+   */
+  if (typeof seed === 'string') setLandFromSeed(seed);
   const s = normalizeSeed(seed);
   WORLD_SEED = s;
   /**
@@ -699,6 +730,63 @@ function streamBank(x, z) {
  */
 export function streamBearing() {
   return Math.atan2(streamSin, streamCos);
+}
+
+/**
+ * THE CHANNEL, AS NUMBERS A SHADER CAN HAVE.
+ *
+ * `streamBank` is nine scalars and two sines, and `heightAt` turns the answer
+ * into a V-profile bed. Both are pure arithmetic — there is nothing here a
+ * fragment shader cannot reproduce exactly — and the water surface in
+ * atmosphere.js badly wants to, because until it could it had no idea how deep
+ * the water under any given pixel was. It blended its colour on WAVE HEIGHT,
+ * which is a number about the surface and not about the river, so the shoreline
+ * was wherever the opaque bank happened to poke through and the middle of the
+ * channel looked exactly like the shallows.
+ *
+ * ONE OBJECT RATHER THAN NINE EXPORTS, and the reason is drift. A GLSL copy of
+ * a JS function is a second implementation by definition; the only thing that
+ * keeps the two agreeing is that neither of them owns a constant. Everything
+ * the copy needs comes through here, so a reseed, a re-tune of the meander or
+ * a change to the carve moves both at once.
+ *
+ * THE CARVE HALF IS TRANSCRIBED, NOT REFERENCED, and that is the one honest
+ * weakness. `heightAt` writes its profile inline and is pinned by a
+ * 210 022-point identity hash, so it may not be refactored to read from here.
+ * If you change the four numbers in the stream block of `heightAt`, change
+ * them here too — `bedDepth`, `bedWidth`, `bedPower` and `bedRise` are
+ * literally `1.5`, `15`, `1.6` and `7.5` from that block, in that order.
+ *
+ * AND THE PROFILE IS NOT THE GROUND. `heightAt` lerps toward it with a weight
+ * of `corridor * 0.94`, so the true bed is up to 6% of the way back toward
+ * whatever the hillside was doing, plus 20 cm of bed noise. Half a metre of
+ * error is possible where the river cuts a steep flank. That is invisible in a
+ * soft depth gradient and glaring on a hard line, which is the whole reason the
+ * consumer draws its shoreline as a wide wash and never as a contour.
+ *
+ * Called about twice in a session (once per build of the water material), so it
+ * allocates rather than filling a caller's object.
+ */
+export function streamParams() {
+  return {
+    cos: streamCos,
+    sin: streamSin,
+    dist: streamDist,
+    k1: streamK1,
+    a1: streamA1,
+    p1: streamP1,
+    k2: streamK2,
+    a2: streamA2,
+    p2: streamP2,
+    /** Metres of water over the centre line, at bank = 0. */
+    bedDepth: 1.5,
+    /** Metres of bank over which the V-profile climbs. */
+    bedWidth: 15,
+    /** The V's exponent: below 1 it would be a bowl, above 1 it is a keel. */
+    bedPower: 1.6,
+    /** Metres the profile rises over `bedWidth`. */
+    bedRise: 7.5,
+  };
 }
 
 export function streamPointNear(x, z, out = { x: 0, y: 0, z: 0, angle: 0 }) {
@@ -1002,7 +1090,7 @@ const CAVE_DRY = 34;
  */
 
 /**
- * Half-length of the knoll along the gully's axis, and across it, in metres.
+ * Half-lengths of the knoll along the gully's axis and across it, in metres.
  *
  * SIZED AGAINST THE TREES, NOT AGAINST THE MOUTH. The first pass made a dome
  * 26 x 18 m and 10-16 m tall, which is a large rock and completely invisible:
@@ -1012,14 +1100,64 @@ const CAVE_DRY = 34;
  * this is a tor rather than a hillock, and it is wide in proportion or it reads
  * as a boulder somebody dropped.
  *
- * The width is also bounded from above, and tightly: see the ONE k block in the
- * CAVES header. A cave may only influence samples whose nearest slot is its own,
- * which puts every part of its footprint within 105 m of the slot centre along
- * the crest. `scripts/cave-check.mjs` walks the ground between adjacent mouths
- * and fails on the wall that appears if this is ever set past that.
+ *
+ * SPLIT FRONT AND BACK, BECAUSE A SYMMETRIC DOME HAS NO FACE.
+ *
+ * It was one half-length of 32 either side of the centre, and the shape that
+ * produced is the reason the photographs from the glade did not read as a cave.
+ * The slot is carved hardest at the mouth and fades over the eighteen metres
+ * behind it (`open`), so on a symmetric dome the rock in FRONT of the centre is
+ * exactly the part that has been cut away — what is left is the back half,
+ * rising smoothly away from you. Standing in the gully you were looking at the
+ * BACK SLOPE of a hill, which is a ramp, and a ramp with a hole at the bottom of
+ * it is a hole, not a doorway.
+ *
+ * 22 in front against 38 behind puts the same volume of rock in a shape that has
+ * a front: the dome climbs to full height within a dozen metres of the doorway
+ * and then trails off into the flank over twice that. Measured by sweeping the
+ * skyline from the 38 m station, ±30° of azimuth at 2° steps, this and the
+ * detail terms below together take the crag's profile from an 8.5° arc with 17°
+ * of total variation to a 12.1° arc with 26° — half again as much silhouette,
+ * and it now has corners in it rather than being one hump.
+ *
+ * The width is bounded from above, and tightly: see the ONE k block in the CAVES
+ * header. A cave may only influence samples whose nearest slot is its own, which
+ * puts every part of its footprint within 105 m of the slot centre along the
+ * crest; the back half-length is the one that grew and 38 is nowhere near it.
+ * `scripts/cave-check.mjs` walks the ground between adjacent mouths and fails on
+ * the wall that appears if this is ever set past that.
  */
-const KNOLL_LONG = 32;
+const KNOLL_FRONT = 22;
+const KNOLL_BACK = 38;
 const KNOLL_WIDE = 24;
+/**
+ * Amplitude in metres of the crag's mid-scale relief, and the bedding.
+ * Both are argued for at length inside `caveKnoll`; these are only the numbers.
+ *
+ * `KNOLL_CHUNK` multiplies a two-sided term whose useful swing is about ±0.35,
+ * so 8 m of it is ±2.8 m of ledge and hollow at 4-9 m across, on a crag 20-30 m
+ * tall. Bigger than that and the dome stops being one landform.
+ *
+ * `KNOLL_BED_K` is 2π/2.4: beds 2.4 m apart in lift. `KNOLL_BED_A` is 0.80/K, which
+ * fixes the warp's derivative at 1 ± 0.80 — the largest terracing that is still
+ * strictly monotone with a margin, and monotone is not a stylistic preference
+ * here. See `caveKnoll`.
+ */
+const KNOLL_CHUNK = 13;
+const KNOLL_BED_K = 2.618;
+const KNOLL_BED_A = 0.306;
+/**
+ * Where along the axis the crag is allowed to grow detail on its own spine.
+ *
+ * `open` is 1 at the mouth and fades to 0 eighteen metres in. Detail is off
+ * until it has dropped to KNOLL_SEAM and full KNOLL_SEAM_K⁻¹ later — 0.80 and 5
+ * put the ramp between about six and nine metres past the doorway, which is
+ * behind the last ring `cave-mouth` can see the sky through. Turning KNOLL_SEAM
+ * up is the direct way to put a breach back; if that gate ever fails at a ring
+ * in single figures, this is the number.
+ */
+const KNOLL_SEAM = 0.8;
+const KNOLL_SEAM_K = 5;
 /**
  * How far past the mouth its centre sits.
  *
@@ -1211,7 +1349,7 @@ function buildCave(k) {
    */
   c.reach = Math.max(
     Math.hypot(c.aFade - c.aHold + 12, c.wide) + 14,
-    Math.hypot(KNOLL_IN + KNOLL_LONG, KNOLL_WIDE)
+    Math.hypot(KNOLL_IN + KNOLL_BACK, KNOLL_WIDE)
   );
 
   if (streamBank(c.x, c.z) < CAVE_DRY) return c;
@@ -1297,6 +1435,25 @@ const MOUTH_STEP = 3;
 const MOUTH_NODES = 5;
 
 /**
+ * HOW FAR BACK OUT OF THE DOORWAY THE PORTAL REACHES, in metres.
+ *
+ * It used to start exactly at `aStart`, which is exactly where ring zero is.
+ * The ground lattice is 1.6 m, so the triangle covering ring zero's own plane
+ * has one corner claimed and pulled to the floor and one corner left on the
+ * hillside — and the drawn surface climbs between them over a single cell.
+ * `cave-mouth` measures that as a lip standing INSIDE the passage at ring 0:
+ * one sample of seven, worst +0.48 m, thirteen centimetres past its tolerance.
+ * It is not a mound and no deletion rule reaches it — see the five that failed
+ * — it is the interpolation across the boundary itself, and the only way to
+ * move it out of the doorway is to move the boundary out of the doorway.
+ *
+ * One and a half cells. What it claims is the last stretch of gully floor in
+ * front of the arch, which `caveMouthPlan` set node zero's floor FROM, so
+ * pulling it to that floor moves it by centimetres.
+ */
+const PORTAL_BACK = 2.4;
+
+/**
  * Where the tube starts and what its first five nodes are.
  *
  * Memoised on the descriptor, which is itself slot-cached and seed-guarded, so
@@ -1369,7 +1526,7 @@ export function cavePortalSpan(x, z, out = _portal) {
    * this frame stops being able to say where it is, so the portal must not.
    */
   const last = m.aStart + (MOUTH_NODES - 1) * MOUTH_STEP;
-  if (a < m.aStart || a > last) return null;
+  if (a < m.aStart - PORTAL_BACK || a > last) return null;
   const b = du * c.ca - dv * c.sa;
 
   // Straight-line interpolation between the planned nodes. They are collinear on
@@ -1407,6 +1564,7 @@ export function cavePortalSpan(x, z, out = _portal) {
   const u = b / half;
   const arc = r * MOUTH_T * Math.sqrt(1 - u * u);
   out.floor = y - Math.min(arc, r * MOUTH_F);
+  out.back = a < m.aStart;
   /**
    * Half a metre over the smooth outline, because the mesh is not smooth.
    *
@@ -1421,7 +1579,7 @@ export function cavePortalSpan(x, z, out = _portal) {
   return out;
 }
 
-const _portal = { floor: 0, ceil: 0 };
+const _portal = { floor: 0, ceil: 0, back: false };
 
 /**
  * What a ground vertex at (x, z, h) is, as far as a cave mouth is concerned.
@@ -1455,6 +1613,16 @@ const _portal = { floor: 0, ceil: 0 };
 export function cavePortal(x, z, h) {
   const p = cavePortalSpan(x, z);
   if (p === null) return 0;
+  /**
+   * NO CEILING CLAIM BEHIND `aStart`. Out here there is no hood — the crag
+   * stands over rings 0..hood and stops at the rim — so letting class 2 reach
+   * back would drop hillside to `roof + 0.25` in the open gully with nothing
+   * standing proud of it. That is the portal's own documented failure mode,
+   * "a patch of sunlit hillside showing through the top of the arch", moved
+   * outdoors where it would be worse. Class 0 leaves it alone; with no class-2
+   * corner out there the seam filter cuts nothing either.
+   */
+  if (p.back) return h < p.ceil - 0.4 ? 1 : 0;
   return h < p.ceil - 0.4 ? 1 : 2;
 }
 
@@ -1625,20 +1793,15 @@ function caveNotch(c, a, b) {
 }
 
 /**
- * The hill the mouth is in the face of. See the knoll block at KNOLL_LONG.
+ * The hill the mouth is in the face of. See the knoll block at KNOLL_FRONT.
  *
- * An ellipse in the gully's own frame, faded by a smoothstep so the join to the
- * flank has no edge, times a ridged multifractal so that what stands up is a
- * broken crag rather than a dome. `ridged2` is the same function the far-world
- * crag regions are made of and it is used here at a wavelength of about forty
- * metres — one or two humps across a knoll, not detail. Detail on this comes
- * from the terrain's own fbm, which is added before this and rides up with it.
- *
- * Offset per slot so that two knolls a few hundred metres apart are not the same
- * rock twice.
+ * An ellipse in the gully's own frame — longer behind the centre than in front
+ * of it, so the thing has a face — faded by a smoothstep so the join to the
+ * flank has no edge.
  */
 function knollDome(c, a, b) {
-  const da = (a - (c.aHold + KNOLL_IN)) / KNOLL_LONG;
+  const d = a - (c.aHold + KNOLL_IN);
+  const da = d / (d < 0 ? KNOLL_FRONT : KNOLL_BACK);
   const db = b / KNOLL_WIDE;
   const q = da * da + db * db;
   if (q >= 1) return 0;
@@ -1680,8 +1843,146 @@ function caveKnoll(c, a, b, x, z) {
   const across = ab >= lip ? 0 : 1 - smoothstep(clamp01((ab - half) / (lip - half)));
   const open = 1 - smoothstep(clamp01((a - (c.aHold + 2)) / 18));
 
-  const rough = 0.5 + 0.8 * clamp01(ridged2(x * 0.026 + c.k * 13.7, z * 0.026 - c.k * 9.1, 3) + 0.42);
-  return c.knoll * dome * rough * (1 - across * open);
+  /**
+   * ==== THE THREE THINGS THAT MAKE IT ROCK RATHER THAN PLASTICINE =========
+   *
+   * The complaint was that the crag reads as a smooth beige blob with a hole in
+   * it. That is not an opinion about the shading, it is a measurable property of
+   * the height field, and it was measured before anything here was written:
+   * sampling this dome on a 0.5 m lattice and taking the rms of (h - box blur at
+   * scale L) over its interior gave
+   *
+   *      2 m   0.074 m       16 m   1.659 m
+   *      4 m   0.220 m       32 m   2.939 m
+   *      8 m   0.652 m
+   *
+   * — nineteen metres of relief, essentially all of it above 16 m. Seven
+   * centimetres of shape at the scale a standing player reads texture from. The
+   * only shape term was `bump` below at a 38 m wavelength, whose upper octaves
+   * fall off 0.5 each and are then squashed through a clamp, so the 9 m octave
+   * arrives at about 0.6 m on a 24 m hill. One and a half humps across the whole
+   * landform is exactly what modelling clay looks like, and no texture fixes it:
+   * at these distances the SILHOUETTE is the cue, and a silhouette is geometry.
+   *
+   * The same measurement after this block: 0.223 / 0.405 / 0.844 / 1.772 / 3.003,
+   * i.e. three times the shape at 2 m and nearly twice at 4 m, and 23.4 m of
+   * relief instead of 19.4. It also greys the crag for free — the ground blend's
+   * `bare` term is driven by slope, so 65% of the dome's vertices now come out
+   * under linear chroma 0.42 against 49% before, with no change to the palette.
+   *
+   *
+   * `bump` IS UNCHANGED, TO THE BIT, AND THAT IS A DECISION RATHER THAN A
+   * SHORTCUT. It is the term multiplied by `near`, the gate that reaches the
+   * doorway, and the first draft here widened its floor from 0.50 to 0.72 to give
+   * the crag back the quarter of its drawn height the clamp was eating. That
+   * measured beautifully and broke `cave-mouth` on the spot: a taller hillside at
+   * the hole's edge makes the seam pass in `heightGrid` cut a DEEPER notch out of
+   * it — the lip is dropped to `roof + 0.25` whatever it was — and one column of
+   * seven at ring 6 came out as daylight over the arch. Height near the mouth is
+   * not free and is not this pass's to spend. Everything new below therefore
+   * reaches the doorway through `away` and never through `near`.
+   *
+   * `chunk` IS THE MISSING BAND, two octaves at 8.5 m and 4.2 m. Not more
+   * octaves on `bump`: a ridged multifractal's amplitude falls geometrically, so
+   * reaching 4 m through it costs four extra samples to deliver a tenth of a
+   * metre. A second term with its own amplitude reaches the same band in two,
+   * and can be given the amplitude the band actually needs. Mean-shifted by the
+   * +0.28 so it is a two-sided perturbation rather than a lift — a term that only
+   * ever adds is a second dome.
+   *
+   * NOT LOWER THAN 4 m, AND THAT IS THE MESH AND NOT TASTE. The near ground is a
+   * 1.6 m lattice, so 3.2 m is Nyquist; the 4.2 m octave is 2.6 samples per
+   * period and is already the last honest one. A third octave here would be 2.1 m
+   * — under two samples — and what that draws is not fine grain, it is
+   * uncorrelated numbers at the vertices, which is the mistake the mottle block in
+   * `heightGrid` has on record making with colour. Anything finer than this has
+   * to be a normal map, not a height.
+   *
+   * `away` IS THE DETAIL'S OWN GATE, AND IT IS NOT `near`.
+   *
+   * Two things have to be true of it at once and neither is negotiable.
+   *
+   *   IT MUST BE EXACTLY ZERO WHERE THE SEAM IS. That is the strip inside the
+   *   slot's own half-width (`across` = 1) AND within a few metres of the mouth
+   *   (`open` near 1) — the ground the PORTAL block deletes and the ground
+   *   immediately around it, whose lip `heightGrid` drops to the tube's ceiling.
+   *   A term that raises THAT by half a metre is a hole in the hillside over the
+   *   arch, which is what the first draft did.
+   *
+   *   AND IT MUST NOT LEAVE A SMOOTH SPINE. Gating on `1 - across` alone gives a
+   *   thirteen-metre band of untouched clay running the whole length of the crag,
+   *   and that band is the crest directly over the doorway — the exact pixels the
+   *   complaint is about.
+   *
+   * So it is the MAX of two independent permissions: far enough to the side
+   * (`across` has begun to let go, full detail by |b| ≈ 12 m against a tunnel
+   * 4.6 m wide), or far enough IN (`open` has dropped below KNOLL_SEAM, which on
+   * grove-01 is about nine metres past the mouth, by which point the passage is
+   * under many metres of hill and the seam is long behind you). Over the doorway
+   * itself neither holds and the field is the one that was signed off.
+   *
+   * `bed` IS BEDDING, AND IT IS THE ONE THAT COSTS NOTHING. Horizontal banding is
+   * the single strongest "this is stone" cue at distance, and a stack of beds is
+   * not a noise field at all — it is a monotone WARP of the height that already
+   * exists. `l + A sin(kl)` moves no material on average (a sine over its own
+   * period integrates to zero), flattens the surface into ledges where the
+   * derivative 1 + Ak cos(kl) is small, and steepens it into risers between them.
+   * It is one `sin`. Two properties are load-bearing:
+   *
+   *   IT IS MONOTONE while Ak < 1, so it cannot fold the field over itself, and
+   *   there is no value of x, z at which it can put ground where there was none.
+   *   KNOLL_BED_A * KNOLL_BED_K is 0.80, so the derivative runs 0.20 to 1.80:
+   *   near-flat treads, and risers not quite twice the underlying slope.
+   *
+   *   IT IS A FUNCTION OF THE LIFT, NOT OF THE HEIGHT, and therefore it is
+   *   exactly zero wherever the lift is — the slot, the doorway, the whole
+   *   world outside the ellipse. sin(0) = 0 with no phase term, so the beds have
+   *   no edge at the rim of the dome and nothing has to fade them out. The beds
+   *   are contours of the lift rather than of world height, which means they tilt
+   *   with the flank the crag sits on, which is what real bedding does.
+   *
+   * IT STILL HAD TO BE PUT BEHIND `perm`, and the reason is worth the line. Being
+   * zero where the LIFT is zero is not the same as being zero where the SEAM is:
+   * three metres from the arch the lift is a metre or so, and a sine of a metre
+   * is +0.15 m of new hillside standing exactly where `heightGrid` is about to
+   * decide how much of the lip to cut. That was the second breach — same gate,
+   * same column count, one ring further in — and it is the reason this is a
+   * scaled sine rather than the tidy pure warp.
+   *
+   * The beds are 2.4 m apart in LIFT, which is not the same as 2.4 m apart on the
+   * ground: a bed's horizontal spacing is 2.4 divided by the local gradient, so on
+   * this crag's mean slope of 0.28 they come out about eight metres apart and a
+   * 24 m crag wears eight or nine of them. Making them finer costs step height —
+   * A is bounded by 0.80/k — so this is the balance, not a free parameter.
+   *
+   *
+   * WHAT IT COSTS. Two extra `noise2` and one `sin` per sample — but only for
+   * samples inside the ellipse, which is a few hundred square metres per 210 m of
+   * ridge and zero everywhere else, because `dome <= 0` has already returned.
+   * MEASURED: `heightGrid` over the 128 m chunk that holds grove-01's crag, median
+   * of 40 builds, 4.26 ms without these terms and 4.34 ms with them — 0.08 ms, on
+   * the worker, on the ONE chunk in the world that has a crag in it, against
+   * 5.4 ms for an ordinary chunk out in the region field. The preset ladder does
+   * not move: Ultra's scene + post + shadow is 3.61 / 3.66 / 3.73 ms at the three
+   * stations against a 4.166 budget, inside the run-to-run spread of the numbers
+   * it replaced.
+   *
+   * AND WHAT IT DOES NOT TOUCH. `near` is the gate the lift always had and the
+   * term it multiplies is the one it always multiplied, so the slot the gully runs
+   * in is still exactly empty; everything added is behind `perm`, which is zero
+   * over the doorway and for several metres either side of it. If a
+   * detail term ever escapes that gate the failure is rock back in the doorway,
+   * which reports as "the cave stops dead 12 m in".
+   */
+  const near = dome * (1 - across * open);
+  if (near <= 0) return 0;
+  const bump = 0.5 + 0.8 * clamp01(ridged2(x * 0.026 + c.k * 13.7, z * 0.026 - c.k * 9.1, 3) + 0.42);
+  const perm = Math.max(clamp01((1 - across) * 2), clamp01((KNOLL_SEAM - open) * KNOLL_SEAM_K));
+  if (perm <= 0) return c.knoll * bump * near;
+  const chunk = ridged2(x * 0.118 + c.k * 4.3, z * 0.118 - c.k * 6.9, 2) + 0.28;
+  const lift = c.knoll * bump * near + KNOLL_CHUNK * chunk * dome * perm;
+  if (lift <= 0) return 0;
+  return lift + KNOLL_BED_A * perm * Math.sin(lift * KNOLL_BED_K);
 }
 
 /**
@@ -2173,9 +2474,13 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
   const wet = new Float32Array(count);
 
   /**
-   * THE FOUR GROUND COLOURS, MOVED TO THE TROPICS. Free — these are vertex
+   * THE SIX GROUND COLOURS, MOVED TO THE TROPICS. Free — these are vertex
    * colours on a mesh that is already being built, so the palette costs the
-   * same whatever it is.
+   * same whatever it is, and the same is true of every blend weight below: they
+   * are all functions of `slope`, `h`, `damp` and two noise fields this loop
+   * already evaluates. Nothing in this block draws a random number, so nothing
+   * in it can reseed the world or move a height. `terrain-survey`'s hash is
+   * over `heightAt` and is untouched by anything here by construction.
    *
    *   `moss`   was a yellow-green at 0x5c7a3c, which is a temperate sward seen
    *            from above. Under a closed tropical canopy the ground green is
@@ -2217,12 +2522,112 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
    * and lets the substrate's own colour through — so this is a dark, rich
    * olive-brown that the blend leans toward wherever water collects, and the
    * fragment side adds a sky-coloured sheen on top of it (see forest.js).
+   *
+   *
+   * ==== THE 2026-08 PASS: `rock`, AND A FIFTH OF A STOP OFF THE REST ========
+   *
+   * `rock` IS NEW AND IT IS THE BIGGEST CHANGE THIS PALETTE HAS EVER TAKEN.
+   *
+   * Until now ONE substrate painted flat ground, cliffs and mountains alike: the
+   * steepest term in the blend was `dry`, and a 46° hillside came out only 38%
+   * laterite over 62% moss-and-litter. So every hill in the world was leaf
+   * litter draped over a cone, which photographs as green pudding — there was no
+   * such thing as bare ground anywhere, at any angle, at any altitude.
+   *
+   * IT IS NEUTRAL ON PURPOSE, and that is the whole reason it works. Its LINEAR
+   * luma is 1.14x `litter`'s, so it is a fifth of a stop brighter and no more —
+   * a pale scree would have been the `dry` mistake again. In a world where every
+   * other substrate is a red-brown or an olive, GREY is the loudest thing
+   * available and it costs no brightness to say it. A slope reads as rock
+   * because it has no hue, not because it is bright. Measured over 164 025
+   * vertices, this palette puts 2.97% of the world below linear chroma 0.42 and
+   * 1.12% below 0.20; the palette before it put ZERO vertices below 0.42, at any
+   * slope, at any altitude. There was no grey in this world at all.
+   *
+   * EVERYTHING IN THIS BLOCK IS CHOSEN IN LINEAR, AND THE FIRST DRAFT WAS NOT.
+   * `THREE.Color(hex)` decodes sRGB into the linear working space and the decode
+   * is convex, so BOTH numbers a palette is picked by lie on the way through:
+   *
+   *   A NEAR-NEUTRAL sRGB HEX IS NOT NEAR-NEUTRAL. 0x413b34 is R65 G59 B52 —
+   *   a 20% spread, a perfectly reasonable-looking stone on a colour picker —
+   *   and its LINEAR chroma is 0.350, which is 41% of `litter`'s and reads as
+   *   pale mud. 0x3f3d3a is R63 G61 B58, a spread of five counts that by eye is
+   *   nothing, and its linear chroma is 0.149.
+   *
+   *   A 15% CUT IN sRGB LUMA IS A 32% CUT IN LIGHT. The first draft of this
+   *   block took ~15% off each colour's Rec.709 luma, intending -0.23 stops,
+   *   and measured -0.53 stops on the ground's mean linear albedo: 0.85^2.4 is
+   *   0.69. The hexes below are solved backwards from a LINEAR target of 0.85
+   *   instead, and the ground's mean linear albedo over those 164 025 vertices
+   *   measures 0.8553x — -0.225 stops — against the palette this replaced. In
+   *   sRGB they are only 6-7% darker than the old ones. Both halves of this are
+   *   the trap the plumage note has on record, arriving through a rock and a
+   *   floor instead of a bird.
+   *
+   * -0.225 STOPS IS DELIBERATELY SMALL. The lighting pass has already taken 35%
+   * out of the world, and a second half-stop here would leave the ground black
+   * under a closed canopy — so the answer to "the floor is a yellow-olive" is
+   * mostly HUE (`moss` moves 5° greener, `litter` and `dry` are redder and more
+   * saturated) and only a little level. The ratios between the five are
+   * preserved to within 2%, so nothing argued above is re-argued: this is one
+   * exposure step on the substrate set, not a re-grade. If the floor is still
+   * too bright this is the one number to turn — turn the LINEAR target, not the
+   * hexes, and turn it knowing the last 35% is already spent.
+   *
+   *   moss    0x415a2e -> 0x3e5333   linear x0.863, sRGB luma 81.5 -> 76.2,
+   *                                  hue 94 -> 99. It was the yellow-olive.
+   *   litter  0x53381f -> 0x4f331c   linear x0.863, sRGB 59.9 -> 55.3, and
+   *                                  redder: sRGB chroma 0.63 -> 0.65.
+   *   dry     0x64381f -> 0x5e321b   linear x0.841, sRGB 63.5 -> 57.7, still
+   *                                  only 1.04x `litter` in sRGB luma, which is
+   *                                  the rule the laterite note above fought
+   *                                  for.
+   *   gravel  0x5b5044 -> 0x534a3f   linear x0.847, sRGB 81.5 -> 75.1
+   *   soak    0x3b3120 -> 0x362c1d   linear x0.828, sRGB 49.9 -> 45.0, still
+   *                                  the darkest thing here, which is the point.
+   *   rock    NEW      -> 0x3f3d3a   linear luma 1.14x `litter`, linear chroma
+   *                                  0.149, sRGB luma 61.2.
+   *
+   * WHAT WAS REJECTED. Sampling a second, stony detail map on steep ground: the
+   * ground shader already takes two texture fetches and it is the frame's best
+   * early-Z occluder, so a third fetch is charged on every fragment of the
+   * largest opaque layer in the world to change 10% of it. The free version of
+   * that idea lives in forest.js and needs no attribute at all — see the note on
+   * `rocky` below.
    */
-  const moss = new THREE.Color(0x415a2e);
-  const litter = new THREE.Color(0x53381f);
-  const dry = new THREE.Color(0x64381f);
-  const gravel = new THREE.Color(0x5b5044);
-  const soak = new THREE.Color(0x3b3120);
+  /**
+   * ==== THE SUBSTRATES COME FROM THE LAND NOW, AND ONLY THE HEXES MOVED =====
+   *
+   * Everything above is about THIS wood's six colours and stays true of them —
+   * they are `lands/rainforest.js`'s `GROUND` block verbatim. What changed is
+   * where they are read from, and the reason is that a boreal wood's ground is
+   * not these six with a grade on it: it is grey-green lichen, black bog,
+   * near-neutral cold rock, and a SEVENTH thing that is not a substrate at all.
+   *
+   * THE BLEND'S SHAPE IS STILL WELDED HERE and only its coefficients are the
+   * land's, which is the same line the density product is split on. The order
+   * moss -> litter -> dry -> rock -> gravel -> soak encodes real arguments that
+   * hold in any land: rock must open AFTER the laterite ramp or it simply
+   * overwrites it; silt at the waterline must still win over a steep bank,
+   * because a stream cutting through rock still deposits mud on the inside of
+   * its bends; and `soak` darkens whatever is left, because being wet is a
+   * property of ground rather than a kind of it.
+   *
+   * `snow` IS A BRANCH AND NOT A LERP BY ZERO, deliberately. A land with no
+   * snow runs the identical expression it always ran — `terrain-survey`'s
+   * 210 022-point identity hash is over heights and not colours, so it could not
+   * have caught a colour drift, and a `lerp(white, 0.0)` that is off by a float
+   * ulp somewhere would have been invisible until somebody pixel-diffed a
+   * station six weeks later.
+   */
+  const G = currentLand().ground;
+  const moss = new THREE.Color(G.moss);
+  const litter = new THREE.Color(G.litter);
+  const dry = new THREE.Color(G.dry);
+  const gravel = new THREE.Color(G.gravel);
+  const soak = new THREE.Color(G.soak);
+  const rock = new THREE.Color(G.rock);
+  const snow = G.snow !== undefined ? new THREE.Color(G.snow) : null;
   const tmp = new THREE.Color();
   const twoCell = 2 * cell;
 
@@ -2277,9 +2682,9 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
        * The 0.22 floor is the biome: nothing in this forest is ever properly
        * dry, and a floor with genuinely dry patches in it reads as woodland.
        */
-      const basin = clamp01((5 - h) / 14) * (1 - clamp01(slope * 3.5));
+      const basin = clamp01((G.basinFrom - h) / G.basinSpan) * (1 - clamp01(slope * 3.5));
       const seep = fbm2(x * 0.019 + kGrain2X, z * 0.019 + kGrain2Z, 2) * 0.5 + 0.5;
-      const wetv = clamp01(Math.max(damp, 0.22 + basin * 0.52) * (0.5 + seep * 0.7));
+      const wetv = clamp01(Math.max(damp, G.wetFloor + basin * 0.52) * (0.5 + seep * 0.7));
 
       /**
        * Moss follows the water, which is the one thing the old blend did not
@@ -2288,11 +2693,130 @@ export function heightGrid(ox, oz, seg, cell, { worldXZ = false } = {}) {
        * bias is a third of the mix, so `patch` still decides most of it — this
        * only breaks the ties, in the direction the water says.
        */
-      tmp.copy(moss).lerp(litter, clamp01(patch * 1.35 - 0.12 - wetv * 0.34));
-      tmp.lerp(dry, clamp01(slope * 2.1 - 0.25));
+      tmp.copy(moss).lerp(litter, clamp01(patch * G.mossPatch - G.mossBias - wetv * G.mossWet));
+      tmp.lerp(dry, clamp01(slope * G.dryRamp - G.dryBias));
+
+      /**
+       * BARE ROCK, WHICH IS THE ONLY THING THAT MAKES A HILL A HILL.
+       *
+       * Two terms, added and clamped, and both are pure functions of quantities
+       * this loop already has — `slope` is the cell-scale central difference
+       * computed above, `h` is the vertex's own height. No new noise, no new
+       * sample, no rng draw: this reseeds NOTHING and cannot move a height.
+       *
+       *   bare  = clamp01(slope * 4.5 - 0.60 - (patch - 0.5) * 0.22)
+       *   crest = clamp01((h - 22) / 18)
+       *   rocky = clamp01(bare + crest² * 0.72)
+       *
+       * THE SLOPE RAMP IS FITTED TO THIS TERRAIN, NOT TO AN IDEA OF TERRAIN.
+       * Measured over 164 025 vertices of a 640 m square at the mesh's own
+       * 1.6 m cell, this world is FLAT: median slope 0.005 (6°), p90 0.087
+       * (24°), p99 0.348 (49°) — only one vertex in a hundred is steeper than
+       * 49°. A ramp pitched at real cliff angles would have painted 1% of the
+       * ground and been invisible, which is a large part of how the hillsides
+       * ended up wearing leaf litter in the first place. 4.5/0.60 opens at
+       * slope 0.133 (30°) and saturates at 0.356 (50°), which is the p95-p99
+       * band — where this terrain's actual hillsides are.
+       *
+       * IT HAS TO OPEN AFTER THE LATERITE RAMP, AND THE FIRST FITTING DID NOT.
+       * `dry` opens at slope 0.119 (28°). A rock ramp opening at 20°, which is
+       * where the ramp fitted purely for coverage put it, reaches 0.32 at 32°
+       * against laterite's 0.065 — and since rock is lerped AFTER `dry`, it
+       * simply overwrites it. The red bank would have been deleted by the
+       * change that was supposed to sit above it. Opening two degrees later and
+       * saturating at 50° gives the progression the ground actually has: litter
+       * on the flat, laterite where the subsoil shows through a slope, rock
+       * where the slope has stopped holding the subsoil at all. It costs
+       * footprint — this is roughly half the rock the greedy ramp painted — and
+       * the crest term below is what pays it back.
+       *
+       * THE CREST TERM IS SQUARED so the ridge greys only near its top rather
+       * than fading from halfway up: `crest` is linear from 22 m to 40 m, and
+       * squared it is still only 0.25 at 31 m. It tops out at 0.72 rather than
+       * 1.0 deliberately — a summit that goes fully bare is a bald patch, and
+       * there are trees standing on it. p90 of height here is 26 m, p98 is 34 m
+       * and p100 is 46 m, so this is the ridge and almost nothing else.
+       *
+       * WHAT THE PAIR MEASURES, end to end and on the shipped colours: 2.97% of
+       * vertices come out below linear chroma 0.42 and 1.12% below 0.20, against
+       * ZERO below 0.42 before this existed.
+       *
+       * `patch` PERTURBS THE THRESHOLD so the rock line is not a contour. A
+       * slope-only rule draws its boundary exactly along an iso-slope curve,
+       * which on a smooth noise field is a clean sweeping arc and reads as a
+       * painted line. Offsetting the ramp by ±0.11 at `patch`'s own 22 m scale
+       * makes the edge wander. It is deliberately the SAME field that splits
+       * moss from litter, and in the direction that puts rock where litter
+       * already wins: moss grows on soil and not on scree, so the two wanting
+       * the same ground is the correct correlation rather than a coincidence to
+       * be decorrelated.
+       *
+       * BEFORE `gravel`, AFTER `dry`. Silt at the waterline must still win over
+       * a steep bank — a stream cutting through rock still deposits mud on the
+       * inside of its bends — and `soak` still darkens whatever is left.
+       *
+       * WHAT THE FLOOR MAP DOES TO THIS, AND THE ONE-LINE FIX THAT IS NOT MINE
+       * TO MAKE: forest.js multiplies every ground fragment by a leaf-litter
+       * detail map at `uFloorAmt`, so this rock is currently mottled with 13-38
+       * cm leaf shapes. The free cure needs no attribute and no fetch, because
+       * the fragment shader already has the interpolated normal —
+       * `uFloorAmt * (1.0 - 0.75 * smoothstep(0.93, 0.70, normal.y))` fades the
+       * litter out over exactly this slope range. Recorded here rather than
+       * done here because that file is owned elsewhere.
+       */
+      const bare = clamp01(slope * G.bareRamp - G.bareBias - (patch - 0.5) * G.barePatch);
+      const crest = clamp01((h - G.crestFrom) / G.crestSpan);
+      tmp.lerp(rock, clamp01(bare + crest * crest * G.crestGain));
+
       tmp.lerp(gravel, clamp01((damp - 0.45) * 2.6));
       // Damp earth is DARKER and RICHER than the same earth dry. See `soak`.
       tmp.lerp(soak, wetv * 0.34);
+      /**
+       * ==== AND THEN SNOW, WHICH LIES ON THE OTHERS RATHER THAN COMPETING ===
+       *
+       * LAST, after every substrate lerp, which is both physically right and the
+       * only arrangement in which the ground showing through a thin patch is the
+       * ground that would actually be there. Put anywhere earlier and the rock
+       * ramp would paint over the summit's snow, which is the exact mistake the
+       * `dry`/`rock` ordering note above records making once already.
+       *
+       * EVERY INPUT IS ONE THIS LOOP ALREADY HAS — `slope`, `crest`, `wetv`,
+       * `patch`. No new noise, no new sample, no rng draw: this reseeds nothing
+       * and cannot move a height by a bit. It is four multiplies and a lerp on
+       * the largest opaque layer in the world and it does not cost a texture
+       * fetch, which is the whole reason the ground palette is a per-vertex
+       * blend in the first place.
+       *
+       *   `snowSlope` takes it off anything steep: snow slides, and a hillside
+       *   that keeps its cover at 40° has no shape at all. This is the term that
+       *   gives a winter ridge its form.
+       *
+       *   `snowCrest` puts it back with height, on the SAME squared `crest` ramp
+       *   the rock uses — so the one 30-46 m ridge every world has comes out
+       *   white on top and grey down its flanks. The recorded complaint is that
+       *   this forest hides everything past 40 m and that three attempts at a
+       *   landmark were invisible because they were not terrain-and-canopy
+       *   scale. A white summit is.
+       *
+       *   `snowWet` takes it off open water and bog. Ice would be better and ice
+       *   is a shader, not a palette entry.
+       *
+       *   `snowPatch` perturbs the whole thing at the 22 m `patch` scale, for the
+       *   reason the rock ramp gives: a slope-only rule draws its boundary along
+       *   an iso-slope curve, which on a smooth noise field is a clean sweeping
+       *   arc and reads as a painted line. It is deliberately the same field, so
+       *   the snow line and the rock line wander together.
+       *
+       * `snowAmt` is under 1 on purpose. A term that reaches full is a flat
+       * card; even deep snow keeps a tenth of what is under it.
+       */
+      if (snow !== null) {
+        const lie =
+          clamp01(1.1 - slope * G.snowSlope - (patch - 0.5) * G.snowPatch) *
+          clamp01(G.snowBase + G.snowCrest * crest * crest) *
+          (1 - wetv * G.snowWet);
+        tmp.lerp(snow, lie * G.snowAmt);
+      }
       /**
        * Height-driven desaturation — WITH THE LIGHTENING TAKEN OUT.
        *

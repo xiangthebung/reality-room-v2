@@ -14,12 +14,39 @@ npm run dev          # http://127.0.0.1:5180
 
 ---
 
-## Milestone one
+## What it is now
 
-This build is the vertical slice: **one world, one jukebox, one trip, and a
-debug panel to inspect the trip with.** No networking, no other players, no
-second map. The point is to get the *feel* of the visuals and the audio right
-before building anything on top of them.
+A place, for a few friends, instead of a voice call.
+
+You pick a name, a colour, a **land** — a rainforest or a winter wood — a
+**wood**, which is a seed you can keep and come back to, and an hour to arrive
+at. Then the forest fades up and tells you one quiet thing about where you are:
+the wood's name, which way the river lies, which way there is a fire in the
+trees, and whether something is open in the ridge.
+
+There is a **jukebox** in two cabinets you can pick up and stand anywhere, that
+plays music nobody recorded and will also play a link you paste at it. There is
+a **river** with fish in it that you can read, cast into, and lose. There is a
+**raft** on a seven-minute round trip that calls at three landings and rings its
+bell when it arrives. There are **nine places to sit** — a commons with two
+rings of logs round a big fire, three more hearths, two viewpoints and three
+jetties — chosen from the terrain by the seed, so two people in one room walk to
+the same fire without a byte crossing the network to say where it is. The fires
+burn taller when people sit at them. There are worn **paths** between all of it,
+and one of them goes to a **cave**.
+
+There is a **day**, on the Unix epoch, so everybody in a room shares an hour with
+nothing on the wire — a real sunrise with a direction to it, a Milky Way with
+dust lanes in it, and meteors on the same clock, so when you say "did you see
+that" the answer is yes. There is **weather**: you watch a storm close over
+ninety seconds before it rains, and the thunder arrives from the bearing the
+flash came from, at the speed of sound. In the winter wood it snows.
+
+And there are **mushrooms**, which are not decorative.
+
+Everything in here is a pure function of the seed and the clock, so nothing
+about the world travels over the network, and none of it touches the network at
+all unless you open a room.
 
 ### Controls
 
@@ -60,6 +87,8 @@ Being with other people:
 | `X` | mute · `C` switch between open mic and push-to-talk |
 | `Enter` or `T` | say something |
 | `Tab` | hold to see who is here and how far away they are |
+| `R` | hold to point at whatever you are looking at |
+| `H` | wave |
 | `P` | put a screen up where you are looking, or take it away |
 | `O` | move it to where you are looking now |
 | scroll wheel | resize it, 1.2 m to 16 m |
@@ -259,6 +288,127 @@ carry on as normal. Speed 0 stops the trip's free-running clock as well, which
 freezes the things you were listening for — no surges arrive, the sparks never
 fire and the drone stops moving. Seek to ego death, press `K`, and the `Trip ·`
 sound knobs mean literally what they say for as long as you want them to.
+
+---
+
+## Which wood this is
+
+The menu asks for a **land** and a **wood**, and the two together are one string.
+A wood is a seed — `ash-hollow-4471` — and a land is a prefix on it —
+`taiga:ash-hollow-4471`. That is the whole mechanism, and it was chosen because
+the seed already travels on three rails nobody has to touch: the URL's `?seed=`,
+the socket handshake, and the room record the server keeps. So a land costs
+**zero bytes on the wire, no protocol change and no server change**. The
+alternative — a first-class field beside the seed — was priced at eight edit
+sites across `net/` and `server/`, every one of them a place two people can end
+up disagreeing about where they are.
+
+The full string is the terrain seed, prefix included, so `taiga:grove-01` is a
+different landform and not the same hills in snow. A bare seed hashes to exactly
+what it hashed to before there were lands.
+
+**The rainforest** is kapok and palm and fig over a bare wet floor, with lianas,
+bromeliads, buttress roots, and a canopy that closes over you. **The winter
+wood** is spruce, fir, birch, larch and juniper over snow, and it was chosen as
+the second land on architecture rather than on taste: the layer table is a list
+you delete from, a conifer is the easiest tree in the grammar, and a closed
+boreal stand still self-occludes — which matters, because an open biome would
+have to draw to 384 m in every direction and would have been *dearer*, not
+cheaper. What is open in a taiga is the floor, not the stand.
+
+Each land carries its own trees, its own understorey layers, its own ground
+palette, its own animals, its own bird voices, its own weather and its own
+**air** — a hemisphere colour, a fog density and a sun rotation applied where
+the day table is consumed, rather than a second day table nobody has measured.
+That last one was found with an instrument rather than an argument:
+`scripts/_snow-probe.mjs` reports the mean colour of the ground band of the
+frame, and the winter wood measured at a saturation of 0.25 to 0.42 with a hue
+of 70 to 93 degrees — yellow-green, on snow. Halving the substrate showing
+through moved it by 0.01. It was never the albedo; it was the hemisphere's
+GROUND half, which is the bounce off the floor, and whose value in the table is
+a rainforest's dark green-brown. A snowfield bounces white, and a great deal of
+it.
+
+**`npm run check:land` is the gate**, and it is pure node — no browser, no GL,
+about two seconds. It digests every matrix, tint, bounding sphere, collider and
+patch from nine tree sectors and twenty-five understorey sectors, per land, and
+fails if either moved. `--layers` prints the per-layer counts, which is the
+question the summary line cannot answer when it says a land went from 52 layers
+to 50: *which two*, and did they merge or did they vanish.
+
+## Weather
+
+Rain was always here. What was missing is that it arrived with no warning, out
+of a sky that had not noticed, and nothing else in the world knew it was
+happening.
+
+**The sky goes first.** Cloud cover is driven by the rain curve read ninety
+seconds *ahead* of now, so you watch the light go flat and grey and the deck
+close over before the first drop lands. One argument to one function, and it is
+the entire difference between "it started raining" and "you saw it coming".
+
+**Lightning is on the same pure-clock discipline as everything else here.** A
+6.5-second slot index, a hash of the slot against the seed, and a fire when the
+hash falls under the square of how wet it is. It moves the hemisphere and the
+ambient and **never the sun**: a flash that moved the directional light would
+invalidate the shadow map and cost 3.2–4.5 ms on that frame, and a
+cloud-to-cloud flash is physically a shadowless global bounce anyway, so the
+cheap implementation is also the correct one. The thunder is scheduled at
+`distance / 0.343` seconds later, from the same hash that fired the flash, so
+two people in one wood hear the same bang at the same instant with nothing on
+the wire.
+
+**Snow** is the same three thousand six hundred instanced particles as rain,
+with a slower fall, a lateral drift applied before the wrap so the box still
+closes, a round sprite computed in the fragment rather than a second texture,
+and a much wider distance fade because snow reads at four times rain's range.
+It is a uniform and not a define, so one program still serves both lands. And
+precipitation and *wetness* were split: snow can never darken the ground,
+thicken the fog, wet the river or make the floor steam.
+
+**None of this is reachable by any existing gate**, because the weather returns
+zero under `navigator.webdriver` so that thirty pixel-diffing scripts photograph
+one fixed world. `RR.atmosphere.forceWeather({ precip, wet, cover, lightning,
+bearing })` is the door: it sets the inputs at the top of the day so the cloud
+deck, the gloom, the drops, the steam and the flash all compose from them
+exactly as in a real storm. `forceWeather(null)` hands it back to the clock.
+
+## Under the mountain
+
+There is a cave every 210 m or so along the ridge, and the way you find your
+first one is that you can hear it: a cave mouth breathes, and the draught coming
+out of a doorway carries a long way through a wood that hides everything past
+40 m.
+
+Inside is a swept tube with six real cross-sections chosen from the hydrology
+that would have cut them, chambers sized from the rock rather than from a wish,
+welded branches, one to three genuine loop closures, and a far end closed with a
+sphere profile rather than a cone. It is lit entirely by baked point sources —
+fungus every 7 to 16 m, a crystal palette held for the whole passage, four to
+eight volumetric beams sized by how big the room is — with **no scene light and
+no second shadow pass**. Underground is the cheapest place in this world at
+0.60 ms against 3.5–5 in the wood, because the wood is not submitted at all.
+
+Three things happen to you down there that are not geology.
+
+**Your eyes adapt.** Walking in, the passage is nearly black for four seconds
+and then it is not — the rock comes up out of nothing and you can suddenly see
+how far it goes. Walking back out, the wood is a blaze you have to squint
+through. The filter is asymmetric on purpose: three to five seconds to open,
+under a second to close, because that is what an eye does and the asymmetry *is*
+the percept.
+
+**Something lives there.** One or two chambers per cave carry a roost of ninety
+to two hundred and twenty bats, hanging on the drawn ceiling — not near it, on
+it — and reading exactly like stalactites until you come within thirteen metres
+of the colony, at which point the whole ceiling comes off at once and goes past
+your head with a sound like paper. All of the animation is in the vertex shader
+off one uniform, so it costs no CPU and one draw call.
+
+**And depth means something.** `path.deep` — a descent, not a distance, because
+you can walk a hundred metres of level tube and be nowhere — now drives the
+crystal seams, the fungus count and the drip rate, so the deep end of a passage
+is bigger, brighter, stranger and wetter than its mouth.
 
 ---
 
@@ -688,23 +838,71 @@ arrives as a body sensation rather than as a sound.
 
 ## Verifying it
 
-Four scripts drive the real app in a real browser. The dev server must be
-running.
+```
+npm run check                   # every gate, every failure, in one pass
+npm run check -- --only=pure    # the four node-only gates, about two seconds
+npm run check -- --group=net    # the multiplayer gates (needs `npm run server`)
+```
+
+`scripts/check-all.mjs` replaced a chain of twenty-three scripts joined by
+`&&`, for the three reasons `cave-gates.mjs` gives one level down and which
+apply with a wider blast radius here: **it stopped at the first failure**, so a
+change that legitimately moves several numbers at once became one red line per
+multi-minute round trip; **a pipeline hides an exit code**, and this project has
+already lost a gate to `| tail`, so every child inherits stdio and its code is
+read from the process; and **what is not in the chain is not run**, which is how
+`check:menu`, `check:net`, `check:social`, `check:glwarn` and `check:day` sat in
+package.json and in no aggregate at all. `net` is still out of the default set,
+because a stale signalling server left on 5181 tests old code and fakes two
+dead-server failures — run it deliberately.
+
+The individual instruments, all of which drive the real app in a real browser
+against a running dev server:
 
 ```
 node scripts/shoot.mjs          # screenshots at every phase, from fixed stations
+node scripts/gallery.mjs        # every land, every place worth standing, three hours
 node scripts/audio-probe.mjs    # spectrum analysis of the master bus
 node scripts/record.mjs         # records a WAV you can actually listen to
+node scripts/record-space.mjs   # the whole mix, with a record playing in it
 node scripts/perf.mjs           # frame timing at each phase
+node scripts/perf/bench.mjs     # the ratio gate, against .perf/baseline.json
+node scripts/perf/ceiling.mjs   # the ABSOLUTE gate — see below
+node scripts/perf/weak.mjs      # the same frame with the CPU throttled 4x and 8x
 node scripts/debug-check.mjs    # drives the debug panel and asserts it works
 node scripts/play-check.mjs     # plays through jukebox + mushrooms, no debug panel
 node scripts/fish-check.mjs     # the whole fishing loop: read, cast, knock, fight, cost
 node scripts/check-plants.mjs   # asserts no plant can stretch into a streak
+node scripts/cave-gates.mjs     # all ten cave gates, and all ten failures
+node scripts/land-identity.mjs  # every land's scatter, hashed. Pure node, 2 s
 node scripts/bisect.mjs ...     # one frame with any layer or effect switched off
 node scripts/isolate.mjs melt   # how much one effect contributes, world frozen
 node scripts/motion.mjs         # frames over time, for temporal artefacts
 node scripts/morph.mjs --still  # does the surface actually move? see below
 ```
+
+`gallery.mjs` exists because `shoot.mjs` is structurally blind to half of what
+this game now is: it photographs one wood at one hour through the trip's
+envelope, and has never taken a picture of the winter wood, of the night, of a
+cave, of the water, or of a fire with people round it. The two defects that
+shipped anyway — a winter wood whose snow read as algae, and a night sky with
+four stars in it — were both in that blind half. Its stations are FOUND rather
+than typed: the commons and a jetty come from the site plan, the cave mouth from
+the cave field, and the vista from the highest ground within half a kilometre —
+because `shoot.mjs`'s hand-typed `stream` station has had no water in it since
+the terrain moved, and a station that photographs the wrong thing is worse than
+no station, because it goes on passing.
+
+`ceiling.mjs` answers the one question `bench.mjs` structurally cannot. That
+gate compares RATIOS, and its own documentation states the blind spot: *a change
+that makes everything slower by the same factor moves no ratio and trips
+nothing* — which is precisely the failure mode of a day on which several people
+add magic in parallel to one tree. So this one records an ABSOLUTE millisecond
+ceiling on the ARMED frame (the one in ~360 where the sun's shadow anchor steps
+and the frame pays scene + post + shadow), with a generous fixed headroom, and
+**refuses to enforce it on a different GPU from the one that recorded it** — an
+absolute number compared across machines is confidently red on a laptop and
+confidently green on a workstation.
 
 `morph.mjs` answers the one question a still cannot: whether anything is
 happening. It parks the camera against a trunk, on the floor, under a canopy and
@@ -926,29 +1124,70 @@ the instrument costs a player   9.5 KiB — and does not pay it
 
 ## Layout
 
+This block used to list thirty files and omit half the codebase, including the
+largest file in it. A design record that does not mention that the game has
+caves you can walk into, or a menu that picks a world, is a design record
+somebody will read and then be surprised by. Everything is here now.
+
 ```
 src/
-  core/util.js          maths, RNG, value noise, frame clock
+  main.js               the hub. Builds the world, owns the frame loop, and is
+                        the one place any two subsystems are allowed to meet
+  core/
+    util.js             maths, RNG, value noise, frame clock
+    keys.js             every key the game listens for, declared once. Data,
+                        not behaviour: the strip and the settings page are both
+                        drawn from it and `check:keys` fails if they drift
+    quality.js          the five-rung ladder and the Auto governor
+    identity.js         who you are and when you chose to arrive
+    world-seed.js       the seed string, and the one place it is parsed
+    world-clock.js      one clock read once a frame, so nothing disagrees
   world/
-    terrain.js          the height function; single source of truth for "ground"
-    forest.js           trees, undergrowth, rocks, logs, mushrooms
+    terrain.js          the height function; single source of truth for "ground",
+                        the river's channel, and where a cave mouth is
+    lands/              WHICH WORLD THIS IS. One descriptor per land plus the
+                        registry; a land rides the seed string as a prefix
+                        (`taiga:fen-mire-3204`) and costs nothing on the wire
+    scatter.js          what stands where — the density field, the biome
+                        weights, the trodden ways, and every placement rule
+    forest.js           the streamed layers, and the registry they come from
+    forest-worker.js    the scatter, off the main thread
+    terrain-worker.js   the ground mesh, off the main thread
     trees.js            the branch grower and the species table
+    species-names.js    the species list as plain strings, with no imports, so
+                        a pure-node gate can read it without a canvas
+    tree-adorn.js       what hangs on a tree that is not a leaf
+    undergrowth.js      the nine understorey layers
+    ground.js           the ground chunks and their vertex colours
     textures.js         every texture, drawn on a canvas at load
-    atmosphere.js       sky, sun, shafts, mist, motes, water
+    atmosphere.js       sky, sun, stars, weather, shafts, mist, motes, water
+    daylight.js         the celestial model. The sun's arc is a rotation about
+                        a solved pole and the hour is a pure function of the
+                        epoch, so two people share a sky with zero bytes
+    caves.js            under the mountain: the swept tube, its chambers, its
+                        branches and loops, the crystals, the fungi, the shafts
+                        and the roost. The largest file in the repository
+    culling.js          what is submitted, and the buckets it is sorted into
+    fauna.js            the animals, in six draw calls
+    fauna/              their shapes and their shading
+    ripples.js          rings on the water, wherever something touches it
     speakers.js         a stereo pair, standing wherever you put them
     aim.js              the patch of ground you are looking at, shared by
                         anything you can stand somewhere
-    sites.js            where people meet — measured from the seed, and the
-                        one module the forest worker can also import, so the
-                        scatter can leave room for it
+    sites.js            where people meet, and the paths between — measured
+                        from the seed, and the one module the forest worker can
+                        also import, so the scatter can leave room for it
     gathering.js        the commons, the benches, the jetties
     campfire.js         every fire in the world, in four draw calls
     video-surface.js    a screen, standing where somebody put it
     ferry.js            the raft, on the epoch clock
     shoal.js            fish in the river, and the fish shape everything uses
   player/
-    controller.js       the body
+    controller.js       the body: where it may be, what it is standing in, and
+                        how hard it is working
+    body.js             the body you can see when you look down
     seats.js            somewhere to sit down
+    avatar.js           somebody else's body
     fishing.js          throw it, watch it land, wait, strike, and play it out
   net/
     index.js            other people, and where their pictures hang
@@ -957,7 +1196,10 @@ src/
     voice.js            the microphone chain and a panner per person
     share.js            getDisplayMedia, and films dropped on the window
     protocol.js         the wire, in one place
-  render/pipeline.js    scene → bloom → glow → tone map
+  render/
+    pipeline.js         scene → bloom → glow → tone map, and the exposure that
+                        your eye brings back up inside a cave
+    impostor.js         one card per tree, past the distance a tree is a shape
   trip/
     living.js           the shared material injection. The important one.
     state.js            the clock and the envelope
@@ -965,12 +1207,25 @@ src/
   audio/
     engine.js           the graph, buses, limiter, spatial sources
     music.js            the jukebox's four tracks and its instruments
-    ambience.js         wind, birds, stream, footsteps
+    ambience.js         wind, water, fire, footsteps, weather, thunder
+    wildlife.js         sixteen synthesised voices, chosen by contour
+    bed.js              the streamed far chorus
+    cave.js             the room under the mountain, and the draught coming
+                        out of its doorway
     trip-audio.js       space, drone, breath, sparks, pulse
     impulse.js          generated impulse responses
+    external-track.js   a pasted link, played through the same two cabinets
+    tuning.js           the sound knobs, in one place
+    presets.js          named settings of those knobs
   ui/
     hud.js              three elements, and no more
+    menu.js             the gate: a name, a dye, a land, a wood and an hour
+    settings.js         four pages and an Advanced fold
+    social.js           chat, notes, and the held-Tab roster
+    stats.js            the frame graph
     debug.js            the panel
+    jukebox-input.js    pasting a link without the game eating your keystrokes
+  dev/perf/             the instrument, compiled out of the shipping build
 ```
 
 ## Safety

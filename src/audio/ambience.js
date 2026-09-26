@@ -1,5 +1,6 @@
 import { clamp, clamp01, makeRng, rngRange } from '../core/util.js';
 import { darkAt } from '../world/daylight.js';
+import { currentLand } from '../world/lands/index.js';
 
 /**
  * The sound of the place.
@@ -67,6 +68,49 @@ import { darkAt } from '../world/daylight.js';
  * kind of punctuation a player might want to keep after turning the wood down.
  * The creak parting company with the gust that caused it is a real seam and it
  * is the right one: what you are hearing is not the weather, it is a tree.
+ *
+ * ==== WHAT THE WOOD-YOU-CAN-HEAR PASS ADDED ================================
+ *
+ * The soundscape above is good and it does not KNOW ANYTHING. It does not know
+ * there is a fire over there, that you have walked out of the trees, or which
+ * land you are in. Four things were added to fix that, and every one of them
+ * follows the stream's pattern rather than inventing a new one: main.js is
+ * already handing this file a coordinate and a distance every frame, so a
+ * second coordinate and a second distance cost nothing to plumb and everything
+ * else falls out.
+ *
+ *   HEARTH — `gathering.js` builds nine fire sites specifically so people have
+ *   somewhere to be, and it exports `nearestFire(x, z)` whose own comment says
+ *   it is "for the audio", and until now nothing in the repository called it.
+ *   One spatial source for the bed (a 90-320 Hz body and a hiss lidded well
+ *   under 2 kHz), one for the pops, both rewritten from the nearest fire each
+ *   frame exactly as the stream's is. The bed is on `worldBus` because a fire
+ *   is a property of a place; the pops are on `sfxBus` because a pop is an
+ *   impact. That is the same test this file already applies to the creak.
+ *
+ *   THUNDER — a rumble that arrives `km / 0.343` seconds after the flash,
+ *   because that is how far sound gets in a second and it is the only physical
+ *   constant in this file the player can actually count. Below 1 kHz, so it is
+ *   invisible to the harsh gate, and loud enough that it is NOT invisible to
+ *   the limiter. See `thunder`.
+ *
+ *   THE BELL — the ferry has had a brass bell mesh and no sound since the raft
+ *   existed. music.js's `bell` recipe, run through a spatial source at the raft
+ *   rather than through the jukebox bus, and the distance low-pass does the
+ *   rest: a bell heard through two hundred metres of wet forest is almost
+ *   entirely its fundamental, which is exactly what `createSpatial`'s air
+ *   filter turns it into for free.
+ *
+ *   THE LAND — the insect wall is a rainforest fact and this project now has a
+ *   winter wood in it. It is scaled by a per-land scalar read from the land
+ *   record, and the record is ASKED FOR rather than passed in, for the same
+ *   reason `darkAt()` is: main.js has no other opinion about audio and a fifth
+ *   named parameter is a thing that goes stale.
+ *
+ * And one thing that was already here and was being fed a lie: `canopy`. The
+ * parameter has been documented as "how much foliage is overhead" since the
+ * file was written and main.js passed the literal 0.6 for the whole of that
+ * time. It is real now, and it is spent in three places — see `update`.
  */
 
 let cachedNoise = null;
@@ -143,6 +187,29 @@ const VOICE_CEILING = 34;
 /** Within this many metres of the channel there are frogs. Beyond it, none. */
 const FROG_RANGE = 45;
 
+/**
+ * Past this many metres a fire makes NO sound at all, and the zero is exact.
+ *
+ * The panner would already have it thirty decibels down — but only thirty. An
+ * inverse-distance model with `maxDistance` clamps to a floor rather than to
+ * silence, so a hearth four hundred metres away would still be pushing a
+ * continuous noise bed into `worldBus` from somewhere behind the horizon, on
+ * every frame, in every measurement this repo takes. A hard multiplicative
+ * gate means that a player (or `audio-probe`) standing anywhere but at a
+ * gathering place measures the world this file has always produced, bit for
+ * bit, and there is no "the fire layer contributes a little bit everywhere"
+ * term to argue about later.
+ *
+ * 34 m rather than the stream's 45 because a campfire is genuinely quiet. You
+ * can hear a river from further away than you can hear a fire, and the point of
+ * the layer is that the last thirty metres of walking toward the clearing are
+ * different, not that the whole wood smells of smoke.
+ */
+const FIRE_RANGE = 34;
+
+/** The metres within which a fire is close enough to be worth scheduling pops. */
+const FIRE_POP_RANGE = 22;
+
 export class Ambience {
   constructor(engine) {
     this.engine = engine;
@@ -169,6 +236,41 @@ export class Ambience {
      */
     this.streamPos = { x: 0, y: -3, z: 26 };
     this.streamDistance = 999;
+
+    /**
+     * Where the nearest fire is, and how far away you are from it. Exactly the
+     * same contract as `streamPos` above and written by the same block in
+     * main.js, from `gathering.nearestFire(x, z)`.
+     *
+     * The distance starts at 999 and not at 0, which matters on the first
+     * frame: 0 would mean "you are standing in a fire" and would open the bed
+     * at full level for however many frames it takes main.js to correct it. The
+     * stream has the identical guard for the identical reason.
+     */
+    this.firePos = { x: 0, y: 0, z: 0 };
+    this.fireDistance = 999;
+    this._nextPop = 1.4;
+
+    /**
+     * The last lightning strike this file has already answered.
+     *
+     * A flash is one frame long, so the caller passes the same descriptor for
+     * that frame and null on every other — but a dropped frame, a paused tab,
+     * or a caller that latches its own value for two frames would otherwise
+     * schedule the same thunder twice, half a second apart, which sounds like a
+     * bug rather than like weather. Comparing the strike's id is one integer and
+     * it makes the scheduler idempotent.
+     */
+    this._lastStrike = null;
+
+    /**
+     * How loud this land's insects are, 0 to 1. See `setLand`.
+     *
+     * One until told otherwise, so a caller that never mentions a land — every
+     * audio harness in `scripts/` — measures the rainforest wall exactly as it
+     * has always been.
+     */
+    this.insectScale = 1;
 
     this._nextFrog = 4;
     this._nextPlop = 12;
@@ -374,6 +476,142 @@ export class Ambience {
     streamDepth.gain.value = 520;
     this.streamLfo.connect(streamDepth).connect(streamLp.frequency);
     this.streamLfo.start();
+
+    /**
+     * ==== THE HEARTH =========================================================
+     *
+     * `gathering.js` puts nine fire sites in the world for the express purpose
+     * of giving people somewhere to be, and `nearestFire(x, z)` has sat there
+     * with a comment saying it is "for the audio" and no caller. A clearing
+     * with a lit fire in it that makes no sound is a picture of a fire.
+     *
+     * IT IS BUILT LIKE THE STREAM AND NOT LIKE A ONE-SHOT, and that is the
+     * decision the rest of the block follows from. A fire is continuous, it is
+     * at a place, and the place moves — not because the fire moves, but because
+     * WHICH fire is nearest changes as you walk. Two persistent spatial sources
+     * whose positions are rewritten each frame cost four nodes for the life of
+     * the session and nothing per event; a source built per fire would need
+     * nine of everything and a rebuild whenever the gathering layer streamed.
+     *
+     * TWO LAYERS, BECAUSE A FIRE IS TWO SOUNDS AND THEY ARE IN DIFFERENT
+     * OCTAVES.
+     *
+     *   BODY, 90-320 Hz. The roar — a column of hot air leaving, which is a
+     *   broadband low rumble and is what you feel rather than hear. It is the
+     *   half that survives being fifteen metres away through wet undergrowth,
+     *   and it is the half that makes a fire read as BIG.
+     *
+     *   HISS, 500-1450 Hz with a slow gain wander. Steam and resin leaving the
+     *   wood. Without it the body alone is a distant engine; with it, it is a
+     *   fire. The wander is one oscillator on one gain and it is the same trick
+     *   the cicada wall uses: a steady filtered noise is an air conditioner.
+     *
+     * THE HISS IS LIDDED AT 1450 AND THAT IS NOT AN AESTHETIC CHOICE. A real
+     * fire at two metres has a great deal of energy between 2 and 6 kHz, and
+     * `audio-probe` fails any stage whose share of that band drifts up —
+     * `continuous-beds-cannot-live-in-2-6khz` records the insect wall having
+     * 0.014 of headroom before it was moved below 2 kHz, and this is a second
+     * continuous bed that would have to share whatever is left. So the hiss is
+     * a fire heard from six metres across a clearing with leaves in the way,
+     * which absorbs exactly that band, and it costs nothing perceptually
+     * because the POPS carry the top end instead — and a pop is a transient,
+     * which the gate does not integrate.
+     */
+    this.fireSpatial = this.engine.createSpatial(this.firePos, {
+      refDistance: 4,
+      rolloff: 1.5,
+      maxDistance: FIRE_RANGE + 6,
+    });
+    /**
+     * A SECOND SPATIAL FOR THE POPS, ON `sfxBus`.
+     *
+     * The same coordinate and the same distance, so it is not a second place —
+     * it is the same place on the other side of the bus split this file's
+     * header describes. The bed is a property of the clearing and belongs with
+     * the wind and the stream; a pop is a discrete impact with a hard front and
+     * belongs with the plop and the creak. A player who has pulled the world
+     * slider down to walk in near silence should still hear the fire crack.
+     *
+     * Persistent rather than built per pop, unlike the creak: a pop is fifteen
+     * milliseconds long and a cluster of three of them would otherwise build
+     * and tear down nine nodes inside a fifth of a second, several times a
+     * minute, forever.
+     */
+    this.firePopSpatial = this.engine.createSpatial(this.firePos, {
+      refDistance: 3.5,
+      rolloff: 1.7,
+      maxDistance: FIRE_POP_RANGE + 8,
+      bus: this.engine.sfxBus,
+    });
+
+    this.fireBodySource = ctx.createBufferSource();
+    this.fireBodySource.buffer = buffer;
+    this.fireBodySource.loop = true;
+    // Well under unity. Pink noise already leans low; slowing it further drags
+    // its energy down into the band the filters below are trying to keep,
+    // which means they are shaping something that has body rather than
+    // amplifying a region that is nearly empty. Same argument as the cicadas'
+    // 0.72, arrived at from the other direction.
+    this.fireBodySource.playbackRate.value = 0.55;
+    const fireBodyHp = ctx.createBiquadFilter();
+    fireBodyHp.type = 'highpass';
+    fireBodyHp.frequency.value = 90;
+    fireBodyHp.Q.value = 0.4;
+    const fireBodyLp = ctx.createBiquadFilter();
+    fireBodyLp.type = 'lowpass';
+    fireBodyLp.frequency.value = 320;
+    fireBodyLp.Q.value = 0.4;
+    this.fireBodyGain = ctx.createGain();
+    this.fireBodyGain.gain.value = 0;
+    this.fireBodySource
+      .connect(fireBodyHp)
+      .connect(fireBodyLp)
+      .connect(this.fireBodyGain)
+      .connect(this.fireSpatial.input);
+    this.fireBodySource.start();
+
+    this.fireHissSource = ctx.createBufferSource();
+    this.fireHissSource.buffer = buffer;
+    this.fireHissSource.loop = true;
+    this.fireHissSource.playbackRate.value = 1.25;
+    const fireHissHp = ctx.createBiquadFilter();
+    fireHissHp.type = 'highpass';
+    fireHissHp.frequency.value = 500;
+    fireHissHp.Q.value = 0.4;
+    this.fireHissTop = ctx.createBiquadFilter();
+    this.fireHissTop.type = 'lowpass';
+    // 1450. See the block above — this is the number the harsh gate cares
+    // about and it is the one number in the hearth that must not drift up.
+    this.fireHissTop.frequency.value = 1450;
+    this.fireHissTop.Q.value = 0.3;
+    this.fireHissGain = ctx.createGain();
+    this.fireHissGain.gain.value = 0;
+    /**
+     * The wander, and it is deliberately slower than either insect bed.
+     *
+     * 0.13 Hz — a period of about eight seconds. The cicadas breathe at 0.21
+     * and the katydids pulse at 0.34, and this had to be incommensurate with
+     * both or the three would periodically line up into one throb, which is the
+     * trap the katydid LFO's own comment records. It is also SLOWER than both
+     * because that is what a fire does: a chorus of insects surges, a fire
+     * settles and flares over several seconds. Depth 0.3 on a base of 0.72, so
+     * it swings roughly ±3.5 dB and never reaches zero.
+     */
+    this.fireHissWander = ctx.createGain();
+    this.fireHissWander.gain.value = 0.72;
+    this.fireHissLfo = ctx.createOscillator();
+    this.fireHissLfo.frequency.value = 0.13;
+    const fireHissDepth = ctx.createGain();
+    fireHissDepth.gain.value = 0.3;
+    this.fireHissLfo.connect(fireHissDepth).connect(this.fireHissWander.gain);
+    this.fireHissLfo.start();
+    this.fireHissSource
+      .connect(fireHissHp)
+      .connect(this.fireHissTop)
+      .connect(this.fireHissWander)
+      .connect(this.fireHissGain)
+      .connect(this.fireSpatial.input);
+    this.fireHissSource.start();
 
     /**
      * ==== THE INSECT WALL ====================================================
@@ -623,7 +861,49 @@ export class Ambience {
     this.stepBus.connect(this.engine.worldBus);
 
     this.noiseBuffer = buffer;
+    /**
+     * ASK THE REALM WHICH LAND THIS IS, rather than be told.
+     *
+     * Identical reasoning to `darkAt()` in `update`: main.js does not have an
+     * opinion about audio anywhere else, so a parameter threaded through
+     * `build()` for this would be a thing that goes stale the first time
+     * somebody edits that call site. `setLand` in `world/lands/index.js` is
+     * called from main.js beside `setWorldSeed`, long before the audio gate is
+     * ever clicked, and `currentLand()` is one property read.
+     *
+     * The explicit setter still wins if it was used first, because the audio
+     * harnesses want to stand in a land the page is not in.
+     */
+    if (!this._landExplicit) this.setLand(currentLand());
     this.built = true;
+  }
+
+  /**
+   * WHICH LAND THIS IS, and the only thing this file takes from one.
+   *
+   * `insects` is a scalar because that is genuinely all that changes here. A
+   * winter wood is not a rainforest with different insects, it is a rainforest
+   * with almost NO insects — the wall is the single loudest statement the
+   * rainforest bed makes and a boreal forest in snow makes the opposite one.
+   * Everything else in this file is weather, water and wind, which sound the
+   * same in both.
+   *
+   * WRITTEN DEFENSIVELY BECAUSE THE FIELD MAY NOT EXIST YET, AND BECAUSE ITS
+   * NESTING IS NOT SETTLED. The land records are being extended by another pass
+   * in the same wave as this one, and that pass reads its mammal roster from
+   * `land.fauna.kinds` — so this may land as `land.insects` or as
+   * `land.fauna.insects`. Both are accepted, in that order, and a record with
+   * neither behaves exactly as the rainforest always has. That is the correct
+   * reading: the field was added to make the taiga quiet, not to make the
+   * rainforest conditional.
+   *
+   * @param {{insects?: number, fauna?: {insects?: number}}|null} land a land
+   *   record, or null for "as before"
+   */
+  setLand(land) {
+    this._landExplicit = true;
+    const v = land?.insects ?? land?.fauna?.insects;
+    this.insectScale = Number.isFinite(v) ? clamp01(v) : 1;
   }
 
   /**
@@ -1436,6 +1716,51 @@ export class Ambience {
     };
   }
 
+  /**
+   * FOUR SOUNDS THE BODY NOW ASKS FOR, AND WHAT THEIR ARGUMENTS MEAN.
+   *
+   * Requested by `player/controller.js`, which publishes all four quantities on
+   * the frame the movement itself reads them. Every call site optional-chains,
+   * so an unimplemented method here is silence and never an exception.
+   *
+   * land(strength) — the ground arriving. `strength` is 0..1, where 0 is the
+   *   softest fall that counts (about 3 m/s, stepping off a root) and 1 is 11
+   *   m/s, a 2.75 m drop. NO POSITION ARGUMENT: it happens at your own feet and
+   *   the listener is your own head, so a panner would be a 1.7 m offset nobody
+   *   can hear and a node per event. Route to `stepBus`, so it inherits the mix
+   *   and the cave crossfade the footsteps already have. The shape asked for is
+   *   the `step` noise burst band-passed LOW — 120-260 Hz, Q around 0.8,
+   *   decaying over ~180 ms — with a sine thump under it (55 Hz sliding to about
+   *   40 over 90 ms), and then a SECOND, lighter grain about 45 ms later in a
+   *   higher band (300-700 Hz) at roughly 0.4 of the first, so that it is
+   *   heel-then-toe rather than one hit. `cave.js` wraps this exactly as it
+   *   wraps `step`.
+   *
+   * scuff(strength) — pushing off, on the frame the jump key fires. 0..1;
+   *   main.js sends 0.5. A quieter, longer, scrapier `step` — the same noise
+   *   source through a band that sweeps up rather than sitting still. OPTIONAL:
+   *   main.js falls back to `step(0.35, wetFeet)` if this does not exist, because
+   *   a quiet footstep already is a scuff.
+   *
+   * wade(position, strength, depth) — water round the legs, once per stride.
+   *   `position` is a plain {x, y, z} AT THE FEET — 1.68 m below the listener —
+   *   so it has to go through `engine.createSpatial` the way `brush` does, or it
+   *   is just a second footstep. `strength` is 0..1.5: anything above 1 is the
+   *   entry plunge, and main.js sends exactly 1.4 once, on the frame the feet
+   *   break the surface. `depth` is 0..1 and is for the timbre rather than the
+   *   level — ankle deep is a bright splash, chest deep is a heavy displacement
+   *   with almost no top end.
+   *
+   * breath(exertion) — CALLED EVERY FRAME with 0..1. The in/out cycle and its
+   *   timing belong here, not to the caller; `exertion` only says how hard the
+   *   body is working. Filtered noise, an in/out pair tightening from about 2.6 s
+   *   at rest to 1.4 s at full, band-limited well below 2 kHz for the reason in
+   *   this file's header about continuous beds and the harsh gate — and, the
+   *   point, routed with NO PANNER AT ALL, straight to a bus. A breath is the one
+   *   sound in this world that legitimately originates inside your own head, and
+   *   putting it at a position in the wood would make it somebody else's.
+   */
+
   /** A footstep. `wet` selects between leaf litter and the stream bed. */
   step(strength = 1, wet = 0) {
     if (!this.built) return;
@@ -1519,6 +1844,355 @@ export class Ambience {
   }
 
   /**
+   * A CLUSTER OF POPS. One to three, over about a fifth of a second.
+   *
+   * WHY A CLUSTER AND NOT A POP. A fire does not tick. What it does is go quiet
+   * for two seconds and then produce three cracks in quick succession as one
+   * pocket of sap lets go and takes its neighbours with it — and the clustering
+   * is more of what makes a recording read as "fire" than the timbre of any one
+   * crack is. Evenly spaced single pops at the same average rate sound like a
+   * clock, which is the same failure `_creak` records about a regular envelope
+   * and `_chitter` in wildlife.js records about a regular train.
+   *
+   * THE LEVEL IS ROLLED, AND THE ROLL IS THE OTHER HALF. Nine pops in ten are
+   * barely there — the fire muttering — and the tenth is a bang that makes you
+   * look at it. A fire whose pops are all the same size is a loop. The loud one
+   * is roughly nine decibels over the quiet ones, which is about the ratio a
+   * real one has and is comfortably inside what the limiter absorbs without
+   * moving (see `pumping-is-a-swing-not-an-average`).
+   *
+   * THEY ARE ALLOWED ABOVE 2 kHz AND THE BED IS NOT, which is the one thing to
+   * understand before editing either. `audio-probe` integrates energy over a
+   * window: a continuous layer contributes its band share to every frame of
+   * every stage and a fifteen-millisecond transient every second and a half
+   * contributes almost nothing to the integral. So the top end of the fire —
+   * the part that makes it crackle rather than roar — lives entirely here,
+   * which is why the hiss above could afford to be lidded at 1450.
+   *
+   * Routed through `_grain`, which already owns the voice budget and the Q
+   * clamp, so a cluster arriving on the same frame as a gust and a frog cannot
+   * push the count past the ceiling — it just gets shorter.
+   */
+  _firePops(when, near) {
+    const rng = this.rng;
+    const count = 1 + Math.floor(rng() * rng() * 3);
+    let t = when;
+    for (let i = 0; i < count; i++) {
+      /**
+       * One in ten is loud. `rng() < 0.1` rather than a shaped curve because
+       * the interesting quantity here is the CONTRAST and a distribution would
+       * fill the gap between the two with pops that are neither.
+       */
+      const loud = rng() < 0.1;
+      const gain = (loud ? rngRange(rng, 0.075, 0.13) : rngRange(rng, 0.008, 0.032)) * near;
+      this._grain(this.firePopSpatial.input, t, {
+        // A wide window, and the loud ones sit higher in it: a big crack is a
+        // faster transient and a faster transient is brighter. Q is left at the
+        // default and clamped by `_grain` anyway — a narrow band-pass on noise
+        // is a pitch, and a train of pitches is the buzz this project exists
+        // downstream of.
+        freq: loud ? rngRange(rng, 1400, 2600) : rngRange(rng, 620, 1700),
+        q: 0.8,
+        decay: loud ? rngRange(rng, 0.035, 0.07) : rngRange(rng, 0.012, 0.035),
+        gain,
+        rate: rngRange(rng, 0.9, 1.6),
+      });
+      t += rngRange(rng, 0.035, 0.11);
+    }
+  }
+
+  /**
+   * THUNDER, AND THE DELAY IS THE WHOLE POINT.
+   *
+   * `ctx.currentTime + km / 0.343` — sound covers 343 metres a second, so a
+   * strike three kilometres away arrives eight and a half seconds after you saw
+   * it. That is the one physical constant in this entire file that a player can
+   * verify by counting, and getting it right is worth more than any amount of
+   * work on the timbre: a flash and a bang together is a sound effect, and a
+   * flash and then a long wait and then a bang is a storm.
+   *
+   * TWO LAYERS, AND THE CRACK IS CONDITIONAL.
+   *
+   *   RUMBLE, 90-220 Hz, always. Distance is a low-pass — air absorbs high
+   *   frequencies over kilometres far more than low ones, which is why distant
+   *   thunder is a rumble and near thunder is a bang. The corner rides `km`.
+   *
+   *   CRACK, 200-900 Hz, only inside about four kilometres. This is the leader
+   *   stroke, and past a few kilometres there is genuinely none of it left. It
+   *   is also the layer that could move the limiter, so gating it on proximity
+   *   gates the risk on the same number.
+   *
+   * WHY IT IS NOT A CONVOLVER OR A SECOND REVERB. `a-long-reverb-needs-sparse-
+   * sources` and this file's own brief both say the same thing: the forest
+   * impulse is already on everything, and thunder is the sparsest source in the
+   * project. It goes through `roomSend` like every other world sound and gets a
+   * wood-sized tail for free; what it needs of its own is a LONG exponential
+   * decay, two to six seconds, which is the sound rolling round the sky and is
+   * not a reverb at all.
+   *
+   * IT HOLDS A VOICE FOR ITS WHOLE FLIGHT TIME, deliberately. The budget is
+   * taken when the strike is scheduled, not when it is heard, so a squall
+   * throwing six flashes in ten seconds cannot queue six overlapping rumbles —
+   * the later ones are simply refused, which is what a storm sounds like anyway.
+   *
+   * @param {number} km      how far away the strike was, in kilometres
+   * @param {number} energy  0..1, how big it was
+   * @param {number|null} bearing radians; null picks one, which is only right
+   *                              for a caller that has no flash to agree with
+   */
+  thunder(km, energy = 1, bearing = null) {
+    if (!this.built || this.voices > VOICE_CEILING * 0.8) return;
+    const ctx = this.ctx;
+    const rng = this.rng;
+    /**
+     * Clamped at eighteen kilometres, which is fifty-two seconds of flight.
+     *
+     * Not a range check — a bound on how long one strike may hold a voice. A
+     * scheduled buffer source that has not started yet is still a live node and
+     * still counted against the ceiling (see the note above about why that is
+     * deliberate), and a caller with a runaway distance could otherwise park
+     * one for minutes. Eighteen kilometres is also about as far as thunder is
+     * audible at all, so the clamp costs nothing real.
+     */
+    const d = clamp(km, 0.15, 18);
+    const e = clamp01(energy);
+    const t0 = ctx.currentTime + d / 0.343;
+    /**
+     * Placed at a fixed audible radius on the strike's bearing rather than at
+     * its real distance, and the reason is the same one `_howl` gives: an
+     * inverse-distance panner at four thousand metres is silence, and what the
+     * bearing is for is telling you WHICH WAY the storm is. So the direction is
+     * real, the radius is a stage convention, and the distance is spent on the
+     * level, the low-pass corner and the length of the onset instead — which is
+     * where a listener actually reads it from.
+     */
+    const a = bearing === null ? rng() * Math.PI * 2 : bearing;
+    const r = rngRange(rng, 90, 150);
+    const ears = this._ears();
+    _at.x = ears.x + Math.cos(a) * r;
+    // High. Thunder is a sheet of sky, and the elevation is the one cue that
+    // stops it reading as an explosion at ground level behind the trees.
+    _at.y = ears.y + rngRange(rng, 30, 60);
+    _at.z = ears.z + Math.sin(a) * r;
+    const spatial = this.engine.createSpatial(_at, {
+      refDistance: 60,
+      // Nearly flat. The radius above is a convention, so letting the panner
+      // roll it off steeply would throw away the level this method has just
+      // spent care deriving from `km`.
+      rolloff: 0.5,
+      maxDistance: 220,
+    });
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    // Very slow, which drags the pink buffer's energy down an octave and a half
+    // before the filters see it. The alternative — a steeper low-pass on
+    // unity-rate noise — throws away most of the signal and leaves a bed with
+    // no body in it, which is exactly the failure the fire's body layer
+    // records solving the same way.
+    src.playbackRate.value = 0.28;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    // Nothing below 38 Hz. Small speakers cannot reproduce it, headphones can,
+    // and the limiter has to hold it back for everybody either way — so it is
+    // pure cost.
+    hp.frequency.value = 38;
+    hp.Q.value = 0.4;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    // 220 Hz on top of you, 90 at the horizon. See the header.
+    lp.frequency.value = 220 - clamp01((d - 0.5) / 12) * 130;
+    lp.Q.value = 0.35;
+
+    // A far strike arrives as a swell and a near one as an edge: the onset is
+    // the sound having taken more or fewer paths to reach you.
+    const rise = 0.04 + clamp01(d / 12) * 1.1;
+    const length = rise + rngRange(rng, 2, 6) * (0.55 + clamp01(d / 10) * 0.75);
+    /**
+     * 0.16 at the top, which is loud — roughly five times the wind bed's peak.
+     * It is meant to be: thunder is the loudest thing this world can make and a
+     * polite one is a fridge. The transient is the reason the report on this
+     * pass flags the limiter: see `pumping-is-a-swing-not-an-average`, a 6 dB
+     * event is exactly the shape that moves that metric even when the average
+     * level does not.
+     */
+    const peak = 0.16 * e * (1 - clamp01((d - 0.5) / 22) * 0.8);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(peak, t0 + rise);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + length);
+    src.connect(hp).connect(lp).connect(env).connect(spatial.input);
+    src.start(t0, rng() * 3);
+    src.stop(t0 + length + 0.05);
+    this.voices++;
+
+    let crack = null;
+    if (d < 4) {
+      /**
+       * The leader stroke. Short, band-passed at 200-900 Hz, and it arrives a
+       * fraction BEFORE the peak of the rumble rather than on it — the crack is
+       * the direct path and the rumble is everything that went round.
+       */
+      const cSrc = ctx.createBufferSource();
+      cSrc.buffer = this.noiseBuffer;
+      cSrc.loop = true;
+      cSrc.playbackRate.value = 0.75;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = rngRange(rng, 240, 620);
+      // 0.5. Anything approaching a corner here is a note, and a note in a
+      // thunderclap is a gunshot in a film.
+      bp.Q.value = 0.5;
+      const cEnv = ctx.createGain();
+      const cLen = rngRange(rng, 0.5, 1.1);
+      const cPeak = peak * 0.85 * (1 - d / 4);
+      cEnv.gain.setValueAtTime(0.0001, t0);
+      cEnv.gain.linearRampToValueAtTime(cPeak, t0 + 0.012);
+      cEnv.gain.exponentialRampToValueAtTime(0.0001, t0 + cLen);
+      cSrc.connect(bp).connect(cEnv).connect(spatial.input);
+      cSrc.start(t0, rng() * 3);
+      cSrc.stop(t0 + cLen + 0.05);
+      crack = { cSrc, bp, cEnv };
+    }
+
+    src.onended = () => {
+      this._release(src);
+      try {
+        hp.disconnect();
+        lp.disconnect();
+        env.disconnect();
+        if (crack) {
+          crack.bp.disconnect();
+          crack.cEnv.disconnect();
+        }
+        spatial.dispose();
+      } catch {
+        /* already gone */
+      }
+    };
+  }
+
+  /**
+   * THE FERRY'S BELL.
+   *
+   * The raft has had a brass bell mesh since it was built and the only thing
+   * that has ever happened when it docks is a line of HUD text. A bell you can
+   * see and cannot hear is worse than no bell, because the player has already
+   * been told there is one.
+   *
+   * THE RECIPE IS music.js's AND THAT IS THE POINT. That file's `bell` is two
+   * sines at a ratio of 7.12 with a fast-decaying modulation index — its own
+   * header calls 7.1 "inharmonic, a bell" — and it is already the sound of a
+   * struck metal object in this project. Reproducing it here with different
+   * numbers would give the world two bells that disagree. What changes is where
+   * it goes: through a spatial source at the raft on `sfxBus`, not through the
+   * jukebox bus, because this is an object in the world making a noise and not
+   * a note in a piece of music.
+   *
+   * THE DISTANCE LOW-PASS DOES THE WORK AND NOTHING ELSE HAD TO. A bell's
+   * partials sit up in 2-6 kHz, and `createSpatial`'s air filter takes its
+   * corner to about 2.5 kHz at eighty metres and to 700 Hz at two hundred — so
+   * a bell heard across the river is almost entirely its fundamental, which is
+   * exactly what a real one is through that much wet forest. No extra filter,
+   * no distance term in the gain, no second recipe for "far".
+   *
+   * `strikes` rather than two calls from the caller, because the gap between
+   * two strikes of the same bell is a fact about the bell — a bosun's double is
+   * about three quarters of a second and the second strike is a shade quieter
+   * because the metal is still moving.
+   *
+   * @param {{x:number,y:number,z:number}} at   where the bell is
+   * @param {number} strength 0..1
+   * @param {number} strikes  how many times it is struck
+   */
+  bell(at, strength = 1, strikes = 1) {
+    if (!this.built || this.voices > VOICE_CEILING * 0.8) return;
+    const ctx = this.ctx;
+    const rng = this.rng;
+    const s = clamp01(strength);
+    const spatial = this.engine.createSpatial(at, {
+      refDistance: 10,
+      // Shallow, because a bell is meant to carry. This is the sound that tells
+      // somebody on the far bank that the ferry has arrived, and a rolloff that
+      // buried it at forty metres would delete the only reason it exists.
+      rolloff: 0.9,
+      maxDistance: 260,
+      bus: this.engine.sfxBus,
+    });
+    const ears = this._ears();
+    spatial.setDistance(Math.hypot(at.x - ears.x, at.y - ears.y, at.z - ears.z));
+
+    const t0 = ctx.currentTime + 0.01;
+    const nodes = [];
+    let last = null;
+    let t = t0;
+    for (let i = 0; i < Math.max(1, strikes); i++) {
+      /**
+       * MIDI 79, which is G5 at 784 Hz.
+       *
+       * A small brass bell on a raft, not a church bell. The fundamental has to
+       * be high enough that the air filter at two hundred metres still passes
+       * it — the corner there is about 700 Hz — and low enough that the 7.12
+       * partial at 5.6 kHz is not the whole sound close up. 79 clears the first
+       * by a hair, which is deliberate: at the very edge of hearing the bell
+       * does not fade, it goes dull and then dark, which is the right way for a
+       * sound to leave.
+       */
+      const f = 440 * 2 ** ((79 + rngRange(rng, -0.25, 0.25) - 69) / 12);
+      const decay = 3.2;
+      const carrier = ctx.createOscillator();
+      carrier.type = 'sine';
+      carrier.frequency.value = f;
+      const mod = ctx.createOscillator();
+      mod.type = 'sine';
+      mod.frequency.value = f * 7.12;
+      const modGain = ctx.createGain();
+      /**
+       * Index 4.5 rather than music.js's 6, and it is the one number that was
+       * changed.
+       *
+       * The index sets how much energy goes into the sidebands, and at 7.12 the
+       * first pair lands at 5.6 and 6.4 kHz — the top of the band `audio-probe`
+       * measures. In the jukebox that is fine, because a bell there is one note
+       * in a mix at 0.05 gain. Here it is a solo event at close range. 4.5 is
+       * about four decibels less in the partials, which still reads
+       * unmistakably as struck brass because the ratio is doing the work, not
+       * the depth. It is still worth re-reading `npm run audio` after this.
+       */
+      modGain.gain.setValueAtTime(f * 4.5, t);
+      modGain.gain.exponentialRampToValueAtTime(f * 0.02, t + decay * 0.55);
+      mod.connect(modGain).connect(carrier.frequency);
+
+      const env = ctx.createGain();
+      // The second strike is quieter: the metal has not stopped moving, so the
+      // hammer meets a bell that is already giving.
+      const g = 0.19 * s * (i === 0 ? 1 : 0.72);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.exponentialRampToValueAtTime(g, t + 0.006);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+      carrier.connect(env).connect(spatial.input);
+      carrier.start(t);
+      mod.start(t);
+      carrier.stop(t + decay + 0.05);
+      mod.stop(t + decay + 0.05);
+      nodes.push(modGain, env);
+      last = carrier;
+      t += rngRange(rng, 0.62, 0.86);
+    }
+    this.voices++;
+    last.onended = () => {
+      this._release(last);
+      try {
+        for (const n of nodes) n.disconnect();
+        spatial.dispose();
+      } catch {
+        /* already gone */
+      }
+    };
+  }
+
+  /**
    * @param {number} dt
    * @param {object} p
    * @param {number} p.gust       0..1, the same value the trees are bending to
@@ -1526,8 +2200,15 @@ export class Ambience {
    * @param {number} p.tripLevel  0..1
    * @param {number} [p.dark]     0..1, how far into the evening it is. Optional
    *                              — see below.
+   * @param {object|null} [p.lightning] the strike that fired THIS frame, or
+   *   null on every other frame. See the thunder block below for the shape and
+   *   for why the caller supplies the distance rather than this file inventing
+   *   one.
    */
-  update(dt, { gust = 0, canopy = 0.5, tripLevel = 0, dark = null, rain = 0 } = {}) {
+  update(
+    dt,
+    { gust = 0, canopy = 0.5, tripLevel = 0, dark = null, rain = 0, lightning = null } = {}
+  ) {
     if (!this.built) return;
     const ctx = this.ctx;
     const rng = this.rng;
@@ -1559,7 +2240,49 @@ export class Ambience {
     // means more leaves to rustle, so the band-pass opens up under trees.
     const g = clamp01(gust);
     this.gustValue = g;
-    const leafy = 0.35 + canopy * 0.65;
+    const leaves = clamp01(canopy);
+    const leafy = 0.35 + leaves * 0.65;
+    /**
+     * Recorded for the console, exactly as `gustValue` above is and for the
+     * same reason: this is a derived number that decides three audible things
+     * and there is otherwise no way to ask what it currently is. `RR.ambience`
+     * is a getter on the realm object, so `RR.ambience.canopyValue` answers
+     * "how closed does the audio think it is here" from a live page — which is
+     * the only practical way to check the mapping in main.js against a place
+     * you can see.
+     */
+    this.canopyValue = leaves;
+
+    /**
+     * ==== THE CANOPY IS A REAL NUMBER NOW, AND IT IS SPENT THREE WAYS ========
+     *
+     * This parameter has been documented as "0..1, how much foliage is
+     * overhead" since the file was written, and main.js passed the literal 0.6
+     * for the whole of that time — so the `leafy` line above, which was always
+     * correct, was computing a constant. The value now comes from counting
+     * trunk-radius entries in the collider grid within fourteen metres (see the
+     * block in main.js).
+     *
+     *   1. `leafy`, above. More leaves overhead is more surface for the wind to
+     *      make a noise on, so the wind's level and its band-pass centre both
+     *      open up under trees. Unchanged code; it just stopped being a
+     *      constant.
+     *
+     *   2. The canopy surge, below, is now GATED on there being a canopy. A
+     *      swell of leaf noise from six metres over your head in the middle of
+     *      a bald clearing is the single most obviously wrong thing this file
+     *      could do, and it has been doing it in every meadow in the world.
+     *
+     *   3. The room send, here. A thicket is wetter and closer than a clearing
+     *      — see `engine.setThicket` for why that is a send and not a second
+     *      reverb, and for why half canopy is exactly the send this project has
+     *      always had.
+     *
+     * `setThicket` has its own deadband and returns without touching the graph
+     * when nothing has moved, so calling it every frame off a value the caller
+     * only recomputes at 5 Hz costs one subtract and one compare.
+     */
+    this.engine.setThicket?.(leaves);
     // 0.022/0.055 and 0.014/0.032, down from 0.03/0.085 and 0.02/0.05: a
     // player reported the wind reading as loud enough to bury the birds under
     // it, and it is the one layer that is on one hundred per cent of the time
@@ -1612,8 +2335,19 @@ export class Ambience {
     // Squared, so the cicadas hold up through most of the daylight and then
     // drop away quickly at the end of it rather than fading linearly all
     // afternoon. Real ones do exactly this: they stop almost together.
+    /**
+     * `insectScale` is the LAND's share, and it is a different quantity from
+     * `insectDuck` above even though they multiply into the same place.
+     *
+     * The duck asks "is a recording already saying this", and moves over
+     * seconds as a bed fades in. The scale asks "does this land have insects at
+     * all", and is a constant for the session. Keeping them separate is what
+     * lets a winter wood be quiet WITHOUT a bed loaded and lets a rainforest
+     * bed duck a wall that is at full cry — one factor could not express both.
+     * Exactly 1 in the rainforest, so nothing pinned moves. See `setLand`.
+     */
     this.cicadaGain.gain.setTargetAtTime(
-      0.55 * day * day * (1 - clamp01(rain) * 0.8) * insectDuck,
+      0.55 * day * day * (1 - clamp01(rain) * 0.8) * insectDuck * this.insectScale,
       now,
       6
     );
@@ -1632,7 +2366,11 @@ export class Ambience {
      * the gain. A katydid bed as loud as the cicada one is a wall of whistles
      * and it is unbearable within about ninety seconds.
      */
-    this.katydidGain.gain.setTargetAtTime(0.4 * night * night * insectDuck, now, 8);
+    this.katydidGain.gain.setTargetAtTime(
+      0.4 * night * night * insectDuck * this.insectScale,
+      now,
+      8
+    );
 
     /**
      * THE RAIN, AND THE TWO TIME CONSTANTS ARE THE FEATURE. See the build block.
@@ -1672,7 +2410,32 @@ export class Ambience {
      * wildlife.js is somewhere, and a wood also contains birds that are just
      * out there, and the two together are what produce depth.
      */
-    this._nextBird -= dt * this.birdRate * (1 - tripLevel * 0.55);
+    /**
+     * THE WOOD GOES QUIET BEFORE YOU FEEL ANYTHING.
+     *
+     * A minute after you swallow it, before anything looks different, the birds
+     * have stopped — and that is how you know. It was not happening, because
+     * this was LINEAR in the level: thirty seconds in, at an eased level of
+     * about 0.12, the wood was six per cent quieter, which is inaudible against
+     * a chorus whose own intervals already vary by a factor of five.
+     *
+     * A smoothstep finished by 0.22 puts the whole of the hush inside the come
+     * up. Computed against the envelope in trip/state.js with the director's
+     * own rising damp: 4.6% quieter at fifteen seconds, 33% at thirty, 54% at
+     * forty-five, and the full 60% by one minute — before uSwell is visible and
+     * long before the melt exists at all.
+     *
+     * 0.6 AND NOT 1.0. A wood with no birds in it is a dead wood, and silence
+     * you can point at is an effect; two chirps a minute where there were five
+     * is a thing you notice you have noticed.
+     *
+     * wildlife.js CARRIES THE IDENTICAL TWO LINES on its song gain, and its
+     * own header requires that the two agree. If this curve changes, that one
+     * changes with it.
+     */
+    const hushQ = Math.min(1, Math.max(0, tripLevel / 0.22));
+    const hush = 1 - hushQ * hushQ * (3 - 2 * hushQ) * 0.6;
+    this._nextBird -= dt * this.birdRate * hush;
     if (this._nextBird <= 0) {
       this._chirp(now + rng() * 0.2);
       this._nextBird = rngRange(rng, 4, 19) * (1 + tripLevel);
@@ -1687,12 +2450,114 @@ export class Ambience {
      * seconds, and a wood where the wind arrives every few seconds is not windy,
      * it is broken.
      */
+    /**
+     * AND NOW IT ONLY HAPPENS WHERE THERE ARE LEAVES. See the canopy block
+     * above.
+     *
+     * The gate is on the ARM as well as the fire, so walking out of the trees
+     * mid-gust does not leave a surge queued to go off over an empty meadow the
+     * moment you cross the treeline. 0.22 rather than 0 because a clearing in
+     * this world still has a treeline thirty metres away and hearing the wind
+     * hit THAT is right; what is wrong is hearing it hit something directly
+     * overhead when there is sky up there. The strength is scaled by the canopy
+     * too, so the transition is a fade rather than a switch — a surge that
+     * appeared at full level the instant the count crossed a threshold would be
+     * audible as a threshold.
+     */
     this._surgeHold -= dt;
     if (g < 0.42) this._gustArmed = true;
-    if (this._gustArmed && g > 0.58 && this._surgeHold <= 0) {
+    if (this._gustArmed && g > 0.58 && this._surgeHold <= 0 && leaves > 0.22) {
       this._gustArmed = false;
       this._surgeHold = rngRange(rng, 15, 32);
-      this._canopySurge(0.45 + g * 0.75);
+      this._canopySurge((0.45 + g * 0.75) * (0.45 + leaves * 0.55));
+    }
+
+    /**
+     * ==== THE FIRE ===========================================================
+     *
+     * Two gains chasing the distance, and one scheduler. `near` is 1 inside
+     * four metres and reaches EXACTLY ZERO at `FIRE_RANGE` — see the constant
+     * for why the zero has to be exact rather than merely small.
+     *
+     * SQUARED, so the fall-off is heard as a fall-off. A linear ramp over
+     * thirty metres of walking is a fader being moved at a constant rate, which
+     * is the one thing a continuous bed must never sound like; the square puts
+     * most of the change in the last ten metres, which is where it is in a real
+     * clearing because that is where the geometry stops being a point source.
+     *
+     * THE HISS FALLS AWAY FASTER THAN THE BODY, which is the distance cue that
+     * does the actual work. A fire at twenty-five metres is a low mutter with
+     * no crackle in it; the crackle is the near-field sound. Cubing the hiss
+     * against squaring the body costs nothing and is the difference between
+     * "the fire is quieter" and "the fire is further away".
+     *
+     * The time constants are 0.4 and 0.5 — much shorter than the insect wall's
+     * six seconds, because this one is supposed to track your walking. Long
+     * enough that a frame where `nearestFire` switches to a different hearth
+     * does not click.
+     */
+    const fireNear = clamp01(1 - (this.fireDistance - 4) / (FIRE_RANGE - 4));
+    this.fireBodyGain.gain.setTargetAtTime(0.075 * fireNear * fireNear, now, 0.5);
+    this.fireHissGain.gain.setTargetAtTime(0.05 * fireNear ** 3, now, 0.4);
+    if (this.fireDistance < FIRE_POP_RANGE) {
+      this._nextPop -= dt;
+      if (this._nextPop <= 0) {
+        this._firePops(now + 0.01, clamp01(1 - this.fireDistance / FIRE_POP_RANGE));
+        /**
+         * 0.6 to 4 seconds, and the spread matters more than the mean. A fire
+         * that pops on a tight interval is a metronome however fast it is; the
+         * long gaps are what make the next cluster an event.
+         */
+        this._nextPop = rngRange(rng, 0.6, 4);
+      }
+    }
+
+    /**
+     * ==== THUNDER ============================================================
+     *
+     * THE INTERFACE, WRITTEN AGAINST A LAYER THAT DID NOT EXIST YET.
+     *
+     * When this was built there was no lightning anywhere in `atmosphere.js`.
+     * There is now, it publishes exactly this shape as `atmosphere.strike`, and
+     * `main.js` passes it straight through. One difference from what was
+     * predicted, and it is the safe direction: the descriptor is held for the
+     * whole ~0.2 s of the flash rather than for a single frame, so a consumer
+     * that misses the rising frame — a dropped frame, a tab regaining focus —
+     * still hears the thunder. The `_lastStrike` guard below already makes that
+     * safe, which is why it was written.
+     *
+     * The shape it is coded against — and the one a weather layer should expose
+     * — is a descriptor that is non-null while a flash is happening:
+     *
+     *     { id, energy, bearing, km }
+     *
+     *   `id`      anything that differs between strikes and is the same on two
+     *             clients: a strike index, or the hash that fired the flash.
+     *             Compared against `_lastStrike` so a caller that latches the
+     *             value for two frames cannot double-trigger.
+     *   `energy`  0..1, how big the flash was.
+     *   `bearing` radians, the direction of the strike in world xz.
+     *   `km`      how far away it was.
+     *
+     * `km` COMES FROM THE CALLER AND IS NOT INVENTED HERE, and that is the
+     * whole reason this reads a descriptor rather than a level. The world is a
+     * pure function of the seed and the clock: two people in one wood must see
+     * the same flash and then count the same number of seconds. If this file
+     * rolled the distance off its own rng, the two would hear the same thunder
+     * at different times, which is a bug you would never find because each
+     * client is individually convincing. The fallback below exists only so a
+     * caller that has a flash and no distance still makes a noise — it derives
+     * `km` from `energy`, which IS shared, rather than from `rng`.
+     */
+    if (lightning && lightning.id !== this._lastStrike) {
+      this._lastStrike = lightning.id;
+      const e = clamp01(lightning.energy ?? 1);
+      // A bright flash is a near one. Squared, because apparent brightness
+      // falls off with the square of distance and this is that relation read
+      // backwards — it puts most of the visible range inside four kilometres,
+      // which is where a strike is worth a crack.
+      const km = Number.isFinite(lightning.km) ? lightning.km : 0.6 + (1 - e) ** 2 * 15;
+      this.thunder(km, e, Number.isFinite(lightning.bearing) ? lightning.bearing : null);
     }
 
     /**
@@ -1773,9 +2638,41 @@ export class Ambience {
     this.streamSpatial?.setDistance(clamp(d, 0, 200));
   }
 
+  /**
+   * Where the nearest lit fire is. Same contract as `setStreamPosition`: copied
+   * out by value, because the caller passes a shared scratch and keeps writing
+   * to it.
+   *
+   * BOTH SPATIALS MOVE TOGETHER. They are one place heard on two buses, and a
+   * frame in which the bed had followed the new hearth and the pops had not
+   * would be a fire crackling somewhere the fire is not. There is no case where
+   * these should ever differ, so they are written by one method rather than two.
+   */
+  setFirePosition(p) {
+    this.fireSpatial?.setPosition(p);
+    this.firePopSpatial?.setPosition(p);
+    this.firePos.x = p.x;
+    this.firePos.y = p.y;
+    this.firePos.z = p.z;
+  }
+
+  setListenerDistanceToFire(d) {
+    this.fireDistance = d;
+    const clamped = clamp(d, 0, 200);
+    this.fireSpatial?.setDistance(clamped);
+    this.firePopSpatial?.setDistance(clamped);
+  }
+
   dispose() {
     if (!this.built) return;
-    for (const n of [this.windSource, this.streamSource, this.streamLfo]) {
+    for (const n of [
+      this.windSource,
+      this.streamSource,
+      this.streamLfo,
+      this.fireBodySource,
+      this.fireHissSource,
+      this.fireHissLfo,
+    ]) {
       try {
         n.stop();
       } catch {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { clamp, clamp01, damp } from '../core/util.js';
 import { modalHasKeyboard, worldHearsKey } from '../core/keys.js';
-import { confine, groundUnder, normalAt } from '../world/terrain.js';
+import { WATER_LEVEL, confine, groundUnder, normalAt } from '../world/terrain.js';
 import { colliderGrid, bushZones } from '../world/forest.js';
 import { caveSample } from '../world/caves.js';
 
@@ -15,6 +15,17 @@ import { caveSample } from '../world/caves.js';
  * this has finished. Keeping those apart is what makes it safe to let the trip
  * move the camera a couple of metres without the player ever falling through a
  * hill or reaching through a tree.
+ *
+ * WHAT IT PUBLISHES, AND WHY IT IS A LIST RATHER THAN A SET OF QUERIES.
+ *
+ * `inCave`/`roofed`/`caveDepth`, `wade`/`wetFeet`, `stride`, `exertion` and the
+ * landing dip are all facts about where this body is and what it is doing, and
+ * every one of them has at least three consumers — the movement here, a sound,
+ * and something drawn. They are written once, in this file, on one frame, for
+ * the reason spelled out at `inCave` in the constructor: a consumer that asked
+ * its own question at its own point in the loop would be answering about a body
+ * that something else had already moved, and the failure mode is a footstep that
+ * disagrees with the water you can see yourself standing in.
  */
 
 /**
@@ -45,6 +56,72 @@ const JUMP = 7.1;
  * as a wall, since nothing here actually blocks the climb.
  */
 const CLIMB_K = 1.6;
+
+/**
+ * LANDING, in four numbers.
+ *
+ * A jump off a four-metre bank used to be completely silent with no camera
+ * response at all — you left the ground, the ground arrived, and the only thing
+ * that changed was that `onGround` went back to true. Everything else about the
+ * body is simulated (an uphill cost from the real gradient, a step-up rule, a
+ * roof you bang your head on) and the one moment a body most obviously has mass
+ * was the one moment nothing happened.
+ *
+ * LAND_SOFT is where a touchdown starts to count. Walking off a 20 cm root at
+ * WALK arrives at about 2 m/s under GRAVITY, and a kerb is not an event; JUMP is
+ * 7.1 m/s up, so landing a flat jump on level ground arrives at 7.1 m/s down and
+ * is comfortably an event. 3 sits between them.
+ *
+ * LAND_HARD is the top of the scale rather than a limit. GRAVITY is 22, so 11
+ * m/s is a 2.75 m drop — the bank above the river, the lip of the gully at the
+ * cave mouth, the step off a boulder. Anything worse is still 1; a scale that
+ * kept going would spend its whole range on falls the world does not contain.
+ *
+ * LAND_DIP is how far the camera drops at full impact. 9 cm is a knee bend and
+ * not a stumble: the head bob is 5.5 cm at a full sprint, so this is a little
+ * under twice the largest vertical motion the view already makes, which is the
+ * most you can add before it reads as the camera coming loose from the body.
+ *
+ * LAND_W is the spring's frequency, critically damped. The impulse response of
+ * a critically damped spring is v0·t·e^(-ωt), which peaks at t = 1/ω — so
+ * ω = 14 rad/s puts the bottom of the dip 71 ms after the foot lands. Stepped
+ * through the closed form below at 165, 60, 30 and 12 fps it peaks at 9.00,
+ * 8.98, 8.98 and 8.89 cm and is back inside 4 mm by 0.42-0.50 s. Slower than
+ * this and you are still sinking when you have started walking again; faster and
+ * it is a click rather than a compression.
+ */
+const LAND_SOFT = 3;
+const LAND_HARD = 11;
+const LAND_DIP = 0.09;
+const LAND_W = 14;
+/**
+ * WATER, in two numbers.
+ *
+ * The channel `heightAt` carves is about a metre and a half deep in the middle,
+ * and until now wading through it changed nothing at all: not your speed, not
+ * your footstep, not the audio. WADE_FULL is the depth at which the drag and the
+ * sound are at full — 1.4 m against an eye at 1.68 puts "full" at roughly chest
+ * deep, which is as deep as the river gets and as deep as anybody would walk.
+ *
+ * WET_STEPS is how many strides you leave wet prints for after climbing out.
+ * Two dozen at the walking cadence (`speed * 0.52` strides a second, so about
+ * 2.3 a second at WALK) is a little over ten seconds — long enough that coming
+ * out of the river is a thing that happened to you rather than a state you
+ * instantly leave.
+ */
+const WADE_FULL = 1.4;
+const WET_STEPS = 24;
+
+/**
+ * How long a tapped wave stays on the wire, in seconds.
+ *
+ * The pose row goes out at TICK_HZ = 18, so anything under 56 ms can land
+ * entirely between two ticks and be seen by nobody. 1.6 s is about one full
+ * raise-wave-lower, is nearly thirty ticks so a dropped packet is invisible, and
+ * is short enough that a stuck key is a person waving rather than a statue.
+ */
+const WAVE_HOLD = 1.6;
+
 /**
  * The tallest rise a stride can take you up, in metres. Underground only.
  *
@@ -97,8 +174,88 @@ export class Controller {
     this._bobX = 0;
     /** Smoothed speed, used for bob and for the audio's footstep rate. */
     this.speed = 0;
-    this._stepAccum = 0;
+    /**
+     * FOOTFALLS AS A CONTINUOUS COUNT, WHICH IS WHAT MADE THE LEGS POSSIBLE.
+     *
+     * This was `_stepAccum`, a 0..1 sawtooth that fired `onStep` and subtracted
+     * one. That is all the SOUND ever needed, and it is not enough for a body:
+     * a fractional accumulator says how far through a stride you are and says
+     * nothing about WHICH foot, so legs driven from it would swing at the right
+     * rate with both feet planting together.
+     *
+     * `stride` is the same quantity integrated and never reset, so every whole
+     * number is a footfall and its parity is the foot. `body.js` takes
+     * cos(π·stride) for the swing, which is at an extreme exactly on the integers
+     * — so the visible foot plants on the frame the sound is played, and the two
+     * cannot drift apart because there is only one number.
+     *
+     * IT IS NOT THE BOB PHASE, and that was the first attempt. `_bob` advances at
+     * 1.65 per metre and the step rate at 0.52, a ratio of 3.173 against the
+     * bob's own period of π — a 1% mismatch that walks the foot right round the
+     * bob over about a hundred strides. Locking the legs to the sound rather than
+     * to the bob is the version where the plant is always on the beat.
+     */
+    this.stride = 0;
+    this._nextStep = 1;
     this.onStep = null;
+    /**
+     * LANDING, PUBLISHED THE SAME WAY THE CAVE IS.
+     *
+     * `_landY` is the current dip in metres (negative is down) and `_landV` its
+     * velocity; `applyToCamera` adds the first to the eye and nothing else reads
+     * either. `onLand(impact)` fires once on touchdown with 0..1, and `onJump()`
+     * on the frame the jump key takes — a take-off scuff, because leaving the
+     * ground is as much a physical event as arriving and half a jump's worth of
+     * sound is worse than none.
+     */
+    this._landY = 0;
+    this._landV = 0;
+    /** One warning, ever. See `_guardFinite`. */
+    this._warnedFinite = false;
+    this.onLand = null;
+    this.onJump = null;
+    /**
+     * HOW DEEP IN THE RIVER YOU ARE, 0..1, PUBLISHED RATHER THAN ASKED FOR.
+     *
+     * Exactly the argument the `inCave` block below makes and for exactly the
+     * same failure: the movement scaling, the footstep and the audio all have an
+     * opinion about the water and they must agree on ONE frame. A consumer that
+     * recomputed it from `position.y` at a different point in the loop would be
+     * reading a body that the floor clamp had already moved.
+     *
+     * `wetFeet` is the same thing plus the tail: it stays high for WET_STEPS
+     * strides after you climb out, so `ambience.step` keeps choosing its wet
+     * variant while your boots are still full. It is what main.js should hand
+     * the footstep, `max`-ed with the horizontal `wetness(x, z)` — see the note
+     * on that bug in main.js.
+     */
+    this.wade = 0;
+    this.wetFeet = 0;
+    this._wetSteps = 0;
+    this.onWade = null;
+    /**
+     * HOW HARD YOU HAVE BEEN WORKING, 0..1.
+     *
+     * Rises over about nine seconds of sprinting and falls over about twenty-two
+     * of standing still, which is the asymmetry that makes it a state rather than
+     * a speedometer — you can be out of breath while standing at the top of the
+     * hill you just ran up, and that is the only interesting thing this number
+     * can say. Read by `ambience.breath`, and by nothing that moves the body:
+     * this deliberately does not slow you down, because a stamina bar is a
+     * mechanic and this is a sound.
+     */
+    this.exertion = 0;
+    /** Positive slope in the direction of travel, kept by `_climbScale`. */
+    this._climb = 0;
+    /**
+     * The two hand gestures, read off the held-key set in `update`. Booleans, so
+     * `net/index.js` can turn them straight into pose bits with no state of its
+     * own — see the block that reads them.
+     */
+    this.pointing = false;
+    this.waving = false;
+    this._waveHeld = false;
+    this._waveTimer = 0;
     /** Bush zones the body is currently inside, so `onBrush` fires once per approach. */
     this._insideBush = new WeakSet();
     this.onBrush = null;
@@ -168,6 +325,18 @@ export class Controller {
     this.caveTight = 0;
     this.caveRoom = 0;
     this.caveWater = 0;
+    /**
+     * HOW FAR UNDER THE MOUNTAIN, 0..1, AND IT IS NOT `caveDepth`.
+     *
+     * `caveDepth` is metres walked along the passage. `caveDeep` is the DESCENT
+     * — 0 at the mouth, 1 at forty-five metres below it — which is the measure
+     * caves.js keys everything on and which its own shapes header argues for:
+     * you can walk a hundred metres of level tube and be nowhere. Published
+     * beside the other five for the reason they all are: `caveSample` is a scan,
+     * it has already run this frame, and every consumer has to agree about where
+     * the player is on ONE frame.
+     */
+    this.caveDeep = 0;
 
     this.keys = new Set();
     this._bind();
@@ -245,8 +414,42 @@ export class Controller {
      */
     if (modalHasKeyboard()) this.keys.clear();
     const keys = this.keys;
+
+    /**
+     * ---- the two things you can do with your hands --------------------------
+     *
+     * READ HERE RATHER THAN IN A NEW LISTENER, because this file already owns a
+     * guarded `keydown` and a held-key set, and a sixth `window` listener is
+     * exactly what `worldHearsKey` exists to stop growing. It also means both
+     * gestures inherit the two guards that took a day each: a browser chord does
+     * not fire them, and a key held when the settings menu opened is cleared
+     * rather than stuck.
+     *
+     * POINTING IS A HELD STATE and waving is a LATCHED one, and the difference is
+     * the network. Pointing has a duration a person chooses — you hold it while
+     * you say "over there" — so it is simply the key. A wave is a tap, and the
+     * pose row goes out at 18 Hz: a tap shorter than 55 ms would fall between two
+     * ticks and nobody would see it. WAVE_HOLD is a little over a full wave
+     * gesture and comfortably longer than a dropped packet, so the bit is on for
+     * long enough that the arm gets all the way up and back down.
+     *
+     * Neither of these does ANYTHING to the body here — no speed change, no
+     * pose, no camera. They are two booleans that `net/index.js` turns into two
+     * bits and `avatar.js` turns into an arm. The whole cost is two Set lookups
+     * a frame.
+     */
+    this.pointing = keys.has('KeyR');
+    const waveKey = keys.has('KeyH');
+    if (waveKey && !this._waveHeld) this._waveTimer = WAVE_HOLD;
+    this._waveHeld = waveKey;
+    if (this._waveTimer > 0) this._waveTimer = Math.max(0, this._waveTimer - dt);
+    this.waving = this._waveTimer > 0;
+
     const running = keys.has('ShiftLeft') || keys.has('ShiftRight');
     const target = _moveTarget.set(0, 0, 0);
+    // Stale unless `_climbScale` runs this frame, and standing still or flying
+    // is genuinely no climb at all. See `exertion` below.
+    this._climb = 0;
     if (keys.has('KeyW') || keys.has('ArrowUp')) target.z -= 1;
     if (keys.has('KeyS') || keys.has('ArrowDown')) target.z += 1;
     if (keys.has('KeyA') || keys.has('ArrowLeft')) target.x -= 1;
@@ -258,6 +461,33 @@ export class Controller {
       // No hill to fight while flying, and no run key either — Shift is the
       // descent. See FLY_BOOST.
       target.multiplyScalar(this.fly ? base * FLY_BOOST : base * this._climbScale(target.x, target.z));
+      /**
+       * WATER DRAG, ON THE TARGET AND NEVER AS A PUSH.
+       *
+       * Folded in here, next to `_climbScale`, because it is the same kind of
+       * thing: a scale on the speed you are asking for, applied before the ease
+       * so the body accelerates toward a slower walk rather than being fought
+       * while it walks at the old one.
+       *
+       * THE ALTERNATIVE IS THE ONE THIS FILE'S HEADER IS FULL OF POST-MORTEMS
+       * ABOUT. Every stall this body has ever produced — the trunk push at a cave
+       * mouth, the radial push in a keyhole slot — was a POSITIONAL correction
+       * whose backward component happened to cancel a walking pace, and each one
+       * read from outside as full velocity and no displacement. A current in the
+       * river implemented as a shove would be another, and would be worse,
+       * because it would only fire in one place in the world.
+       *
+       * 0.62 at full depth: chest-deep water is a bit under two-fifths off, so
+       * WALK becomes 2.7 m/s and a sprint into the river becomes a heavy jog.
+       * That is enough to feel the moment you step in without ever reading as
+       * being held — nothing here blocks, exactly as nothing about the hill does.
+       *
+       * `this.wade` is last frame's, by one frame. It is a depth that changes at
+       * most a few centimetres per frame at RUN down a river bank, so the error
+       * is under a percent of the scale; computing it here instead would mean
+       * sampling the floor twice, before and after the move.
+       */
+      if (this.wade > 0) target.multiplyScalar(1 - this.wade * 0.62);
     }
 
     // Horizontal velocity eases toward the target; vertical is pure ballistics.
@@ -289,14 +519,37 @@ export class Controller {
       this._bobY = damp(this._bobY, 0, 0.001, dt);
       this._bobX = damp(this._bobX, 0, 0.001, dt);
       this.speed = damp(this.speed, 0, 0.001, dt);
+      // A debug camera is not a body: no water, no landing, no effort. Zeroed
+      // rather than left stale so flying out of the river does not leave the
+      // walk permanently slowed when `fly` is switched back off.
+      this.wade = 0;
+      this.wetFeet = damp(this.wetFeet, 0, 0.001, dt);
+      this.exertion = damp(this.exertion, 0, 0.4, dt);
+      this._landY = 0;
+      this._landV = 0;
       return;
     }
 
     if (this.onGround && keys.has('Space')) {
       this.velocity.y = JUMP;
       this.onGround = false;
+      // The scuff of pushing off, on the frame the push happens. Half of a jump
+      // having a sound is worse than none: it teaches you that the ground makes
+      // a noise only when you arrive.
+      this.onJump?.();
     }
     this.velocity.y -= GRAVITY * dt;
+
+    /**
+     * How fast the body is falling, captured BEFORE anything can clamp it.
+     *
+     * The floor clamp, the roof clamp and the step rule all write
+     * `velocity.y = 0`, and by the time `onGround` flips there is nothing left
+     * in the vertical to measure. Three lines further down is too late; this is
+     * the only place the number exists.
+     */
+    const fallSpeed = this.velocity.y;
+    const wasAirborne = !this.onGround;
 
     /**
      * Where the feet were, and what they were standing on, before the step.
@@ -379,6 +632,98 @@ export class Controller {
       this.onGround = false;
     }
 
+    /**
+     * ---- the ground arriving ------------------------------------------------
+     *
+     * `wasAirborne` and not "velocity was negative", because walking down a
+     * slope steeper than the frame's travel leaves the body a couple of
+     * centimetres off the floor for one frame at a time and re-clamps it, all
+     * day, at whatever speed gravity got to in 16 ms. That is not landing. The
+     * `onGround` edge only opens after the body has genuinely left the surface —
+     * the `+ 0.02` hysteresis in the clamp above is what makes it trustworthy —
+     * and LAND_SOFT then throws away everything that is not a fall.
+     */
+    if (wasAirborne && this.onGround && fallSpeed < -LAND_SOFT) {
+      const impact = clamp01((-fallSpeed - LAND_SOFT) / (LAND_HARD - LAND_SOFT));
+      /**
+       * v0 = D·ω·e, from the impulse response quoted at LAND_DIP: a critically
+       * damped spring kicked with velocity v0 peaks at v0/(ωe), so this is that
+       * read backwards and the dip is LAND_DIP·impact metres to the centimetre.
+       * Negative because the head goes DOWN.
+       */
+      this._landV = -impact * LAND_DIP * LAND_W * Math.E;
+      /**
+       * A WHOLE STRIDE OUT OF THE LANDING. Without this the first footstep after
+       * a jump fires on whatever fraction of a stride was left when you took off
+       * — which after a long fall is usually immediately, so the sound of the
+       * landing and the sound of the first step arrive on the same frame and
+       * read as one muddy noise. Parked exactly on a footfall boundary, so the
+       * legs in `body.js` start the next stride from a plant.
+       */
+      this.stride = Math.ceil(this.stride);
+      this._nextStep = this.stride + 1;
+      this.onLand?.(impact);
+    }
+
+    /**
+     * …and the spring that makes it visible, advanced here and applied in
+     * `applyToCamera`.
+     *
+     * ADVANCED IN CLOSED FORM RATHER THAN INTEGRATED, and that is not showing
+     * off. The first version was semi-implicit Euler and it was wrong by 29% —
+     * measured, by running the loop: a kick sized for a 9 cm dip peaked at 6.4
+     * cm, because at ω = 14 even an 11 ms substep loses that much amplitude to
+     * the discretisation. Substepping harder would have chased it; a machine
+     * that has just hitched is also exactly the machine that lands on a 60 ms
+     * frame, and there the explicit form is not merely inaccurate but heading for
+     * unstable (it needs 2ζωΔt < 2, i.e. Δt < 143 ms).
+     *
+     * A critically damped spring has the exact solution y(t) = (A + Bt)e^(−ωt)
+     * with A = y₀ and B = v₀ + ωy₀, so one `exp` a frame gives the true state at
+     * ANY dt with no stability condition at all — and the dip really is
+     * LAND_DIP · impact, which is the whole reason those constants are written
+     * down as metres.
+     */
+    if (this._landV !== 0 || this._landY !== 0) {
+      const decay = Math.exp(-LAND_W * dt);
+      const b = this._landV + LAND_W * this._landY;
+      const next = this._landY + b * dt;
+      this._landV = (b - LAND_W * next) * decay;
+      this._landY = next * decay;
+      // Snapped to rest rather than left ringing at 10⁻⁷ m for ever, so the
+      // branch above is genuinely skipped for the 99% of frames nobody landed on.
+      if (Math.abs(this._landY) < 1e-4 && Math.abs(this._landV) < 1e-3) {
+        this._landY = 0;
+        this._landV = 0;
+      }
+    }
+
+    /**
+     * ---- the river ---------------------------------------------------------
+     *
+     * `roofed` and not `inCave`: the cave stream runs along the bottom of some
+     * passages at heights that have nothing to do with the surface river, and a
+     * body sixty metres under a mountain is not standing in the channel however
+     * far below WATER_LEVEL its feet happen to be. Same guard, same reason, as
+     * every other xz-distance question in this project — see `roofed` above.
+     */
+    const wadeWas = this.wade;
+    this.wade = this.roofed
+      ? 0
+      : clamp01((WATER_LEVEL - (this.position.y - EYE)) / WADE_FULL);
+    /**
+     * The edge, which is the loudest moment the water has.
+     *
+     * One event, at the instant the feet break the surface, at above full
+     * strength — walking into a river is a plunge and then a wash, and a wash
+     * that simply fades up from nothing has no moment in it at all. 0.06 rather
+     * than 0 so that standing on the waterline with the height field jittering a
+     * centimetre either side cannot chatter it.
+     */
+    if (wadeWas < 0.06 && this.wade >= 0.06) {
+      this.onWade?.(this._feetPoint(), 1.4, this.wade);
+    }
+
     // ---- head bob --------------------------------------------------------
     // Small, and mostly vertical. Bob is the cheapest way to convey that a body
     // is doing the walking; overdone, it is also the fastest way to make someone
@@ -390,16 +735,156 @@ export class Controller {
     this._bobY = damp(this._bobY, Math.sin(this._bob * 2) * amount, 0.001, dt);
     this._bobX = damp(this._bobX, Math.sin(this._bob) * amount * 0.34, 0.001, dt);
 
-    // Footsteps, driven by the same phase so the sound lands on the low point.
+    /**
+     * Footsteps.
+     *
+     * THIS USED TO SAY "driven by the same phase so the sound lands on the low
+     * point", and that was never quite true — the bob advances at 1.65 per metre
+     * and this at 0.52, a ratio of 3.173 against the bob's own period of π, so
+     * the step drifts a percent per stride against the low point and goes right
+     * round it over about a hundred of them. Nobody has ever noticed, because a
+     * 5.5 cm bob and a noise burst are not two things an ear can align.
+     *
+     * They are now, because `stride` also drives the legs you can SEE (see its
+     * declaration, and `body.js`), so the sound and the plant are locked to each
+     * other by being the same number rather than by two rates that nearly agree.
+     * The bob is left exactly as it was.
+     */
     if (this.onGround && this.speed > 0.7) {
-      this._stepAccum += dt * this.speed * 0.52;
-      if (this._stepAccum >= 1) {
-        this._stepAccum -= 1;
-        this.onStep?.(Math.min(1, this.speed / RUN));
+      /**
+       * A LONGER STRIDE IN WATER, which is a rate change and not a volume one.
+       *
+       * Nobody takes short quick paces through a metre of river; you lift a knee,
+       * reach, and put it down. So the strides-per-second falls with depth while
+       * the speed scaling above is already making each one cover less ground —
+       * the two together are what makes wading read as heavy rather than as
+       * walking-but-slower. A quarter longer at chest depth, which against the
+       * 0.62 speed drag is roughly half the footfall rate of a dry walk.
+       */
+      const strideScale = 1 + this.wade * 0.28;
+      this.stride += (dt * this.speed * 0.52) / strideScale;
+      if (this.stride >= this._nextStep) {
+        // `floor(stride) + 1` rather than `+= 1`, so a 200 ms hitch that covers
+        // three strides plays one footstep and then resumes in phase, exactly
+        // as the old `-= 1` did.
+        this._nextStep = Math.floor(this.stride) + 1;
+        const strength = Math.min(1, this.speed / RUN);
+        this.onStep?.(strength);
+        if (this.wade > 0.05) {
+          this.onWade?.(this._feetPoint(), strength, this.wade);
+          this._wetSteps = WET_STEPS;
+        } else if (this._wetSteps > 0) {
+          this._wetSteps--;
+        }
       }
     } else {
-      this._stepAccum = 0.55;
+      // Parked 0.45 of a stride short of a footfall, which is what the old
+      // `_stepAccum = 0.55` meant: setting off from a stand plays a step almost
+      // at once rather than after a full pace of silence.
+      this.stride = this._nextStep - 0.45;
     }
+    /**
+     * Wet boots. `wade` while you are in it, then a linear tail as the prints
+     * dry — see WET_STEPS. The max is what makes the transition seamless: at the
+     * moment you step out `_wetSteps` is full, so the two agree at 1.
+     */
+    this.wetFeet = Math.max(this.wade, this._wetSteps / WET_STEPS);
+
+    /**
+     * ---- effort -------------------------------------------------------------
+     *
+     * The target is what the body is doing right now; the two smoothings are
+     * what make it a state. `damp`'s constant is the fraction REMAINING after a
+     * second, so 0.72 puts a flat sprint nine tenths of the way up in 7.0 s
+     * (ln 0.1 / ln 0.72) and 0.87 takes 23 s to fall back inside 4% of rest. The
+     * asymmetry is the whole point and it is how lungs work: you can be out of
+     * breath standing perfectly still at the top of the hill you just ran up, and
+     * that is the only interesting thing this number can say.
+     *
+     * THE HILL IS ADDED AFTER THE SPEED PENALTY IS ALREADY PAID, and that is
+     * deliberate rather than an accident of ordering. `_climbScale` has already
+     * SLOWED you on the way up, so a speed-only measure would say a hill is
+     * EASIER than the flat — which is exactly backwards. `_climb` is sin(slope)
+     * in the direction of travel, so it is 0 on the flat and 0.8-1 on the
+     * steepest walkable ground, and it can carry the term past 1 before the
+     * clamp: running up the tor is the hardest thing in the world and it should
+     * pin.
+     */
+    const effort = clamp01((this.speed / RUN) * (1 + this._climb * 0.9));
+    this.exertion = damp(this.exertion, effort, effort > this.exertion ? 0.72 : 0.87, dt);
+
+    this._guardFinite();
+  }
+
+  /**
+   * ---- THE LAST LINE OF DEFENCE: A BODY WITH A NUMBER IN IT ----------------
+   *
+   * If `position` ever goes non-finite the game does not crash, it STOPS, and
+   * it stops in a way that takes an afternoon to attribute. Here is the whole
+   * chain, observed rather than imagined:
+   *
+   *   `position.y` goes NaN
+   *     -> `applyToCamera` writes NaN into `camera.position`
+   *     -> `AudioEngine.updateListener` calls `linearRampToValueAtTime(NaN)`
+   *     -> WebAudio THROWS, out of the audio block, every single frame
+   *     -> everything after that block in `frame()` never runs, so the animals
+   *        stop moving, `findInteractable` never updates and `E` does nothing
+   *
+   * The report that arrives is "the mushrooms are broken and the deer are
+   * frozen", which are two features that have nothing to do with each other and
+   * nothing to do with the body. It cost most of a debugging session and it was
+   * found by trapping non-finite arguments to every AudioParam method — the
+   * value only reaches the audio because that is the first thing in the frame
+   * that validates its input.
+   *
+   * WHERE IT COMES FROM. Not the height field: `heightAt`, `groundUnder` and
+   * `normalAt` were swept over 400 000 points of grove-01 in pure node and are
+   * finite everywhere. It takes a body that is somewhere a body cannot walk to
+   * — teleported to a distant x/z while keeping the y it had, so it is standing
+   * twenty-nine metres inside a mountain with a cave in it — and then one of
+   * the underground queries has nothing sensible to say.
+   *
+   * SO THIS IS A GUARD AND NOT A FIX, DELIBERATELY. A player cannot reach that
+   * state: the body moves continuously and `confine` keeps it in the world. But
+   * a debug panel, a test harness, a seat on a moving raft and a streaming
+   * hiccup all can, and the failure mode is out of all proportion to the cause.
+   * Putting the body back on the ground under it costs one comparison a frame
+   * on the hottest function in the app and turns "the game silently stopped"
+   * into one line in the console and a step you probably do not notice.
+   *
+   * It warns ONCE. A guard that logs every frame is a second denial of service.
+   */
+  _guardFinite() {
+    const p = this.position;
+    if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) return;
+    const x = Number.isFinite(p.x) ? p.x : 0;
+    const z = Number.isFinite(p.z) ? p.z : 0;
+    p.set(x, groundUnder(x, EYE + 60, z) + EYE, z);
+    this.velocity.set(0, 0, 0);
+    this._landY = 0;
+    this._landV = 0;
+    this._bobY = 0;
+    this._bobX = 0;
+    if (!this._warnedFinite) {
+      this._warnedFinite = true;
+      console.warn(
+        '[controller] the body went non-finite and was put back on the ground. ' +
+          'See _guardFinite — this is reachable by teleporting to an x/z without a y.'
+      );
+    }
+  }
+
+  /**
+   * Where the feet are, for a sound that has to arrive from below.
+   *
+   * A fresh object per call, like `_resolveBrush`'s, and for the same reason:
+   * this hands a position to an audio layer that may hold it, and it is called a
+   * couple of times a second at most rather than every frame. Hoisting it would
+   * save nothing measurable and buy an aliasing bug the first time somebody
+   * queues a sound a few hundred milliseconds out.
+   */
+  _feetPoint() {
+    return { x: this.position.x, y: this.position.y - EYE, z: this.position.z };
   }
 
   /**
@@ -418,6 +903,13 @@ export class Controller {
   _climbScale(dirX, dirZ) {
     const n = normalAt(this.position.x, this.position.z, _slopeNormal);
     const climb = -(dirX * n.x + dirZ * n.z);
+    /**
+     * Kept for `exertion`, which wants the raw slope rather than the scale.
+     * Recomputing it there would be a second `normalAt` — a five-tap height
+     * query — in the hottest function in the app, for a number this line already
+     * has in a register.
+     */
+    this._climb = climb > 0 ? climb : 0;
     return climb > 0 ? 1 / (1 + climb * CLIMB_K) : 1;
   }
 
@@ -588,6 +1080,7 @@ export class Controller {
       this.caveTight = 0;
       this.caveRoom = 0;
       this.caveWater = 0;
+      this.caveDeep = 0;
       this.roofed = false;
       return;
     }
@@ -606,6 +1099,8 @@ export class Controller {
     /** How much of the floor is something lying on it rather than the passage. */
     this.caveStep = s.floor - s.floorRock;
     this.caveDepth = s.along;
+    // Straight off the channel caves.js splines and clamps. See `caveDeep`.
+    this.caveDeep = s.deep;
     this.caveTight = s.tight;
     this.caveRoom = s.room;
     this.caveWater = s.water;
@@ -757,9 +1252,20 @@ export class Controller {
   /** Write the base camera transform. The trip modifies it afterwards. */
   applyToCamera() {
     const c = this.camera;
+    /**
+     * The landing dip rides on `bobScale` exactly as the bob does.
+     *
+     * That slider is not a taste control — it is the accessibility answer to
+     * motion sickness, and its promise is that at 0 the camera is PINNED to the
+     * body. A vertical impulse the slider could not turn off would be the
+     * largest single camera motion in the app and would break that promise on
+     * the one gesture most likely to trigger the problem. Scaled here rather
+     * than at the kick so a player who moves the slider mid-air gets the
+     * setting they just chose.
+     */
     c.position.set(
       this.position.x + this._bobX,
-      this.position.y + this._bobY,
+      this.position.y + this._bobY + this._landY * this.bobScale,
       this.position.z
     );
     c.rotation.set(0, 0, 0);

@@ -1,0 +1,25 @@
+gpu    ANGLE (AMD, AMD Radeon RX 9070 XT (0x00007550) Direct3D11 vs_5_0 ps_5_0, D3D11)
+seed   grove-01
+url    http://127.0.0.1:5180/
+
+the build, sliced — every frame of every cave, best of 3 builds
+
+   k   rings  paths  metres   plan  emit    median     p99    worst      raw    total
+  -21   1748     12     403    129   336      0.70    1.10     1.30     2.50      277   in bury
+  -20    240      1     176     54    30      0.70    1.10     1.20     1.30       57   in rings
+  -19   2470     16     488    198   470      0.70    1.10     1.40     3.30      465   in bury
+  -18   2356     14     552    201   457      0.70    1.00     1.20     1.50      438   in bury
+  -17    945      5     220     87   126      0.70    1.10     1.30     1.40      148   in bury
+  -16   1217      8     222    101   194      0.70    1.10     1.20     2.50      204   in rings
+  -15   2022     11     479    156   328      0.70    1.10     1.30     2.20      335   in rings
+  -14   2690     14     671    198   559      0.70    1.10     1.70     2.50      515   in blocks
+  -13   1952     11     619     93   324      0.70    1.00     1.20     1.30      286   in spores
+
+  9 caves   median slice 0.70 ms   worst p99 1.10 ms   worst slice 1.70 ms (k=-14)   whole build 286 ms median, 515 ms worst
+  worst slice by stage   rings 1.30   bury 1.30   branch 1.30   spores 1.20   index 1.10   terminus 0.90
+
+in the frame — 900 frames toward k=-21, 112 m walked, 188 m to the mouth, 1 of 4 streamed caves finished
+  caves.update   median 0.70 ms   p99 1.20 ms   worst 1.40 ms   over 2.5 ms: 0 of 900 frames
+
+PASS
+BUILD=0

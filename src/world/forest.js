@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUti
 import { TAU, clamp01, fbm2, makeRng, rngRange } from '../core/util.js';
 import { GroundField } from './ground.js';
 import { SPECIES_NAMES, growTree, speciesMaterials } from './trees.js';
+import { currentLand } from './lands/index.js';
 import { fernFrond, forestFloor, glowSprite, herbTuft } from './textures.js';
 import {
   brambleTexture,
@@ -34,6 +35,7 @@ import {
   IMPOSTOR_TEXTURE_SIZE,
   bakeImpostor,
   bakeRendererReady,
+  impostorBandOn,
   impostorGeometry,
   impostorMaterial,
 } from '../render/impostor.js';
@@ -134,6 +136,30 @@ export const colliderGrid = new ColliderGrid();
  * by kind. See `bushCue` in scatter.js for what goes in.
  */
 export const bushZones = new ColliderGrid();
+
+/**
+ * The spatial index that says WHICH TREES ARE DEAD.
+ *
+ * Every streamed sector's standing dead trunks — the same `ColliderGrid` a
+ * third time, for a third question. `colliderGrid` answers "is the body allowed
+ * here", `bushZones` answers "is the body near a bush", and this answers "is
+ * that a snag". A snag is in BOTH this and `colliderGrid`, deliberately: the
+ * scatter's own note at the dead-wood block says the collider has to stay in
+ * the "this is a tree" band so that fauna.js keeps perching birds on it, and
+ * this grid is what lets that file PREFER one without the radius having to
+ * carry a second meaning.
+ *
+ * WHY IT COULD NOT BE A FLAG ON THE COLLIDER. A snag's radius is
+ * `0.28*scale + 0.34`, which is exactly a live trunk's, and the two bands
+ * cannot be separated without either moving a collision surface or landing on
+ * the giant's 0.75 core — and the counting invariant recorded at
+ * `stumpCollider` (entries under 0.8 == trunk instances, exactly, in all three
+ * worlds tested) is worth more than the one bit. See `snags` in scatter.js.
+ *
+ * A snag is about one stem in fifty, so this grid is roughly a fiftieth the
+ * size of the one above it.
+ */
+export const snagZones = new ColliderGrid();
 
 /**
  * Put one opaque forest mesh in its place in the depth-sorted draw order.
@@ -264,20 +290,58 @@ function unionBound(a, b) {
   };
 }
 
-/** A clump of crossed cards, used for grass and ferns. */
-function clumpGeometry(width, height, blades, rng, lean = 0.18, scale = PLANT_SCALE.grass) {
+/**
+ * A clump of crossed cards, used for grass and ferns.
+ *
+ * `jitter` MAKES THE BLADES INSIDE ONE CLUMP DIFFERENT FROM EACH OTHER, and it
+ * defaults to 0 so that passing nothing reproduces the old geometry exactly.
+ *
+ * Every blade in a clump used to be the identical `PlaneGeometry(width, height)`
+ * at an evenly spaced yaw — a symmetric fan, which is the single worst shape to
+ * repeat ten thousand times, because symmetry is what the eye locks onto when it
+ * decides two things are the same object. `cardClump` in undergrowth.js has had
+ * per-card width and height jitter since it was written and this never did.
+ *
+ * THE RANGES ARE ASYMMETRIC ON PURPOSE. Width swings hard (-0.9 to +1.2 of the
+ * jitter) because a broad blade beside a strappy one is the whole point; height
+ * swings little and BIASED UPWARD (-0.35 to +0.55), because the merged clump's
+ * bounding box height is the denominator `check-plants.mjs` divides peak wind
+ * displacement by. Shortening the tallest blade would raise that ratio toward
+ * its 0.55 ceiling for no visual gain; lengthening it can only lower it.
+ *
+ * The lean is jittered too, so a clump has blades at different curvatures rather
+ * than a set of parallel arcs.
+ */
+function clumpGeometry(width, height, blades, rng, lean = 0.18, scale = PLANT_SCALE.grass, jitter = 0) {
   const parts = [];
   for (let i = 0; i < blades; i++) {
-    const geo = new THREE.PlaneGeometry(width, height, 1, 3);
-    geo.translate(0, height / 2, 0);
+    /**
+     * THE DRAWS ARE INSIDE THE GUARD, and that is not micro-optimisation.
+     *
+     * `rng` here is the geometry's own generator, consumed in order, and `ph`
+     * below reads from it — so taking three draws unconditionally would have
+     * shifted every blade phase in the FERN clump as well, a layer this pass has
+     * no business touching. `jitter` defaulting to 0 has to mean "byte-identical
+     * to before", not "the same distribution".
+     */
+    let w = width;
+    let h = height;
+    let bend = lean;
+    if (jitter) {
+      w = width * (1 + rngRange(rng, -0.9, 1.2) * jitter);
+      h = height * (1 + rngRange(rng, -0.35, 0.55) * jitter);
+      bend = lean * (1 + rngRange(rng, -0.6, 0.9) * jitter);
+    }
+    const geo = new THREE.PlaneGeometry(w, h, 1, 3);
+    geo.translate(0, h / 2, 0);
     const pos = geo.attributes.position;
     const flex = new Float32Array(pos.count);
     const phase = new Float32Array(pos.count);
     const ph = rng();
     for (let v = 0; v < pos.count; v++) {
-      const t = clamp01(pos.getY(v) / height);
+      const t = clamp01(pos.getY(v) / h);
       // Pre-bend the card so a blade is a curve, not a flag.
-      pos.setZ(v, pos.getZ(v) + t * t * height * lean);
+      pos.setZ(v, pos.getZ(v) + t * t * h * bend);
       flex[v] = t * t;
       phase[v] = ph;
     }
@@ -646,6 +710,8 @@ function groundMaterial() {
           'varying float vRrWet;',
           '// The floor map luminance at this fragment, 1.0 = the map average.',
           'float rrFloorL;',
+          '// How steep this fragment is, 0 level and 1 cliff. See rrUp below.',
+          'float rrSteep;',
         ].join('\n')
       )
       .replace(
@@ -659,7 +725,91 @@ function groundMaterial() {
     vec3 rrFb = texture2D(uFloorMap, rrFrot * uFloorRep.y).rgb;
     vec3 rrFloor = rrFa * rrFb * uFloorNorm;
     rrFloorL = dot(rrFloor, vec3(0.2126, 0.7152, 0.0722));
-    diffuseColor.rgb *= max(vec3(0.0), mix(vec3(1.0), rrFloor, uFloorAmt));
+    /**
+     * LEAF LITTER DOES NOT STAY ON A CLIFF, AND THE VERTEX PALETTE NOW KNOWS IT.
+     *
+     * NO BACKTICKS BELOW. This comment is INSIDE a GLSL template literal, and a
+     * backtick here closes the template early. The failure names an innocent
+     * identifier in another file and does not mention this one; see
+     * scripts/glsl-backticks.mjs, which exists because of it.
+     *
+     * terrain.js grew a slope-and-crest rock term, so steep faces and the bare
+     * shoulder of the ridge arrive here already grey. This map was still being
+     * multiplied over them at full strength, which put fallen leaves on the one
+     * surface in the world that cannot hold any, and undid most of the rock,
+     * since the map's whole job is to look like litter.
+     *
+     * THE SMOOTHSTEP WAS NEVER THE PROBLEM. THE FLOOR UNDER IT WAS.
+     *
+     * The crag kept wearing leaf-shaped mottle after this term arrived, and the
+     * obvious suspicion was that the window opened too late. It does not.
+     * scripts/_slope-census.mjs measured grove-01's height field on the 1.6 m
+     * pitch the mesh normals actually see, and the crag mouth runs p10/p50/p90 =
+     * 19.3 / 37.1 / 57.6 degrees with a steepest face of 76. Anything past 45.6
+     * saturated the old smoothstep completely. It was fully open the whole time.
+     *
+     * What was left is what the cap allowed: 0.25 x 1.18 = 0.295, and a quarter
+     * of THIS map is nothing like a quarter as visible as all of it. The marks
+     * are large, dark and leaf-shaped -- a previous investigation found the ~780
+     * painted leaves carry essentially the entire standard deviation, and zeroing
+     * the 3400 grain dots moved it from 0.0989 to 0.0990 -- so a quarter strength
+     * still reads as LEAVES rather than as a texture turned down. Hence 0.90.
+     *
+     * NOT 1.00. The terrain's rock is flat vertex colour with nothing else on it,
+     * so a cliff at zero would have no albedo variation whatsoever and read as
+     * plastic. A tenth breaks the surface up without drawing anything nameable.
+     *
+     * AND THE WINDOW WIDENS RATHER THAN MOVING. 0.93 -> 0.62 is 21.6 -> 51.7
+     * degrees. The near end is unchanged and still sits just outside the rock
+     * ramp's own 30 -> 50 degree window on purpose -- litter thins slightly
+     * before the ground greys, which is the order it happens on a real slope, and
+     * matching the two windows exactly reads as one hard material boundary. The
+     * far end moves out because the deeper cut needs somewhere to arrive
+     * gradually; a 0.90 cap reached at 45 degrees would put a visible terminator
+     * across every hillside in the world. Measured over the same census, the mean
+     * litter amount in the open wood barely moves (1.079 -> 1.091, UP, because
+     * the wider ramp is gentler in the 25-40 degree band that most of the world
+     * lives in) while the steepest crag faces go 0.295 -> 0.118.
+     *
+     * THE WOOD IS NOT FLAT AND AN EARLIER NOTE HERE SAID IT WAS. Median slope is
+     * 20.3 degrees in the open wood and 21.0 in the spawn clearing, not 6, so
+     * this term has always been doing something everywhere rather than only on
+     * cliffs. That is the reason the near end of the window is left exactly where
+     * it was and the deepening was spent entirely past 45 degrees.
+     *
+     *
+     * WHERE THE SLOPE COMES FROM, AND WHY IT IS NO LONGER A DERIVATIVE.
+     *
+     * It used to be the geometric normal off dFdx/dFdy of vTripWorld, chosen
+     * because normal is not in scope at this anchor -- three runs color_fragment
+     * BEFORE normal_fragment_begin -- and because quad derivatives are nearly
+     * free. Painted as bands against the version below, the two agree over almost
+     * all of the ground, so this is NOT what was leaving litter on the crag and
+     * swapping it fixes nothing you can see in a still. It is still the wrong
+     * input for three reasons: a screen-space derivative is in metres per PIXEL,
+     * so the plane it fits straddles metres of relief at distance; at grazing
+     * incidence the two tangents turn nearly parallel and the cross product
+     * cancels toward the zero-normal failure this project has already had once;
+     * and on any quad straddling a depth discontinuity it returns a slope
+     * belonging to neither surface. That last one is visible: in the debug A/B
+     * the disagreements are solid triangles along every silhouette where ground
+     * passes behind a leaf card or the cave lip, which is litter switching back
+     * on in the shape of whatever is in front of it.
+     *
+     * vNormal is the interpolated shading normal and IS declared by
+     * normal_pars_fragment before this point; the only thing wrong with it was
+     * that it is in VIEW space, where .y means "up the screen". viewMatrix is a
+     * uniform in every three fragment shader and its upper 3x3 is a rotation, so
+     * transposing it -- which is what putting the vector on the LEFT of the
+     * multiply does -- takes the normal back to world. One mat3 multiply, no
+     * fetch, no derivative, and cheaper than the pair it replaces.
+     *
+     * abs() because this only ever asks how steep, never which way up.
+     */
+    float rrUp = abs(normalize(vNormal * mat3(viewMatrix)).y);
+    rrSteep = smoothstep(0.93, 0.62, rrUp);
+    float rrLitter = uFloorAmt * (1.0 - 0.90 * rrSteep);
+    diffuseColor.rgb *= max(vec3(0.0), mix(vec3(1.0), rrFloor, rrLitter));
   }`
       )
       .replace(
@@ -671,8 +821,32 @@ function groundMaterial() {
     #else
       vec3 rrSky = vec3(0.30, 0.38, 0.48);
     #endif
-    // Wet where the terrain says so, and wettest in the map's own hollows.
-    float rrWet = clamp(vRrWet, 0.0, 1.0) * smoothstep(1.10, 0.70, rrFloorL);
+    /**
+     * Wet where the terrain says so, wettest in the map's own hollows, AND NOT
+     * ON A SLOPE. That last clause is the one that was missing, and it is what
+     * was actually putting leaf-shaped marks on the crag.
+     *
+     * NO BACKTICKS IN THIS COMMENT. It is inside a GLSL template literal.
+     *
+     * The mottle on the cave-mouth rock was diagnosed twice as a litter-texture
+     * problem and it is not one. Forcing rrLitter to zero left the marks BRIGHTER
+     * (the albedo modulation was partly cancelling them), and forcing
+     * diffuseColor to a constant grey left them completely intact -- so they were
+     * never in the albedo at all. They are HERE: the sheen is gated on the DARK
+     * part of the floor map, which is exactly the painted leaves and roots, so
+     * every leaf mark on the map was being drawn as a puddle. On flat ground that
+     * is the whole point of the effect and it is lovely. On a cliff it is a
+     * physical impossibility, and it is worse there than anywhere else because
+     * rrF is a Fresnel term: a wall is always seen at a glancing angle, so the
+     * fourth power that keeps the sheen subtle underfoot saturates on a face.
+     *
+     * FULLY OFF RATHER THAN THINNED, and the ordering against the litter above is
+     * deliberate. Leaves lodge on a ledge; standing water does not stay on a
+     * fifty-degree rock at all. Same smoothstep, so there is one slope decision
+     * on this surface rather than two that can drift apart, and it costs a
+     * multiply -- rrSteep is already computed for the albedo.
+     */
+    float rrWet = clamp(vRrWet, 0.0, 1.0) * smoothstep(1.10, 0.70, rrFloorL) * (1.0 - rrSteep);
     if (rrWet > 0.003) {
       // Schlick, near enough: a fourth power is a puddle, a square is a sheet of
       // wet plastic, and the difference at 40 degrees off grazing is 3x.
@@ -693,6 +867,62 @@ export function buildForest(scene, seed = 'grove-01') {
   group.name = 'forest';
   scene.add(group);
   colliders.length = 0;
+
+  /**
+   * WHICH LAND THIS IS, AND THE TWO THINGS IT DECIDES IN THIS FILE.
+   *
+   * `main.js` has already called `setWorldSeed(SEED)`, which chooses the land
+   * from the seed's prefix, so by the time anything here runs the answer is
+   * fixed for the life of the page. There is no teardown and no runtime swap: a
+   * new land is a new seed is a new page, exactly as a new seed already was.
+   *
+   *   THE ROSTER — which species get grown, three archetypes each.
+   *   THE LAYER SET — which streamed layers get an InstancedMesh at all.
+   *
+   * `has()` IS HOW A LAND DROPS A LAYER, and it is the cheapest seam in this
+   * design because it needs no cooperation from anything downstream. A layer
+   * with no `addStreamed` call has no mesh, so `bounds` has no entry for it, so
+   * `underLayer` in scatter.js bails before walking its grid and its placement
+   * rule never runs. The taiga drops six card layers this way — six draw calls,
+   * six slabs and six placement rules — and the only edit anywhere is the set in
+   * `lands/taiga.js`.
+   *
+   * WHAT A DROPPED LAYER STILL COSTS is its geometry and its texture, which are
+   * built unconditionally above: one canvas draw and some RAM at load. It does
+   * NOT cost a shader program — three compiles on first render and a material
+   * never attached to a scene mesh is never compiled — and it does not cost a
+   * draw call, a slab or a frame microsecond. Building them lazily is a
+   * worthwhile follow-up and is not this pass; it would be load time, not frame
+   * time.
+   */
+  const land = currentLand();
+  const has = (id) => land.layers.has(id);
+  /**
+   * A LAND MAY REPLACE A CARD LAYER'S BASE TINT, AND IT HAS TO BE THE BASE.
+   *
+   * A card layer's colour arrives in three multiplied stages — the texture, this
+   * material colour, and the scatter's per-instance tint — and the scatter's
+   * stage is a RATIO over this one. So a land whose understorey should be brown
+   * cannot get there from a green base at any ratio: measured on the taiga, the
+   * bush landed at sRGB (184, 205, 145) and the sapling at (115, 205, 141),
+   * emerald blobs in a snowy wood, because `shrubMat` is a rainforest constant
+   * that every land was sharing. Compensating for it with magenta ratios in the
+   * land descriptor would be the same bug with the evidence hidden.
+   *
+   * Omitting `cards` is not a fallback, it is the normal case: the rainforest
+   * has no entry and every one of its materials is therefore constructed from
+   * the same literal as before, bit-identical. Only a land that has something to
+   * say about a layer says it.
+   *
+   * The luma rule that governs these literals (see the tint note on `grassMat`)
+   * is a rule about moving a tint WITHIN a palette, and it does not cross a
+   * biome: pale yellow-green going greener must hold its Rec.709 luma because
+   * darker reads as a hole in a dark forest floor. Against SNOW the reasoning
+   * inverts — dark is what reads — so the taiga's entries are deliberately much
+   * darker than the constants they replace, and that is the change, not a
+   * mistake in it.
+   */
+  const cardTint = (id, base) => land.cards?.[id] ?? base;
 
   // ---- ground -------------------------------------------------------------
   /**
@@ -726,7 +956,36 @@ export function buildForest(scene, seed = 'grove-01') {
    */
   const ARCHETYPES = 3;
   const archetypes = [];
-  for (const name of SPECIES_NAMES) {
+  /**
+   * WHICH SPECIES THIS LAND GROWS, filtered against what `SPECIES` actually
+   * holds.
+   *
+   * The roster is the land's — see `lands/rainforest.js` — and it is written
+   * out rather than defaulted to the whole table, because the moment a second
+   * land adds conifers to `SPECIES` a default would silently grow spruce in the
+   * Amazon. Filtering it here rather than trusting it is the other half of the
+   * same care: a roster is a land's WISH and `SPECIES` is what exists, and the
+   * two are edited in different files by different passes. The taiga's five
+   * conifers were a wish for one release and are a fact now; while they were a
+   * wish, the comment that said so outlived it, and `land-identity.mjs` was
+   * pinning a taiga made of palm trees off the back of it. See the header of
+   * `src/world/species-names.js` for what that cost.
+   *
+   * WHAT A MISSING SPECIES COSTS. Each one is a bark tile and three 512² canopy
+   * canvases that are never drawn and three archetypes never grown, so a land
+   * with four species loads faster than one with five and compiles fewer
+   * programs. `treeSector` substitutes at placement time (see the guard there),
+   * so nothing throws and no ground goes bare — the wood is simply made of the
+   * trees that exist.
+   *
+   * The FALLBACK to the whole table is for the case where a land's roster and
+   * `SPECIES` have no overlap at all, which would otherwise be a world with no
+   * trees in it and nothing saying so. This project has recorded twice that a
+   * layer which places nothing looks exactly like a layer that works.
+   */
+  const wanted = land.roster.filter((n) => SPECIES_NAMES.includes(n));
+  const grownNames = wanted.length ? wanted : SPECIES_NAMES;
+  for (const name of grownNames) {
     const mats = speciesMaterials(name, ARCHETYPES);
     for (let a = 0; a < ARCHETYPES; a++) {
       const grown = growTree(`${seed}:${name}:${a}`, name);
@@ -831,10 +1090,86 @@ export function buildForest(scene, seed = 'grove-01') {
     'plant',
     { receivesShadow: false }
   );
-  const grassGeo = clumpGeometry(0.42, 0.52, 3, makeRng(`${seed}:grassgeo`), 0.2, PLANT_SCALE.grass);
+  /**
+   * THE SWARD IS TWO SHAPES, AND THE SECOND ONE IS THE POINT OF THIS PASS.
+   *
+   * `grass` is the blade fan that was always here — with per-blade jitter now,
+   * see `clumpGeometry` — and it reads as a tuft or a sedge. `grass-b` is a low
+   * broadleaf herb rosette: wider than tall, tipped over at 40°, three cards
+   * rather than three blades. A terra firme forest floor is a mix of exactly
+   * those two things and the layer was 100% the first of them, ten thousand
+   * times over. The scatter rule in `underSector` picks per instance; the long
+   * block there has the whole argument and the exact cost.
+   *
+   * BOTH SHARE `grassMat`. One material object means one program, one texture
+   * and one entry in everything that has ever been told about the sward — the
+   * pre-warm list, the bake, the `mesh.name === 'grass'` probe in main.js, the
+   * `thinnable` default in culling.js. A second material would have been a
+   * shader compile at load, which this repo has shipped once as a freeze.
+   *
+   * THE MEASURED BOXES, because "different silhouette" has to be a number or it
+   * is a hope. Merged, before the instance scale:
+   *
+   *   fan   0.448 x 0.481 footprint, 0.569 TALL   (0.433 x 0.452 x 0.520 before
+   *                                                the per-blade jitter)
+   *   herb  0.501 x 0.574 footprint, 0.258 tall
+   *
+   * i.e. 15-19% wider and 2.2x SHORTER. Upright-and-narrow against
+   * low-and-spreading is the contrast that survives being seen from standing
+   * height; two things that differ only in height would not.
+   *
+   * THE TRIP SCALE IS NOT `PLANT_SCALE.grass`, AND THAT IS THE ONE NUMBER HERE
+   * THAT COULD FAIL A GATE. `check-plants.mjs` divides peak wind displacement by
+   * the geometry's own bounding-box height and fails above 0.55; every term in
+   * that sum is linear in `aScale` and the lean term is gated off below 0.25, so
+   * the ratio is simply `K x scale / height` with K ~ 2.31 at the trip's peak.
+   * The fan is 2.31 x 0.09 / 0.569 = 0.366. Handing this rosette the same 0.09
+   * over a 0.258 m box would have put it at 0.806 — a 26 cm plant thrown 21 cm,
+   * which is precisely the artefact that check exists to catch, and it would
+   * have shipped looking like somebody had combed the ground.
+   *
+   * `x 0.45` gives 2.31 x 0.0405 / 0.258 = 0.363, which lands the two sward
+   * geometries on the same ratio to three decimal places. That is the right
+   * target rather than a coincidence: they are one layer, and two halves of one
+   * layer moving by different fractions of their own height is exactly what
+   * would read as one of them being wrong.
+   */
+  const grassGeo = clumpGeometry(
+    0.42,
+    0.52,
+    3,
+    makeRng(`${seed}:grassgeo`),
+    0.2,
+    PLANT_SCALE.grass,
+    0.28
+  );
+  const grassHerbGeo = cardClump({
+    width: 0.36,
+    height: 0.38,
+    cards: 3,
+    rng: makeRng(`${seed}:grassherbgeo`),
+    // A herb leaf is a stronger curve than a blade and it lies well off
+    // vertical: `tilt` is what makes this a rosette rather than a shorter tuft,
+    // and a shorter tuft would have bought nothing. 0.45 rad rather than the
+    // 0.7 first tried — at 0.7 the box came out 0.70 m across and 0.196 m tall,
+    // which is not a plant, it is a doily, and at 0.82 m candidate spacing it
+    // put the overlap back that the fern pass had just taken out.
+    lean: 0.28,
+    tilt: 0.45,
+    spread: 0.04,
+    rise: 0.02,
+    // TWO segments, not three. This is a 26 cm plant seen from standing height;
+    // the third row of vertices is invisible and it is a third of the layer's
+    // triangles. 3 cards x 2 segments = 12 triangles against the fan's 18.
+    segments: 2,
+    flexBase: 0.12,
+    bulge: 0.5,
+    scale: PLANT_SCALE.grass * 0.45,
+  });
 
-
-  // Ferns: bigger, shade-loving, so they go where the trees are.
+  // Ferns: shade-loving, so they go where the trees are, and taller than the
+  // sward rather than wider than it — see the geometry note below, which is
+  // where "bigger" stopped being the right word for this layer.
   const fernTex = fernFrond({ key: 'fern', seed: `${seed}:fern`, hue: 122, sat: 40, light: 44 });
   const fernMat = makeLiving(
     new THREE.MeshLambertMaterial({
@@ -846,7 +1181,34 @@ export function buildForest(scene, seed = 'grove-01') {
     'plant',
     { receivesShadow: false }
   );
-  const fernGeo = clumpGeometry(1.5, 1.15, 4, makeRng(`${seed}:ferngeo`), 0.3, PLANT_SCALE.fern);
+  /**
+   * 0.95 m WIDE, DOWN FROM 1.5, AND IT IS THE SINGLE BIGGEST DELETION IN THE
+   * UNDERSTOREY.
+   *
+   * The instance scale on this layer is `0.7 + pow(rng(), 1.7) * 1.9`, whose
+   * mean is 1.404 — so a 1.5 m card was a MEAN FERN 2.11 m ACROSS standing at a
+   * censused 11.05 instances per 100 m², i.e. on 3.05 m centres. Plants wider
+   * than two thirds of their own spacing overlap, and four crossed
+   * double-sided alpha cards is the most occluding shape in the file: what that
+   * built was a continuous 1.6 m deep wall across the entire world, which is
+   * most of what "cluttered" meant. At 0.95 the mean is 1.33 m and the largest
+   * 2.47, against a nearest-neighbour spacing that the scatter's new patch
+   * field takes out past 4 m.
+   *
+   * THE HEIGHT IS DELIBERATELY NOT TOUCHED, and that is not laziness. It is
+   * what keeps `PLANT_SCALE.fern` honest: `check-plants.mjs` measures peak wind
+   * displacement over the plant's HEIGHT, so every cardClump layer in this file
+   * carries a `scale` fitted to its own height and would need refitting if the
+   * height moved. Narrowing a card changes nothing that check can see. The side
+   * effect is that a fern goes from wider-than-tall to upright, which is the
+   * silhouette a heliconia or a tree fern frond actually has.
+   *
+   * The size RANGE in scatter.js is untouched for the same reason — the skew
+   * that puts occasional giants over an ordinary understorey was right, it was
+   * being applied to a card that was already too wide. See the block above the
+   * fern scatter for the full arithmetic.
+   */
+  const fernGeo = clumpGeometry(0.95, 1.15, 4, makeRng(`${seed}:ferngeo`), 0.3, PLANT_SCALE.fern);
 
   // ---- rocks and fallen wood ---------------------------------------------
   const rockMat = makeLiving(new THREE.MeshLambertMaterial({ color: 0x8e8d82 }), 'prop');
@@ -1070,10 +1432,34 @@ export function buildForest(scene, seed = 'grove-01') {
      */
     scale: 0.29,
   });
+  /**
+   * A LAND MAY REPLACE A CARD LAYER'S TEXTURE, AND `meadow` IS WHY IT HAS TO.
+   *
+   * `cardTint` above lets a land move the MATERIAL colour, and the block at it
+   * says a land may replace a card layer's base tint. That is not enough here
+   * and the taiga proved it: this layer's canvas is a heliconia — a tropical
+   * broadleaf, drawn green — and the winter wood wants dead standing sedge. The
+   * screen colour is texture x material x per-instance tint and BOTH of the
+   * factors a land controls are ratios over the canvas, so a green base cannot
+   * reach straw at any ratio; asking for it just makes the layer dark green.
+   * The photographed symptom was bright green fronds standing in snow.
+   *
+   * `herbTuft` is the blade canvas the sward already uses two hundred lines up,
+   * at a near-neutral straw hue: no new texture family, no new material, no new
+   * draw call, and a `memo` key of its own so it does not collide with `sward`.
+   * The hue is deliberately almost absent — sat 12 — for the reason the sward's
+   * own block gives at length: one factor carries the colour and two carry
+   * luminance, and here the colour is the per-instance tint.
+   *
+   * `land.cardTex` is undefined in the rainforest, so `?.` short-circuits and
+   * that land builds the identical heliconia it always built.
+   */
   const meadowMat = cardMaterial(
-    heliconiaTexture({ key: 'meadow', seed: `${seed}:meadow` }),
+    land.cardTex?.meadow === 'tuft'
+      ? herbTuft({ key: 'sedge', seed: `${seed}:meadow`, hue: 44, sat: 12, light: 44 })
+      : heliconiaTexture({ key: 'meadow', seed: `${seed}:meadow` }),
     // Was 0xc4cf94. Same luma to within 2% — see the tint note on `grassMat`.
-    0xa9cf9a
+    cardTint('meadow', 0xa9cf9a)
   );
 
   // ---- bramble: the thicket -----------------------------------------------
@@ -1133,7 +1519,7 @@ export function buildForest(scene, seed = 'grove-01') {
    */
   const shrubTex = shrubTexture({ key: 'shrub', seed: `${seed}:shrub` });
   // Was 0xbfd199. Same luma to within 2% — see the tint note on `grassMat`.
-  const shrubMat = cardMaterial(shrubTex, 0xa8d19f);
+  const shrubMat = cardMaterial(shrubTex, cardTint('shrub', 0xa8d19f));
   /**
    * TALLER AND LESS SPLAYED THAN THE FIRST VERSION, WHICH WAS A BLACK SPLAT.
    *
@@ -1327,7 +1713,10 @@ export function buildForest(scene, seed = 'grove-01') {
     scale: 0.27,
   });
   // Was 0xb3c489. Same luma to within 2% — see the tint note on `grassMat`.
-  const reedMat = cardMaterial(reedTexture({ key: 'reed', seed: `${seed}:reed` }), 0x9bc491);
+  const reedMat = cardMaterial(
+    reedTexture({ key: 'reed', seed: `${seed}:reed` }),
+    cardTint('reed', 0x9bc491)
+  );
 
   // ---- stumps -------------------------------------------------------------
   /**
@@ -1885,14 +2274,15 @@ export function buildForest(scene, seed = 'grove-01') {
       instanceBound(arch.grown.far)
     );
     const leafBound = instanceBound(arch.grown.leaf);
-    // `alwaysNear: 82` is shadow arithmetic, not taste: 58 m of shadow
+    // `alwaysNear: 61` is shadow arithmetic, not taste: 40 m of shadow
     // half-extent, plus up to ANCHOR_HOLD (6 m) of anchor trail, plus ~15 m of
     // canopy lean. Within that, a tree must exist even when it is behind you or
-    // its shadow vanishes from the ground in front of you as you turn.
+    // its shadow vanishes from the ground in front of you as you turn. It was 82
+    // while the box was 58; both moved when the shadow pass was cut for 240 fps.
     addStreamed(`trunk:${arch.name}:${a}`, 'trunk', arch.grown.trunk, arch.mats.trunkMat, {
       capacity: TREE_CAPACITY,
       bucketSize: TREE_BUCKET,
-      alwaysNear: 82,
+      alwaysNear: 61,
       maxDistance: TREE_LOD,
       thinnable: false,
       castShadow: true,
@@ -1969,7 +2359,7 @@ export function buildForest(scene, seed = 'grove-01') {
     addStreamed(`leaf:${arch.name}:${a}`, 'leaf', arch.grown.leaf, arch.mats.leafMats[a], {
       capacity: TREE_CAPACITY,
       bucketSize: TREE_BUCKET,
-      alwaysNear: 82,
+      alwaysNear: 61,
       maxDistance: TREE_REACH,
       thinnable: false,
       castShadow: true,
@@ -2073,49 +2463,90 @@ export function buildForest(scene, seed = 'grove-01') {
   // Grass and ferns are the two layers the settings menu's undergrowth slider
   // is allowed to thin, and they are named rather than flagged so that
   // `packSlab`'s own default would reach the same answer on its own.
-  addStreamed('grass', 'grass', grassGeo, grassMat, {
-    capacity: 65536,
-    bucketSize: 18,
-    thinnable: true,
-    bound: instanceBound(grassGeo),
-  });
-  addStreamed('ferns', 'ferns', fernGeo, fernMat, {
-    capacity: 8192,
-    bucketSize: 30,
-    thinnable: true,
-    bound: instanceBound(fernGeo),
-  });
-  rockGeos.forEach((geo, gi) => {
-    addStreamed(`rocks:${gi}`, 'rocks', geo, rockMat, {
-      capacity: 1024,
+  /**
+   * TWO MESHES FOR ONE LAYER, AND THE SECOND ONE COSTS EXACTLY ONE DRAW CALL.
+   *
+   * Both are named `grass`, which is load-bearing rather than lazy: every
+   * consumer in this project identifies the sward by `mesh.name`, not by layer
+   * id — `culling.js`'s `thinnable` default, the undergrowth slider, main.js's
+   * per-layer debug probe, `perf/stations.js`, `authored-check`'s COVER set and
+   * `presets.mjs`'s UNDERSTOREY arm. Naming the second mesh anything else would
+   * have made it the one layer on the floor that no instrument could see and no
+   * setting could thin, which is the failure mode this project has recorded
+   * twice (a layer that places nothing looks exactly like a layer that works).
+   *
+   * CAPACITIES. Each is given the full 65 536 rather than half of it, because
+   * the split is decided by a damp/dry field and runs 34-66% locally, not 50/50
+   * — so sizing at half would put a `bufferData` stall exactly where a player
+   * walks into a damp hollow. The ceiling for the WHOLE layer is
+   * 40 960 m² / 0.82² x 1.0 = 60 916, so 65 536 covers either mesh taking
+   * everything; this should retire the one growth event `forest.growths` has
+   * always shown. 5.0 MB, against a hitch at the worst possible moment: the same
+   * trade the tree slabs and the bromeliads make.
+   *
+   * `instanceBound(geo, TRUE)` on both, and the `true` is not optional now. The
+   * scatter tilts every tuft by up to 19.5° of pitch and roll (see the sward
+   * block in scatter.js), and a yaw-only bound is hung at the geometry's centre
+   * height with no allowance for the centre swinging sideways. The symptom of
+   * getting this wrong is not a missing plant — it is a `cull-check` pixel diff
+   * that takes a per-layer bisect to attribute. See `unionBound` above.
+   */
+  if (has('grass'))
+    addStreamed('grass', 'grass', grassGeo, grassMat, {
+      capacity: 65536,
+      bucketSize: 18,
+      thinnable: true,
+      bound: instanceBound(grassGeo, true),
+    });
+  if (has('grass-b'))
+    addStreamed('grass-b', 'grass', grassHerbGeo, grassMat, {
+      capacity: 65536,
+      bucketSize: 18,
+      thinnable: true,
+      bound: instanceBound(grassHerbGeo, true),
+    });
+  if (has('ferns'))
+    addStreamed('ferns', 'ferns', fernGeo, fernMat, {
+      capacity: 8192,
+      bucketSize: 30,
+      thinnable: true,
+      bound: instanceBound(fernGeo),
+    });
+  if (has('rocks'))
+    rockGeos.forEach((geo, gi) => {
+      addStreamed(`rocks:${gi}`, 'rocks', geo, rockMat, {
+        capacity: 1024,
+        bucketSize: 32,
+        thinnable: false,
+        castShadow: true,
+        receiveShadow: true,
+        bound: instanceBound(geo, true),
+      });
+    });
+  if (has('logs'))
+    addStreamed('logs', 'logs', logGeo, logMat, {
+      capacity: 512,
       bucketSize: 32,
       thinnable: false,
       castShadow: true,
       receiveShadow: true,
-      bound: instanceBound(geo, true),
+      bound: instanceBound(logGeo, true),
     });
-  });
-  addStreamed('logs', 'logs', logGeo, logMat, {
-    capacity: 512,
-    bucketSize: 32,
-    thinnable: false,
-    castShadow: true,
-    receiveShadow: true,
-    bound: instanceBound(logGeo, true),
-  });
-  addStreamed('shroom-stem', 'shroom-stem', stem, stemMat, {
-    capacity: 512,
-    bucketSize: 24,
-    thinnable: false,
-    color: false,
-    bound: instanceBound(stem, true),
-  });
-  addStreamed('shroom-cap', 'shroom-cap', cap, capMat, {
-    capacity: 512,
-    bucketSize: 24,
-    thinnable: false,
-    bound: instanceBound(cap, true),
-  });
+  if (has('shroom-stem'))
+    addStreamed('shroom-stem', 'shroom-stem', stem, stemMat, {
+      capacity: 512,
+      bucketSize: 24,
+      thinnable: false,
+      color: false,
+      bound: instanceBound(stem, true),
+    });
+  if (has('shroom-cap'))
+    addStreamed('shroom-cap', 'shroom-cap', cap, capMat, {
+      capacity: 512,
+      bucketSize: 24,
+      thinnable: false,
+      bound: instanceBound(cap, true),
+    });
 
   /**
    * THE UNDERSTOREY, STREAMED — the same nine geometries, the same nine
@@ -2153,8 +2584,23 @@ export function buildForest(scene, seed = 'grove-01') {
    * spacing squared, times the largest acceptance its rule can return — over
    * the largest resident area the 80 m ring ever holds, which is about 40
    * sectors of 1024 m². Meadow: 1/1.8² × 1.0 × 40 960 = 12 642 at a weight of
-   * 1. Bramble: 1/2.2² × 1.05 × 40 960 = 8 885. Litter and sticks land near
-   * 4 500 apiece under a closed canopy.
+   * 1. Bramble: 1/2.2² × 1.05 × 40 960 = 8 885. Litter lands near 4 500 under a
+   * closed canopy; sticks were beside it and are now 1/3.0² × 1.22 × 40 960 =
+   * 5 552, because that layer's weights were turned round to face the bald
+   * biome rather than the closed canopy (see its rule in scatter.js) and its
+   * maximum went 1.04 -> 1.22. 8192 still covers it with 48% to spare.
+   *
+   * TWO OF THE SPACINGS QUOTED IN THIS PARAGRAPH DO NOT MATCH THE CODE and
+   * predate this pass: `underLayer('meadow', 1.3, …)` and
+   * `underLayer('bramble', 2.5, …)` against the 1.8 and 2.2 above. Recomputed at
+   * the real spacings the meadow ceiling is 24 236 against a capacity of 16 384.
+   * Left alone deliberately — neither of those two rules was touched here, their
+   * censused counts did not move (5.66 -> 5.64 and 2.14 -> 2.13 per 100 m²), and
+   * the measured-peak half of the sizing rule found 17 058 by walking to the
+   * deepest meadow in the world, which is the number the 16 384 was actually
+   * chosen against. Somebody should reconcile the two halves; doing it inside a
+   * colour-and-density pass would be changing a memory budget for a reason that
+   * has nothing to do with the change.
    *
    * Then checked by standing in the most extreme example of each biome the
    * world actually contains, found by scanning `character()` out to 1.5 km and
@@ -2235,8 +2681,33 @@ export function buildForest(scene, seed = 'grove-01') {
      */
     { id: 'meadow', geo: meadowGeo, mat: meadowMat, capacity: 16384, bucketSize: 18 },
     { id: 'bramble', geo: brambleGeo, mat: brambleMat, capacity: 16384, bucketSize: 20, clutter: true },
-    { id: 'bushes', geo: bushGeo, mat: shrubMat, capacity: 2048, bucketSize: 26, castShadow: true },
-    { id: 'saplings', geo: saplingGeo, mat: shrubMat, capacity: 1024, bucketSize: 26, castShadow: true },
+    /**
+     * 2048 -> 4096 AND 1024 -> 2048, AND THE REASON IS A CEILING THAT MOVED
+     * WITHOUT EITHER LAYER GETTING DENSER.
+     *
+     * These capacities are the layer's MAXIMUM acceptance times its lattice
+     * density times the resident area — see the long block above — and the
+     * maximum is the number that changed when the seven bypassing layers were
+     * routed through `character()`. The bushes read
+     * `(0.14 + band) -> max 0.64` and now read
+     * `0.18 + bramble*1.0 + understorey*1.25 -> saturates at 1`; the saplings
+     * read `0.1 + canopy*0.42 -> max 0.52` and now
+     * `0.1 + understorey*1.0 + meadow*0.55 -> saturates at 1`. Recomputed:
+     * bushes 1/5.4² × 1.0 × 40 960 = 1404 and saplings 1/7.2² × 1.0 × 40 960 =
+     * 790, against the old 898 and 411.
+     *
+     * BOTH STILL FITTED, WHICH IS EXACTLY WHY THIS IS WORTH DOING NOW. 1404 of
+     * 2048 and 790 of 1024 is 46% and 30% headroom on a table whose whole
+     * argument is that a resident ring can legitimately be entirely one biome —
+     * and the AVERAGE counts both went DOWN in the same change (censused 1.63
+     * -> 1.26 and 0.62 -> 0.56 instances per 100 m²), so nothing in a normal
+     * walk would ever report the problem. A growth event is a full `bufferData`
+     * on the next render, felt as a hitch at the moment the player walks into
+     * the deepest thicket in his session, which is the one place this would
+     * happen and the one place he is looking. 234 KB.
+     */
+    { id: 'bushes', geo: bushGeo, mat: shrubMat, capacity: 4096, bucketSize: 26, castShadow: true },
+    { id: 'saplings', geo: saplingGeo, mat: shrubMat, capacity: 2048, bucketSize: 26, castShadow: true },
     { id: 'sticks', geo: stickGeo, mat: twigMat, capacity: 8192, bucketSize: 24, spin: true, clutter: true },
     { id: 'flowers', geo: flowerGeo, mat: flowerMat, capacity: 8192, bucketSize: 18, clutter: true },
     { id: 'litter', geo: litterGeo, mat: litterMat, capacity: 8192, bucketSize: 22, spin: true, clutter: true },
@@ -2267,9 +2738,23 @@ export function buildForest(scene, seed = 'grove-01') {
      * its rule can return — over the ~40 960 m² the 80 m ring holds, rounded up
      * to a power of two.
      *
-     *   palms       1/6.2² x 0.64 x 40 960 =   682   ->  2048
+     *   palms       1/6.2² x 1.00 x 40 960 = 1 066   ->  2048
      *   bromeliads  1/2.1² x 0.85 x 40 960 = 7 897   ->  8192
-     *   bigleaf     1/9²   x 0.82 x 40 960 =   414   ->   512
+     *   bigleaf     1/9²   x 1.00 x 40 960 =   506   ->  1024
+     *
+     * TWO OF THOSE THREE CEILINGS MOVED WHEN THESE LAYERS STOPPED READING RAW
+     * `canopy`, and the bigleaf one is why this table had to be revisited at
+     * all. The palms went from `0.14 + canopy*0.5 -> max 0.64` to
+     * `0.17 + understorey*1.0`, and the giant leaves from
+     * `(0.1 + canopy*0.42 + damp*0.3) x (1 - litter*0.5) -> max 0.82` to
+     * `0.1 + understorey*1.2 + damp*0.5`; both saturate at 1 now. The bromeliad
+     * ceiling is unchanged because it is set by the BANK term, which is a slope
+     * rule and was deliberately left keyed to `canopy`.
+     *
+     * 506 against a capacity of 512 is a 1.2% margin, i.e. one instance of bad
+     * luck from a `bufferData` stall in the deepest aroid corner in the world —
+     * so bigleaf goes to 1024. It is 39 KB and this layer is 0.39 instances per
+     * 100 m²; the capacity exists for the case nobody found, not for the mean.
      *
      * The two that are over-provisioned are over-provisioned on purpose. A
      * growth event is a full `bufferData` of the new capacity on the next
@@ -2281,9 +2766,13 @@ export function buildForest(scene, seed = 'grove-01') {
      */
     { id: 'palms', geo: palmGeo, mat: palmMat, capacity: 2048, bucketSize: 30 },
     { id: 'bromeliads', geo: bromeliadGeo, mat: bromeliadMat, capacity: 8192, bucketSize: 20 },
-    { id: 'bigleaf', geo: bigLeafGeo, mat: bigLeafMat, capacity: 512, bucketSize: 28 },
+    { id: 'bigleaf', geo: bigLeafGeo, mat: bigLeafMat, capacity: 1024, bucketSize: 28 },
   ];
   for (const u of understoreyLayers) {
+    // The land's set decides. See `has` at the top of this function: a layer
+    // that is not built has no `bounds` entry, so its placement rule in
+    // scatter.js never runs and nothing else has to be told.
+    if (!has(u.id)) continue;
     addStreamed(u.id, u.id, u.geo, u.mat, {
       capacity: u.capacity,
       bucketSize: u.bucketSize,
@@ -2304,7 +2793,38 @@ export function buildForest(scene, seed = 'grove-01') {
       // off-centre would let a rotated instance escape its own bound.
       bound: instanceBound(u.geo, u.spin ?? false),
     });
-    if (u.clutter) clutterLayers.push(streamedLayers[streamedLayers.length - 1]);
+    /**
+     * `clutter` IS THE LAND'S, AND THE TAIGA ANSWERS THE TEST DIFFERENTLY.
+     *
+     * The flag marks a layer the `potato` rung does not draw at all, and the
+     * test for it is NOT "is this cheap" — every one of these is cheap, and that
+     * is the trap. It is: **would the wood be a different place without it?**
+     *
+     * In THIS wood a stick on the floor, a fallen leaf, a wildflower, a bramble
+     * runner and a reed are TEXTURE: they read as detail on ground you are
+     * walking over and nothing means anything different when they are gone. In
+     * a boreal wood the answer flips for two of them. Six card layers do not
+     * exist there at all, so the deadfall and the lichen crusts ARE the floor —
+     * they are what is between the snow and the canopy — and dropping them
+     * leaves a rung with a blank white ground on it.
+     *
+     * WHAT IT IS WORTH IS DRAW CALLS AND NOT TRIANGLES. Measured at the wood
+     * station on `potato`, the rainforest's five are 0.05 M triangles of a
+     * 2.24 M frame and on a desktop GPU removing them is inside the noise floor.
+     * On a main thread throttled 8x — `npm run perf:weak` — removing fourteen
+     * draw calls is the difference between a 33.3 ms frame and a 16.7 ms one,
+     * because the frame sits exactly on the 60 Hz boundary there and every draw
+     * is a scene-graph traversal, a render-list insert, a program select and a
+     * driver call a weak core pays for in full. A triangle count is what a weak
+     * GPU charges; a draw count is what a weak CPU charges, and this game runs
+     * out of the second one first.
+     *
+     * The taiga can afford to keep two because it started six draws lower. It
+     * marks only `reeds`, so its potato rung draws twelve layers against this
+     * land's thirteen — still fewer, which is the constraint the whole land
+     * design was checked against.
+     */
+    if (land.clutter.has(u.id)) clutterLayers.push(streamedLayers[streamedLayers.length - 1]);
   }
 
   /**
@@ -2417,6 +2937,7 @@ export function buildForest(scene, seed = 'grove-01') {
     rockSizes: rockGeos.length,
     colliders: colliderGrid,
     bushZones,
+    snagZones,
     patches: patchList,
     glow: glowPoints,
   });
@@ -2605,8 +3126,22 @@ export function buildForest(scene, seed = 'grove-01') {
       }
       return n;
     },
+    /**
+     * BOTH SWARD MESHES, because the sward is one layer drawn as two shapes.
+     *
+     * `shoot.mjs` reports this number in every station caption and those
+     * captions are compared run to run, so reading only the `grass` slab would
+     * have reported the sward halving on the day it was split in two — a
+     * regression that never happened, in a number nobody could check without
+     * knowing about this line.
+     */
     get grassCount() {
-      return this.slabs().grass?.[0] ?? 0;
+      const slabs = this.slabs();
+      let n = 0;
+      for (const id of Object.keys(slabs)) {
+        if (id === 'grass' || id.startsWith('grass-')) n += slabs[id][0];
+      }
+      return n;
     },
     /**
      * Instances per understorey layer, live.
@@ -2645,12 +3180,26 @@ export function buildForest(scene, seed = 'grove-01') {
      * The impostor bakes are in here too: fifteen atlases arrive one archetype
      * per frame behind the menu, and a frame sampled before they land has the
      * band drawing nothing.
+     *
+     * UNLESS THE BAND IS OFF, IN WHICH CASE WAITING FOR THEM WAITS FOREVER.
+     * `impostorBand` is a preset knob and it is off at `potato`; with it off
+     * `pumpImpostors` returns on a null renderer and the work list is never
+     * drained, so without the second clause this getter is a condition that
+     * cannot become true on the rung a Chromebook actually runs. `perf/weak.mjs`
+     * spins 600 frames on it and then reports UNSETTLED on a wood that had
+     * fully arrived — `field.pending` and `groundField.pending` are the signals
+     * that mean "the geometry is here", and both were already zero.
+     *
+     * The order matters and is deliberate: the length test is first, so on
+     * every rung that DOES bake, this is the same condition it always was and
+     * the predicate is never consulted. See `impostorBandOn` for why the list
+     * is excused rather than emptied.
      */
     get settled() {
       return (
         field.pending === 0 &&
         (groundField.pending ?? 0) === 0 &&
-        impostorBakes.length === 0
+        (impostorBakes.length === 0 || !impostorBandOn())
       );
     },
 
@@ -2698,7 +3247,7 @@ export function buildForest(scene, seed = 'grove-01') {
      *   16.08 M triangles — about ten times the cost per triangle of trunk —
      *   so the canopy is where a reach cut pays. Defaults to `reach`.
      *   `alwaysNear` is the radius inside which a bucket skips the frustum test
-     *   entirely. Its 82 m default is shadow arithmetic (58 m of shadow
+     *   entirely. Its 61 m default is shadow arithmetic (40 m of shadow
      *   half-extent, 6 m of anchor trail, ~15 m of canopy lean) and is dead
      *   weight on any tier with shadows off — it is what keeps trees behind
      *   your head in the draw.

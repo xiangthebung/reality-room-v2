@@ -51,6 +51,7 @@
  */
 
 import { hashString } from './util.js';
+import { withLand } from '../world/lands/index.js';
 
 /** What the world was before it could be anything else. Every script assumes it. */
 export const DEFAULT_SEED = 'grove-01';
@@ -100,10 +101,25 @@ const SECOND = ['hollow', 'thicket', 'combe', 'reach', 'stand', 'copse', 'mire',
  * so a new seed is a new page, and the menu takes you there by navigating rather
  * than by trying to rebuild a forest around you.
  */
-export function inventSeed() {
+export function inventSeed(land) {
   const a = FIRST[Math.floor(Math.random() * FIRST.length)];
   const b = SECOND[Math.floor(Math.random() * SECOND.length)];
-  return `${a}-${b}-${Math.floor(Math.random() * 9000) + 1000}`;
+  const bare = `${a}-${b}-${Math.floor(Math.random() * 9000) + 1000}`;
+  /**
+   * A LAND IS A PREFIX ON THIS STRING AND NOT A SECOND VALUE.
+   *
+   * `taiga:fen-mire-3204`. The whole argument is in `world/lands/index.js`; the
+   * short version is that world identity is already carried on three rails —
+   * the URL, the socket handshake, and `Room.seed` — and folding the land into
+   * the seed makes all three carry it for free. A `world` field beside the seed
+   * was priced at eight edit sites across `net/` and `server/`, every one of
+   * them a place two players can end up in different forests.
+   *
+   * It still reads down a telephone, which is the property this generator
+   * exists for. The default land takes no prefix at all, so nothing about a
+   * plain seed changes and every stored expectation in `scripts/` is untouched.
+   */
+  return withLand(land, bare);
 }
 
 /**

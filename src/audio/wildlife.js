@@ -1,5 +1,6 @@
 import { clamp, clamp01, makeRng, rngRange } from '../core/util.js';
 import { dawnAt } from '../world/daylight.js';
+import { currentLand } from '../world/lands/index.js';
 
 /**
  * The sound of things that are alive.
@@ -218,6 +219,26 @@ import { dawnAt } from '../world/daylight.js';
  * pheasant a guan, the buzzard a hawk-eagle. Nothing about the machinery
  * changed, which is the useful part of the exercise: every field in the table
  * turned out to describe a bird rather than a British bird.
+ *
+ * ==== AND THEN IT LEARNED TWO THINGS ABOUT WHERE IT IS =====================
+ *
+ * Everything above is a wood that sounds the same to everybody, everywhere,
+ * forever. Two facts were added, and neither of them is a species.
+ *
+ *   IT KNOWS WHETHER YOU ARE MOVING. `_hush` has always been able to hear you
+ *   frighten something; nothing could hear you STOP. `stillness` is the
+ *   opposite mechanism and it is spent in exactly three places — the chatter's
+ *   radius, `_weight`'s pivot toward species that do not throw far, and one
+ *   event that a walking player can never hear at all. It changes no interval,
+ *   because a wood that gets busier when you stand still is a reward mechanic
+ *   and what this has to be is the same wood, closer. See the long block on
+ *   `stillness` in the constructor.
+ *
+ *   IT KNOWS WHICH LAND IT IS IN. Twenty Neotropical voices and a cicada wall
+ *   are a rainforest fact, and this project now has a winter wood in it.
+ *   `setLand` takes the roster BY NAME and the insect rate as a scalar; the
+ *   index space is never shortened, for the reason `landVoiceIndices` sets out
+ *   at length, and both are exactly the identity in the rainforest.
  */
 
 /**
@@ -1270,6 +1291,105 @@ export const VOICE_COUNT = VOICES.length;
 export const VOICE_NAMES = VOICES.map((v) => v.name);
 
 /**
+ * ==== THE BIG PAIR THAT CROSSES HIGH, AND IT IS NOT IN `VOICES` ============
+ *
+ * `macaw()` below builds its bird out of `_throat` rather than out of the FM
+ * table, and its own docblock says why: a screech is broadband, and putting one
+ * through the FM path would need a modulation index up where sidebands start,
+ * which is the sound this whole file exists to refuse. That decision is right
+ * and it has one consequence nobody had cashed — the pair is therefore INVISIBLE
+ * to `landVoiceIndices`, which filters `VOICES` by name. So a winter wood got
+ * everything else made boreal and kept three pairs of macaws screaming over it.
+ *
+ * A SUBSTITUTION, NOT A DELETION, for exactly the reason the drawing side gives
+ * at its own HIGH_PAIRS: every boreal forest on earth has the same image in it,
+ * two ravens crossing high and croaking to each other, and it is the same event
+ * with different numbers. `fauna.js` draws the pair and this file voices it;
+ * both key off the same field on the land record so the thing you see and the
+ * thing you hear cannot come apart.
+ *
+ * THE NUMBERS ARE MULTIPLIERS ON THE MACAW'S, WHICH IS WHY THE RAINFOREST IS
+ * BIT-IDENTICAL: every factor here is exactly 1 for the macaw, and `x * 1` is
+ * `x` in floating point with no rounding at all. Nothing pinned moves.
+ *
+ *   `formant` 0.6 for the raven. `macaw()` draws its two band-passes at
+ *   1500-2100 and 380-500 Hz; scaled, that is 900-1260 and 228-300, which is
+ *   where a corvid croak lives. It is the single number that separates the two
+ *   birds, because both sounds are the same thing — noise through two wide
+ *   formants with a hard attack — and a croak is a screech an octave down.
+ *
+ *   `tail` 0.62. A macaw screech rings on for a third to half a second; a raven
+ *   croak is short and dry and gone, and a long tail on it would sound like a
+ *   crow in a cathedral.
+ *
+ *   `level` 0.9, barely down. A raven is not much quieter than a macaw and it
+ *   carries just as far across a valley, which is why the 300 m spatial reach
+ *   is shared rather than scaled.
+ *
+ *   `mob` is not about this pair at all — it is whether the land ALSO has the
+ *   parrot flock, and it hangs here because it is the same question asked once.
+ *   A dozen amazons coming out of a tree is a psittacine event by construction;
+ *   there is no boreal bird that does it, and inventing one would be a worse
+ *   answer than the wood simply not having that sound. See the `_nextParrots`
+ *   block, which is gated on this and on nothing else.
+ */
+const HIGH_PAIRS = {
+  macaw: { formant: 1, tail: 1, level: 1, mob: 1 },
+  raven: { formant: 0.6, tail: 0.62, level: 0.9, mob: 0 },
+};
+
+/**
+ * WHICH OF THOSE VOICES THIS LAND HAS, as indices INTO THE FULL TABLE.
+ *
+ * ==== THE INDEX SPACE IS NEVER SHORTENED, AND THIS IS THE WHOLE RULE ========
+ *
+ * The obvious implementation is to build a filtered VOICES array per land and
+ * index into that. It is wrong, and it is wrong in the way that does not show
+ * up until two people are standing next to each other: a voice index is a
+ * NUMBER that travels — `fauna.js` deals perchers a deck of them, `_individual`
+ * hashes one with a position to give a bird its identity, and both clients
+ * derive theirs independently and must agree. Re-numbering the table per land
+ * means index 3 is a quetzal in one realm and a crossbill in another, and the
+ * first time anything crosses between them — a saved percher deck, a hash that
+ * happens to be computed against `VOICE_COUNT`, a harness pinned to a name —
+ * the two woods quietly disagree about what is singing.
+ *
+ * So the selection is BY NAME and it returns GLOBAL indices. A land record says
+ * `voices: ['crossbill', 'nutcracker', …]`; this hands back `[7, 12, …]`; every
+ * consumer keeps using the one index space it always used and simply draws from
+ * a smaller set of it. Adding a row to VOICES cannot renumber anybody.
+ *
+ * WRITTEN DEFENSIVELY BECAUSE THE FIELD MAY NOT EXIST YET, AND BECAUSE ITS
+ * NESTING IS NOT SETTLED. The land records are being extended by another pass
+ * in the same wave as this one, and that pass reads its mammals from
+ * `land.fauna.kinds` — so the bird roster may land as `land.voices` or as
+ * `land.fauna.voices` depending on which reading wins. BOTH are accepted, in
+ * that order, and a record carrying neither means "all of them". That last part
+ * is the correct reading of a record that has not been told: the field exists
+ * to make the winter wood boreal, not to make the rainforest conditional. An
+ * EMPTY or fully unmatched list also falls back to the whole
+ * table rather than to silence — a land that named twenty species none of which
+ * are in this file is a typo, and a wood with no birds in it at all is a bug
+ * report about the audio being broken, which is the worst possible way for a
+ * typo to present.
+ *
+ * `VOICES.length` and never a literal: a hard-coded species count has been the
+ * bug in this project twice.
+ *
+ * @param {{voices?: string[]|Set<string>}|null} [land]
+ * @returns {number[]} indices into VOICES, ascending
+ */
+export function landVoiceIndices(land = currentLand()) {
+  const names = land?.voices ?? land?.fauna?.voices ?? null;
+  const all = () => VOICES.map((_, i) => i);
+  if (!names) return all();
+  const want = names instanceof Set ? names : new Set(names);
+  const out = [];
+  for (let i = 0; i < VOICES.length; i++) if (want.has(VOICES[i].name)) out.push(i);
+  return out.length ? out : all();
+}
+
+/**
  * Everything about a voice that is not audio, for whatever is drawing it.
  *
  * A deliberately small, copied, frozen object rather than the row itself: the
@@ -1515,6 +1635,21 @@ function sweep(param, base, when, dur, arc, glide, bend, lead, sub) {
 const VOICE_CEILING = 58;
 
 /**
+ * The carry, in metres, that the stillness re-weighting pivots around.
+ *
+ * 95 is the geometric mean of the table's range (30 for a hermit, 300 for a
+ * bellbird) rather than the arithmetic one, because `carry` is used
+ * multiplicatively everywhere it appears and the arithmetic mean of a range
+ * that spans a factor of ten sits nowhere useful — it would have put two thirds
+ * of the roster on the "quiet" side of the pivot and made stillness a general
+ * volume control. Derived from the table, so it moves if the table does; if a
+ * species is ever added outside 30-300 this is the line to re-read.
+ *
+ * See `_weight`.
+ */
+const CARRY_PIVOT = 95;
+
+/**
  * The chorus wave: two sines with no common period.
  *
  * A wood is not a Poisson process. It goes through minutes where four birds are
@@ -1694,6 +1829,58 @@ export class Wildlife {
     this.dawn = 0;
 
     /**
+     * HOW LONG YOU HAVE BEEN STANDING STILL, 0 to 1. Written by `update`.
+     *
+     * ==== THE WOOD COMES BACK TO YOU, AND IT IS THE OPPOSITE OF `_hush` ======
+     *
+     * `_hush` already exists and it is half of this idea: something bolts near
+     * you, the birds stop, and the wood tells you it noticed. What was missing
+     * is the other half. Every call in this file is scheduled at a radius drawn
+     * uniformly from a band that has never once known what the player is doing,
+     * so a wood you have been sitting in for two minutes sounds exactly like a
+     * wood you are jogging through. Stopping is the single strongest thing a
+     * person does in a forest and nothing here could hear it.
+     *
+     * The accumulator lives in main.js — it needs the body's speed and this
+     * file has never been told where the body is, only where the ears are — and
+     * arrives as a parameter. Its shape is documented at the call site: rises
+     * over about twenty-five seconds of near-zero speed and collapses over one
+     * and a half on any real movement. Asymmetric on purpose: a wood takes a
+     * long time to accept you and no time at all to stop.
+     *
+     * IT IS SPENT IN EXACTLY THREE PLACES AND IT DOES NOT CHANGE THE EVENT
+     * RATE. The chatter radius shrinks, `_weight` re-weights the picker toward
+     * species that do not throw far, and one new low-rate event appears above
+     * 0.6. Nothing above touches an interval. That restraint is the design: if
+     * standing still made the wood BUSIER it would read as a reward mechanic,
+     * and what it has to read as is the same wood, closer.
+     *
+     * DELIBERATELY NOT SPENT ON THE CHORUS WAVE OR THE INSECT WALL. Those are
+     * the place. The place does not care whether you have sat down.
+     */
+    this.stillness = 0;
+
+    /**
+     * Which voices this land has, as indices into VOICES, or null for all of
+     * them. See `landVoiceIndices` and `setLand`.
+     */
+    this._roster = null;
+    /** Set once `setLand` has been called explicitly, so `build` cannot clobber it. */
+    this._landExplicit = false;
+    /**
+     * How loud this land's night insects are. One until told otherwise, so
+     * every audio harness measures the rainforest exactly as it always has.
+     */
+    this.insectScale = 1;
+
+    /**
+     * Which big pair crosses over this land, and whether it has a parrot mob.
+     * The rainforest's row until `setLand` says otherwise, so every audio
+     * harness measures exactly what it always measured. See HIGH_PAIRS.
+     */
+    this.highPair = HIGH_PAIRS.macaw;
+
+    /**
      * A budget, and it exists because of the one failure mode this design has.
      *
      * Every event here builds its nodes at the moment it fires. That is fine at
@@ -1802,12 +1989,82 @@ export class Wildlife {
      * refills its bucket at the nominal rate instead of instantly or never.
      */
     this._spacing = 1;
+
+    /**
+     * THE THING THAT ONLY HAPPENS IF YOU STOP. See `stillness`.
+     *
+     * LAST IN THE CONSTRUCTOR, AND THAT POSITION IS LOAD-BEARING. Every timer
+     * above draws from `this.rng` in declaration order, so a new `rngRange`
+     * inserted anywhere among them shifts the whole tail — `_nextGuan`,
+     * `_nextEagle` and, worst, `this.clock`, which is the phase of the chorus
+     * wave. Moving that phase changes which birds fire in the first minute of
+     * every session, which changes what `audio-probe.mjs` and
+     * `fauna-audio.mjs` measure, which looks exactly like a regression in
+     * whatever was actually edited. Appended here, every existing draw is the
+     * draw it was.
+     *
+     * Seeded past its own interval rather than inside it, because the one way
+     * this feature fails is by going off in the first minute while the player
+     * is still learning to walk — at which point it is not "the wood came
+     * back", it is "a noise happened", and the association is never made.
+     */
+    this._nextIntimate = rngRange(this.rng, 14, 30);
+  }
+
+  /**
+   * WHICH LAND THIS IS. Two things come out of a land record and no more.
+   *
+   *   `voices`  which species exist here at all. Selected by name into global
+   *             indices — see `landVoiceIndices` for why the index space must
+   *             never be shortened.
+   *   `insects` how loud the night stridulation is, 0..1. The taiga is not a
+   *             rainforest with quieter crickets, it is a place with almost
+   *             none, and this is the scalar that says so.
+   *
+   * Both are read defensively: a record that carries neither behaves exactly as
+   * this file always has, which is right, because the fields are being added to
+   * describe a winter wood and not to make the rainforest conditional.
+   *
+   * @param {{voices?: string[]|Set<string>, insects?: number}|null} land
+   */
+  setLand(land) {
+    this._landExplicit = true;
+    const roster = landVoiceIndices(land);
+    // Null rather than a full-length array when nothing is excluded, so `_pick`
+    // takes its original branch and is bit-identical in the rainforest instead
+    // of being merely equivalent.
+    this._roster = roster.length === VOICES.length ? null : roster;
+    // Both nestings, for the reason `landVoiceIndices` gives: the land records
+    // are being extended in this same wave and it is not yet settled whether
+    // audio fields hang off the record or off its `fauna` sub-object.
+    const v = land?.insects ?? land?.fauna?.insects;
+    this.insectScale = Number.isFinite(v) ? clamp01(v) : 1;
+    /**
+     * The high pair, by NAME, with the same both-nestings tolerance and the same
+     * fall-back-to-the-rainforest rule as everything else here. An unknown name
+     * gives you a macaw rather than silence: a typo in a land record should be
+     * the wrong bird, which somebody notices, and not a missing one, which
+     * nobody does. See HIGH_PAIRS.
+     */
+    this.highPair = HIGH_PAIRS[land?.highPair ?? land?.fauna?.highPair] ?? HIGH_PAIRS.macaw;
   }
 
   build() {
     if (this.built) return;
     this.noise = pinkBuffer(this.ctx);
     this._buildFarTail();
+    /**
+     * ASK THE REALM WHICH LAND THIS IS rather than be told, for the same reason
+     * `update` defaults `dawn` from the clock rather than requiring it: the
+     * caller is `fauna.js`, which has no opinion about audio, and a parameter
+     * threaded through for this would be a thing that goes stale the first time
+     * somebody edits that call site. `setLand` in `world/lands/index.js` runs in
+     * main.js beside `setWorldSeed`, long before the audio gate is clicked.
+     *
+     * The explicit setter still wins if it was used first, because the bird
+     * harnesses want to audition a land the page is not in.
+     */
+    if (!this._landExplicit) this.setLand(currentLand());
     this.built = true;
   }
 
@@ -1975,15 +2232,36 @@ export class Wildlife {
    * metres, which does not sound like a small bird a long way off, it sounds
    * like nothing at all and a wood that is emptier than the event rate says.
    */
+  /**
+   * THE LAND'S ROSTER IS A FILTER ON WHICH ROWS ARE CONSIDERED, and it returns
+   * the GLOBAL index of whatever it picked. See `landVoiceIndices` for why that
+   * distinction is the whole of the multiplayer safety here.
+   *
+   * `_roster` is null in the rainforest, which takes the original branch
+   * verbatim: the same iteration order over the same rows drawing the same
+   * single `rng()` in the same place. Not "equivalent" — identical, which is
+   * what the pinned audio expectations need.
+   */
   _pick(distance, dark) {
+    const roster = this._roster;
+    if (!roster) {
+      let total = 0;
+      for (const v of VOICES) total += this._weight(v, distance, dark);
+      let r = this.rng() * total;
+      for (let i = 0; i < VOICES.length; i++) {
+        r -= this._weight(VOICES[i], distance, dark);
+        if (r <= 0) return i;
+      }
+      return VOICES.length - 1;
+    }
     let total = 0;
-    for (const v of VOICES) total += this._weight(v, distance, dark);
+    for (const i of roster) total += this._weight(VOICES[i], distance, dark);
     let r = this.rng() * total;
-    for (let i = 0; i < VOICES.length; i++) {
+    for (const i of roster) {
       r -= this._weight(VOICES[i], distance, dark);
       if (r <= 0) return i;
     }
-    return VOICES.length - 1;
+    return roster[roster.length - 1];
   }
 
   /**
@@ -2003,12 +2281,44 @@ export class Wildlife {
    * understorey birds turn up last — which is the actual sequence, and is
    * audible as the forest assembling itself rather than fading up.
    */
+  /**
+   * ==== AND THE FIFTH TERM IS STILLNESS ======================================
+   *
+   * `carry` is how far a species throws, and the fourth term above already uses
+   * it to stop the distant chorus spending a third of its events on
+   * honeycreepers at ninety metres. This term uses the same number for the
+   * opposite question: when the player has been standing still, weight the
+   * wood toward the birds that DO NOT throw far.
+   *
+   * That is what actually happens. The far chorus is always there and always
+   * the same; what a wood gives you for sitting in it is the small stuff — a
+   * hermit two trees away, a manakin in the understorey, an antbird working the
+   * litter. Those are the rows with `carry` of 30 to 50, and at a uniform
+   * weighting you meet them mostly as a distant nothing.
+   *
+   * IT IS A POWER AND NOT A LERP, and the exponent is where the safety is:
+   * `Math.pow(x, 0)` is exactly 1.0 for every finite positive x, so at
+   * `stillness = 0` this term is bit-identical to not existing — every stored
+   * audio expectation in `scripts/` measures a player who has just clicked
+   * through the gate and is therefore moving. A linear blend would have to be
+   * trusted to cancel; this cannot fail to.
+   *
+   * 95 is the geometric mean of the table's carry range (30 to 300), so the
+   * pivot sits in the middle of the roster rather than at one end and the
+   * re-weighting is symmetric: at full stillness a hermit is 2.3 times its
+   * usual share and a bellbird 0.44 of its. 0.7 rather than 1 because the full
+   * exponent deleted the far chorus outright, and a wood with no distance in it
+   * is a smaller wood, not a closer one — the point is that the near voices
+   * come UP, not that the far ones go away.
+   */
   _weight(voice, distance, dark) {
     const early = 1 + (voice.early - 1) * this.dawn;
+    const intimate = Math.pow(CARRY_PIVOT / voice.carry, this.stillness * 0.7);
     return (
       this._window(voice, dark) *
       voice.rare *
       early *
+      intimate *
       Math.min(1, voice.carry / Math.max(1, distance))
     );
   }
@@ -3646,9 +3956,18 @@ export class Wildlife {
    * spatial source reaches 300 m rather than 220. A scarlet macaw is audible
    * across a valley.
    */
+  /**
+   * THE METHOD KEEPS THE RAINFOREST'S NAME because the name is an API: the
+   * schedule calls it, `scripts/fauna-audio.mjs` calls it by hand, and renaming
+   * it to `highPair()` would break both to describe a thing that is still a
+   * macaw in the land every stored measurement was taken in. What it draws its
+   * two formants and its tail length from is `this.highPair`; see HIGH_PAIRS
+   * for the arithmetic and for why the rainforest is bit-identical.
+   */
   macaw(position) {
     if (!this.built || this.voices > VOICE_CEILING * 0.65) return;
     const rng = this.rng;
+    const bird = this.highPair;
     const t0 = this.ctx.currentTime + 0.02;
     const spatial = this._place(position, { refDistance: 18, rolloff: 0.95, maxDistance: 300 });
     // The mate, off to one side and a touch further away. Its own node, so the
@@ -3661,11 +3980,11 @@ export class Wildlife {
     let t = t0;
     for (let i = 0; i < screeches; i++) {
       this._throat(position, t, spatial, {
-        high: rngRange(rng, 1500, 2100),
-        low: rngRange(rng, 380, 500),
+        high: rngRange(rng, 1500, 2100) * bird.formant,
+        low: rngRange(rng, 380, 500) * bird.formant,
         snap: 0.09,
-        tail: rngRange(rng, 0.3, 0.5),
-        gain: 0.5 * (i === 1 ? 1 : rngRange(rng, 0.7, 0.92)),
+        tail: rngRange(rng, 0.3, 0.5) * bird.tail,
+        gain: 0.5 * (i === 1 ? 1 : rngRange(rng, 0.7, 0.92)) * bird.level,
         rate: rngRange(rng, 0.85, 1.15),
       });
       // The answer, in the gap rather than on top of it. A macaw pair
@@ -3673,11 +3992,11 @@ export class Wildlife {
       // parrot mob below and a different event.
       if (rng() < 0.7) {
         this._throat(_macawAt, t + rngRange(rng, 0.22, 0.36), mate, {
-          high: rngRange(rng, 1400, 2000),
-          low: rngRange(rng, 360, 480),
+          high: rngRange(rng, 1400, 2000) * bird.formant,
+          low: rngRange(rng, 360, 480) * bird.formant,
           snap: 0.09,
-          tail: rngRange(rng, 0.26, 0.44),
-          gain: 0.36 * rngRange(rng, 0.8, 1.0),
+          tail: rngRange(rng, 0.26, 0.44) * bird.tail,
+          gain: 0.36 * rngRange(rng, 0.8, 1.0) * bird.level,
           rate: rngRange(rng, 0.82, 1.1),
         });
       }
@@ -4528,11 +4847,18 @@ export class Wildlife {
    * @param {number} p.dark      0..1, how far into the evening it is
    * @param {{x:number,y:number,z:number}} p.listener
    */
-  update(dt, { tripLevel = 0, dark = 0, dawn = null, listener } = {}) {
+  update(dt, { tripLevel = 0, dark = 0, dawn = null, listener, stillness = 0 } = {}) {
     if (!this.built || !listener) return;
     const rng = this.rng;
     this.tripLevel = tripLevel;
     this.dark = dark;
+    /**
+     * Defaults to zero, which is a moving player, which is what every stored
+     * audio expectation in `scripts/` was captured against. See the long note
+     * on `stillness` in the constructor for what it is and where it comes from.
+     */
+    this.stillness = clamp01(stillness);
+    const still = this.stillness;
     // Defaulted from the clock rather than required, so a caller that knows
     // about `dark` and not about `dawn` — every audio harness in scripts/ —
     // still gets the right one instead of a permanent zero.
@@ -4549,7 +4875,19 @@ export class Wildlife {
      * deliberately does NOT: close physical sounds carry on at full level while
      * the chorus recedes, which is a stranger combination than either alone.
      */
-    this.songGain = 0.26 * (1 - tripLevel * 0.45);
+    /**
+     * THE SAME CURVE AS ambience.js, WHICH IS WHAT THE PARAGRAPH ABOVE
+     * PROMISES. Both were linear in the level and both therefore did nothing
+     * for the first minute, which is precisely the minute the effect is about:
+     * the wood goes quiet before anything looks different. Finished by 0.22,
+     * so the silence is complete while the visuals are still deniable — 33%
+     * quieter at thirty seconds, the full 60% by one minute. The two lines
+     * below are copied verbatim from ambience.js so that the agreement can be
+     * checked by eye rather than believed.
+     */
+    const hushQ = Math.min(1, Math.max(0, tripLevel / 0.22));
+    const hush = 1 - hushQ * hushQ * (3 - 2 * hushQ) * 0.6;
+    this.songGain = 0.26 * hush;
     this.nightGain = 0.3 * dark;
 
     /**
@@ -4729,10 +5067,25 @@ export class Wildlife {
        * daylight because a fledgling begging at ten at night is a different and
        * much sadder sound than the one intended.
        */
+      /**
+       * THE RADIUS IS THE FIRST PLACE STILLNESS IS SPENT, and the chatter is
+       * the right layer to spend it on because it is the only one that is
+       * CONNECTIVE rather than eventful — three or four times a minute is often
+       * enough that a change in where it comes from is heard as a change in the
+       * wood rather than as one odd call.
+       *
+       * 10-62 m moving, 4.5-24 m at a standstill. Both ends move, and the far
+       * end moves further: the effect is not "the birds come nearer", it is
+       * "the far ones stop being what you are hearing". The interval is
+       * UNTOUCHED — the same number of ticks, from closer in. A version that
+       * also shortened the interval was tried in the design and rejected in the
+       * writing: a wood that gets busier when you stop is a reward mechanic, and
+       * what this has to be is the same wood, closer.
+       */
       this._nextCall -= dt;
       if (this._nextCall <= 0) {
         const a = rng() * Math.PI * 2;
-        const r = 10 + rng() * 52;
+        const r = 10 - still * 5.5 + rng() * 52 * (1 - still * 0.62);
         _callAt.x = listener.x + Math.cos(a) * r;
         _callAt.y = listener.y + rngRange(rng, 0.5, 9);
         _callAt.z = listener.z + Math.sin(a) * r;
@@ -4744,6 +5097,135 @@ export class Wildlife {
         this.call(_callAt, this._pick(r, dark), kind, { gain: 0.9 });
         this._nextCall =
           (rngRange(rng, 2.2, 7) * Math.sqrt(spacing) * (1 + dark * 2.2)) / (1 + this.dawn * 1.6);
+      }
+
+      /**
+       * ==== THE WOOD COMES BACK TO YOU ======================================
+       *
+       * The one event in this file that a moving player can never hear. It does
+       * not exist below `stillness` 0.6 — about twenty seconds of not moving —
+       * and above it something small happens within four to twelve metres every
+       * twelve to thirty seconds.
+       *
+       * WHY A THRESHOLD AND NOT A RATE THAT RIDES THE VALUE. Everything else
+       * here fades, and fading is usually right. This one must not, because the
+       * whole content of the moment is the DISCOVERY: nothing was happening,
+       * you stopped, and after a while something did. A version whose interval
+       * merely shortened as you slowed would be firing at a quarter rate while
+       * you walked, which spends the effect on people who are not paying
+       * attention and leaves nothing to find for the people who are. The
+       * threshold is the feature.
+       *
+       * THREE OUTCOMES, ROLLED, AND THEY ARE THREE DIFFERENT ANSWERS TO "WHAT
+       * IS IT LIKE TO BE STOOD IN A WOOD".
+       *
+       *   A CHITTER at 4-9 m. Something has noticed you and is annoyed about
+       *   it from behind a trunk. `_chitter` already exists for the half second
+       *   after a squirrel bolts and it is exactly the right sound; the only
+       *   difference is that here nothing bolted, which is what makes it eerie
+       *   rather than explanatory.
+       *
+       *   WINGBEATS WITH A TRAVEL VECTOR THAT PASSES OVERHEAD. `wingbeats`
+       *   ramps its panner along `travel`, and the vector here is built to
+       *   cross the listener rather than to leave — start on one bearing, end
+       *   on roughly the opposite one, four to seven metres up. A bird flying
+       *   OVER you is the single strongest "you are small and outdoors" cue
+       *   available and this file has never once produced one: `flush` always
+       *   points its travel AWAY, because a flush is a bird escaping.
+       *
+       *   A BRUSH at a bearing. Two soft puffs of leaf noise, ten metres off,
+       *   from nothing you can see. It is the least of the three and it is the
+       *   one that does the most work, because it is the only one with no
+       *   animal attached to it.
+       *
+       * `bodyGain` is left alone and no gain is boosted: these are quiet
+       * because they are close, which is the point. The trip is not gated
+       * against — a wood coming back to somebody who has been sitting still for
+       * half a minute is, if anything, more of what a trip is for.
+       */
+      if (still > 0.6) {
+        this._nextIntimate -= dt;
+        if (this._nextIntimate <= 0) {
+          const a = rng() * Math.PI * 2;
+          const roll = rng();
+          if (roll < 0.38) {
+            const r = rngRange(rng, 4, 9);
+            _callAt.x = listener.x + Math.cos(a) * r;
+            _callAt.y = listener.y + rngRange(rng, -0.6, 2.5);
+            _callAt.z = listener.z + Math.sin(a) * r;
+            this._chitter(_callAt, this.ctx.currentTime + rngRange(rng, 0.05, 0.4), 0.75);
+          } else if (roll < 0.7) {
+            const r = rngRange(rng, 7, 13);
+            _distantAt.x = listener.x + Math.cos(a) * r;
+            _distantAt.y = listener.y + rngRange(rng, 4, 7);
+            _distantAt.z = listener.z + Math.sin(a) * r;
+            /**
+             * The vector crosses you. `b` is the far bearing, deliberately
+             * within about forty degrees of the opposite one so the flight
+             * path passes near the listener rather than tangentially past it —
+             * a bird that goes round you is just a bird somewhere else.
+             */
+            const b = a + Math.PI + rngRange(rng, -0.7, 0.7);
+            const far = rngRange(rng, 9, 16);
+            _travel.x = listener.x + Math.cos(b) * far - _distantAt.x;
+            _travel.y = rngRange(rng, -1.5, 1.5);
+            _travel.z = listener.z + Math.sin(b) * far - _distantAt.z;
+            this.wingbeats(_distantAt, { nearness: 0.9, gain: 0.85, travel: _travel });
+          } else {
+            const r = rngRange(rng, 6, 12);
+            _burstAt.x = listener.x + Math.cos(a) * r;
+            _burstAt.y = listener.y - rngRange(rng, 0.4, 1.4);
+            _burstAt.z = listener.z + Math.sin(a) * r;
+            const t = this.ctx.currentTime + 0.02;
+            /**
+             * Two puffs and not one, a fifth of a second apart. One is a
+             * thump; two is something with legs deciding whether to keep
+             * going. Centred at 900-1500 Hz — leaf litter, and comfortably
+             * under the 2 kHz line the harsh gate starts measuring at, which a
+             * brighter and more obvious "twig" version was not.
+             *
+             * THE SPATIAL IS OWNED HERE AND NOT BY THE FIRST PUFF, which is
+             * the trap `_canopySurge` records paying for with the creak.
+             * `_puff` disposes any panner it built itself the moment ITS OWN
+             * source ends — so handing the first puff's return value to the
+             * second one would silently truncate the second puff, which sounds
+             * like a dropout rather than like a bug and is therefore the kind
+             * you ship. One shared placement, torn down on a timer past the
+             * end of both.
+             */
+            const gap = rngRange(rng, 0.14, 0.3);
+            const spatial = this._place(_burstAt, {
+              refDistance: 4,
+              rolloff: 1.5,
+              maxDistance: 45,
+              bus: this.engine.sfxBus,
+            });
+            this._puff(_burstAt, t, {
+              freq: rngRange(rng, 900, 1500),
+              q: 0.55,
+              decay: rngRange(rng, 0.09, 0.16),
+              gain: 0.11,
+              rate: rngRange(rng, 0.8, 1.2),
+              spatial,
+            });
+            this._puff(_burstAt, t + gap, {
+              freq: rngRange(rng, 850, 1400),
+              q: 0.55,
+              decay: rngRange(rng, 0.07, 0.13),
+              gain: 0.08,
+              rate: rngRange(rng, 0.8, 1.2),
+              spatial,
+            });
+            setTimeout(() => {
+              try {
+                spatial.dispose();
+              } catch {
+                /* already gone */
+              }
+            }, (gap + 0.6) * 1000);
+          }
+          this._nextIntimate = rngRange(rng, 12, 30);
+        }
       }
 
       /**
@@ -4768,7 +5250,13 @@ export class Wildlife {
        *   daylight only and it is placed higher than anything else in the file
        *   by a factor of five.
        */
-      if (dark < 0.78) {
+      /**
+       * AND ONLY WHERE THERE ARE PARROTS. `highPair.mob` is 1 in the rainforest,
+       * so this compare is the only thing that changed here and it is always
+       * true there; see HIGH_PAIRS for why the flock is a land question and why
+       * a boreal wood gets no substitute rather than a made-up one.
+       */
+      if (dark < 0.78 && this.highPair.mob > 0) {
         this._nextParrots -= dt;
         if (this._nextParrots <= 0) {
           const a = rng() * Math.PI * 2;
@@ -4859,6 +5347,24 @@ export class Wildlife {
         this.owl(_distantAt);
         this._nextOwl = rngRange(rng, 22, 70);
       }
+      /**
+       * THE INSECTS ARE A LAND FACT. See `setLand`.
+       *
+       * Spent on the INTERVAL rather than on the level, which is the difference
+       * between a winter wood and a rainforest heard through a blanket. A
+       * boreal night does not contain a quiet wall of stridulation; it contains
+       * one cricket, occasionally, and long gaps. Dividing the scalar into the
+       * interval is exactly that: at 0.15 the wait goes from a second or two to
+       * ten or fifteen, and every call that does happen is at full level and
+       * therefore still an event.
+       *
+       * `insectScale` is 1 in the rainforest so the division is by one and the
+       * expression is arithmetically what it always was. It is floored at 0.02
+       * rather than allowed to reach zero, because a land that wanted NO
+       * insects at all should say so by not being night, and a divide by zero
+       * here would be an interval of Infinity that never counts down — which
+       * is silence with a timer stuck in it rather than silence.
+       */
       this._nextInsect -= dt;
       if (this._nextInsect <= 0) {
         const a = rng() * Math.PI * 2;
@@ -4867,7 +5373,8 @@ export class Wildlife {
         _distantAt.y = listener.y - 1.2;
         _distantAt.z = listener.z + Math.sin(a) * r;
         this.stridulate(_distantAt);
-        this._nextInsect = rngRange(rng, 0.5, 2.6) / clamp(dark, 0.2, 1);
+        this._nextInsect =
+          rngRange(rng, 0.5, 2.6) / clamp(dark, 0.2, 1) / Math.max(0.02, this.insectScale);
       }
     }
   }
@@ -4923,6 +5430,14 @@ const _burstAt = { x: 0, y: 0, z: 0 };
 const _fallAt = { x: 0, y: 0, z: 0 };
 const _callAt = { x: 0, y: 0, z: 0 };
 const _owlAt = { x: 0, y: 0, z: 0 };
+/**
+ * The flight vector of the bird that passes over a player who has stopped. Its
+ * own scratch because it is a DISPLACEMENT and not a position, and because
+ * `wingbeats` reads all three fields into `linearRampToValueAtTime` in the same
+ * statement it is handed them — the condition the block above requires of every
+ * shared scratch in this file.
+ */
+const _travel = { x: 0, y: 0, z: 0 };
 /** The second macaw of the pair, which needs its own bearing. See `macaw`. */
 const _macawAt = { x: 0, y: 0, z: 0 };
 /** One bird of the parrot mob, rewritten per bird. See `parrots`. */

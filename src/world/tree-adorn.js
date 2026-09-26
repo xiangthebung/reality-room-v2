@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { makeRng, rngRange } from '../core/util.js';
+import { paintBark } from './textures.js';
 
 /**
  * The trunk's texture, and the colour strip beside it.
@@ -173,10 +174,17 @@ export function bandUV(index) {
 const cache = new Map();
 
 /**
- * `hue`, `sat` and `light` are the species' bark, unchanged from `barkTexture`
- * in textures.js — this reproduces that drawing tile-for-tile rather than
- * importing it, because the tile now has to land in a sub-rect of a wider
- * canvas and the exported function returns a finished texture.
+ * `key` is the species name and `hue`, `sat` and `light` are its bark, straight
+ * out of `SPECIES` in trees.js. All four go to `paintBark` in textures.js.
+ *
+ * IT USED TO REPRODUCE THAT DRAWING TILE-FOR-TILE RATHER THAN IMPORTING IT, on
+ * the grounds that the tile has to land in a sub-rect of a wider canvas and the
+ * exported `barkTexture` returns a finished texture. The second half was true
+ * and the conclusion was wrong: the answer was to export the PAINTER as well as
+ * the texture, which is what `paintBark(ctx, size, opts)` now is. The copy had
+ * already drifted — a bark fix landed in textures.js and never reached a single
+ * trunk in the world, because nothing imports `barkTexture` and this is the
+ * only bark anyone actually sees.
  */
 export function trunkAtlas({ key = 'bark', hue = 26, sat = 22, light = 22, seed = 'bark' } = {}) {
   const cacheKey = `trunk:${key}`;
@@ -196,47 +204,24 @@ export function trunkAtlas({ key = 'bark', hue = 26, sat = 22, light = 22, seed 
   tile.width = TILE;
   tile.height = TILE;
   const t = tile.getContext('2d');
-  t.fillStyle = `hsl(${hue} ${sat}% ${light}%)`;
-  t.fillRect(0, 0, TILE, TILE);
-
-  for (let i = 0; i < 190; i++) {
-    const x = rng() * TILE;
-    const w = rngRange(rng, 1.2, 7);
-    const shade = rngRange(rng, 0.45, 1.7);
-    t.strokeStyle = `hsla(${hue + rngRange(rng, -6, 8)} ${sat}% ${light * shade}% / ${rngRange(rng, 0.25, 0.8)})`;
-    t.lineWidth = w;
-    t.beginPath();
-    let px = x;
-    t.moveTo(px, -4);
-    for (let y = 0; y <= TILE + 4; y += 16) {
-      px += rngRange(rng, -3.4, 3.4);
-      t.lineTo(px, y);
-    }
-    t.stroke();
-  }
-  // Horizontal lenticels, so the trunk is not corduroy. Tapered strokes rather
-  // than filled rectangles: axis-aligned rectangles on a pale trunk are the
-  // most legible possible signature of a generated texture.
-  for (let i = 0; i < 70; i++) {
-    const y = rng() * TILE;
-    const x0 = rng() * TILE;
-    const w = rngRange(rng, 5, 26);
-    t.strokeStyle = `hsla(${hue - 6} ${sat - 6}% ${light * rngRange(rng, 0.35, 1.4)}% / ${rngRange(rng, 0.18, 0.45)})`;
-    t.lineWidth = rngRange(rng, 0.8, 2.4);
-    t.beginPath();
-    t.moveTo(x0, y);
-    t.quadraticCurveTo(x0 + w * 0.5, y + rngRange(rng, -1.6, 1.6), x0 + w, y);
-    t.stroke();
-  }
+  // Base, fissures, algal film, the species' horizontal structure, lenticels,
+  // spines and grain — all of it, from the one copy in textures.js. `lichen` is
+  // off because the pale-crust pass below is this file's own; see its note.
+  paintBark(t, TILE, { key, hue, sat, light, seed, lichen: false });
 
   /**
    * ==== LICHEN, WHICH IS THE OTHER HALF OF "EVERY TRUNK IS THE SAME GREY" ===
    *
-   * The bark above is one hue with 8% lightness contrast scratched into it, so
-   * every trunk in the wood is a single colour with a soft Lambert gradient
-   * down it, and the only difference between two species is which single colour.
-   * Blotching it costs one loop and no memory, and it is the cheapest thing in
-   * this pass that attacks the pole monotony directly.
+   * The bark above is one hue with low-contrast fissures and scars scratched
+   * into it, so a trunk is broadly a single colour with a soft Lambert gradient
+   * down it. Blotching it costs one loop and no memory, and it is the cheapest
+   * thing in this pass that attacks the pole monotony directly.
+   *
+   * IT IS THE PALE HALF ONLY, and that is now a division of labour rather than
+   * an omission: `paintBark` draws the DARK algal film — the black-green stain
+   * where water runs down a bole — and passes `lichen: false` on the way in so
+   * these fifteen are not doubled. The two halves are drawn in different files
+   * because this one is the only caller that wants both.
    *
    * SOFT-EDGED AND LOW-CONTRAST, DELIBERATELY. A hard-edged patch on a tiling
    * texture is a shape you learn, and you then see the same shape on nine

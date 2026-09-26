@@ -1,7 +1,32 @@
 import * as THREE from 'three';
 import { TAU, clamp, clamp01, makeRng, rngRange } from '../core/util.js';
-import { WATER_LEVEL, WORLD_RADIUS, heightAt, streamBearing, streamPointNear } from './terrain.js';
+import {
+  WATER_LEVEL,
+  WORLD_RADIUS,
+  heightAt,
+  streamBearing,
+  streamParams,
+  streamPointNear,
+} from './terrain.js';
 import { glowSprite, mistBand, rainStreak } from './textures.js';
+/**
+ * THE LAND, FOR ITS `weather` FIELD AND FOR NOTHING ELSE HERE.
+ *
+ * `taiga.js` carries an advisory `weather: 'snow'` with a note saying nothing
+ * reads it yet and that snow is "the rain system with a slower fall, a lateral
+ * drift and a round sprite, which is three uniforms and no new draw call". That
+ * is what `uSnow` below is, and this import is what makes the field live.
+ *
+ * IMPORTED RATHER THAN READ OFF `globalThis.RR_LAND`, which would also have
+ * worked and is what the registry publishes the id for. Two reasons. The record
+ * is the thing with the answer on it — a string compare against 'taiga' here
+ * would put the knowledge that the taiga snows in two files instead of one, and
+ * a third land would have to remember to come and edit this one. And there is
+ * no cycle to worry about: `lands/index.js` imports only the two land records,
+ * which import only `core/util.js`. `currentLand()` is one property read, and
+ * it is read ONCE, at build time, not per frame.
+ */
+import { currentLand } from './lands/index.js';
 import { NOISE3, tripUniforms } from '../trip/living.js';
 import { worldClock } from '../core/world-clock.js';
 /**
@@ -108,8 +133,8 @@ export const SUN_DIR = new THREE.Vector3(0.36, 0.62, -0.7).normalize();
  * This is the whole frequency control on the most expensive event in the app —
  * see `follow()` for what one costs and why hysteresis rather than a lattice.
  * The value is not free to choose: the anchor may now trail the body by the
- * full radius, and forest.js keeps every tree within `alwaysNear: 82` m in the
- * instance buffer on the arithmetic 58 (shadow half-extent) + ~6 (trail) + ~15
+ * full radius, and forest.js keeps every tree within `alwaysNear: 61` m in the
+ * instance buffer on the arithmetic 40 (shadow half-extent) + ~6 (trail) + ~15
  * (a leaning canopy reaching past its trunk). Raising this without raising
  * that would let a tree be culled from the buffer while its shadow was still
  * inside the shadow camera, and its shadow would blink off the ground in front
@@ -255,20 +280,74 @@ const AUTHORED_SIN_ELEVATION = SUN_DIR.y;
  *   stars/moonGlow    night furniture. Zero by day, and the shader skips the
  *                     whole star block on a uniform branch when they are.
  *   shafts            the sun shafts are made of sunlight, so they go with it.
- *   mist              ground mist is a night and dawn phenomenon. It costs
- *                     nothing to say so: three planes that already exist.
+ *   mist              IN A TEMPERATE WOOD this was a night and dawn
+ *                     phenomenon and the curve said so — 2.6 at sunrise, 0.7 at
+ *                     noon. A RAINFOREST is the opposite case and the curve now
+ *                     says that instead. What hangs in this canopy at midday is
+ *                     not radiation fog, which needs a cold clear night and
+ *                     burns off with the first sun; it is evapotranspiration —
+ *                     the forest breathing out what it drank — and it PEAKS
+ *                     when the sun is hardest on the canopy, which is exactly
+ *                     when the old curve had it at its minimum. The dawn end is
+ *                     left where it was; real dawn mist is real. What changed
+ *                     is that noon no longer has the least air in the world.
  *   water             a multiplier on the stream's own shading, which has its
  *                     own shader and would otherwise be a bright blue ribbon at
  *                     midnight.
+ *
+ *
+ * ==== THE NIGHT COMPENSATION ==============================================
+ *
+ * The four authored intensities were re-cut for a rainforest — see THE FOUR
+ * INTENSITIES beside the hemisphere light, which took sun:shade from 1.23 stops
+ * to 2.94 by removing 73% of the shade. Because every row here is a MULTIPLIER
+ * on those, that one edit moved all fifteen rows at once, which is what makes
+ * the change affordable and is also its one hazard: it would have taken 73% of
+ * the light out of MIDNIGHT as well, and the night rows exist to defend a
+ * property the daytime brief knows nothing about — that midnight is a night you
+ * can walk through rather than a black screen.
+ *
+ * So the night rows carry a compensating gain, and it is the exact inverse of
+ * the cut. Old authored over new: hemi 1.25/0.34 = 3.676, ambient
+ * 0.55/0.13 = 4.231, fill 0.42/0.10 = 4.200, and the directional the other way
+ * at 2.50/3.30 = 0.758. A row multiplied by those is bit-for-bit the light it
+ * was before the re-cut.
+ *
+ * IT IS RAMPED RATHER THAN SWITCHED, because a step in the compensation is a
+ * step in the light, and it would land in the twenty seconds either side of
+ * dawn where a player is most likely to be watching the sky. Each row gets a
+ * fraction c of the full gain, gain = 1 + (g - 1) * c:
+ *
+ *     c = 1.00   midnight, small hours, moonset, dusk, nightfall
+ *                the night is preserved exactly
+ *     c = 0.60   sunrise, sunset
+ *     c = 0.25   dawn, golden
+ *     c = 0.00   early morning, AUTHORED, noon, afternoon
+ *                the full rainforest contrast
+ *
+ * So the shade closes down over the two or three minutes between sunrise and
+ * early morning and opens back up over the same stretch at dusk, which is a
+ * statement about the day rather than an artefact: as the sun climbs it becomes
+ * the light, and the flat blue everything-lit-by-the-sky of pre-dawn is
+ * genuinely the last time this wood has no shadows in it.
+ *
+ * THE AUTHORED ROW IS STILL ALL ONES and had to be. It is c = 0 by
+ * construction, so `AUTHORED_PHASE` still gives `a + (b - a) * 0 === a` and the
+ * automation pin still gets the frame rather than a frame that went round a
+ * cycle. What the pin now pins is a different world — every script's stored
+ * expectation moved with the re-cut — but it is still pinned exactly.
  */
 const DAY_KEYS = [
   {
     p: 0,
     name: 'midnight',
-    dir: 0.26, dirColour: 0xc0d2f0,
-    hemi: 0.8, hemiSky: 0x5478b8, hemiGround: 0x232c42,
-    ambient: 1.25, ambientColour: 0x525f80,
-    fill: 0.75, fillColour: 0x6484b8,
+    // c = 1: the four multipliers below are 0.26 / 0.8 / 1.25 / 0.75 times the
+    // night compensation, so this row's absolute light is exactly what it was
+    // before the rainforest re-cut. See THE NIGHT COMPENSATION above.
+    dir: 0.197, dirColour: 0xc0d2f0,
+    hemi: 2.941, hemiSky: 0x5478b8, hemiGround: 0x232c42,
+    ambient: 5.288, ambientColour: 0x525f80,
+    fill: 3.15, fillColour: 0x6484b8,
     fog: 0x2b3552, fogDensity: 1.15,
     skyTop: 0x070d1e, skyHorizon: 0x18233e, skyGround: 0x070910, skySun: 0x9fb6e0,
     sunDisc: 0, sunHalo: 0, stars: 1, moonGlow: 1,
@@ -277,10 +356,11 @@ const DAY_KEYS = [
   {
     p: 0.13,
     name: 'small hours',
-    dir: 0.26, dirColour: 0xc0d2f0,
-    hemi: 0.8, hemiSky: 0x5478b8, hemiGround: 0x232c42,
-    ambient: 1.25, ambientColour: 0x525f80,
-    fill: 0.75, fillColour: 0x6484b8,
+    // c = 1. Was 0.26 / 0.8 / 1.25 / 0.75.
+    dir: 0.197, dirColour: 0xc0d2f0,
+    hemi: 2.941, hemiSky: 0x5478b8, hemiGround: 0x232c42,
+    ambient: 5.288, ambientColour: 0x525f80,
+    fill: 3.15, fillColour: 0x6484b8,
     fog: 0x2d3856, fogDensity: 1.18,
     skyTop: 0x08101f, skyHorizon: 0x1b2742, skyGround: 0x070910, skySun: 0x9fb6e0,
     sunDisc: 0, sunHalo: 0, stars: 1, moonGlow: 1,
@@ -297,10 +377,11 @@ const DAY_KEYS = [
      */
     p: 0.185,
     name: 'moonset',
+    // c = 1. Was 0.88 / 1.28 / 0.72; `dir` is 0 and stays 0 — see above.
     dir: 0, dirColour: 0xc0d0ec,
-    hemi: 0.88, hemiSky: 0x5f83be, hemiGround: 0x2b3348,
-    ambient: 1.28, ambientColour: 0x585f7a,
-    fill: 0.72, fillColour: 0x6c8cbc,
+    hemi: 3.235, hemiSky: 0x5f83be, hemiGround: 0x2b3348,
+    ambient: 5.415, ambientColour: 0x585f7a,
+    fill: 3.024, fillColour: 0x6c8cbc,
     fog: 0x424a64, fogDensity: 1.5,
     skyTop: 0x101c38, skyHorizon: 0x3c4460, skyGround: 0x0d1018, skySun: 0xd8a882,
     sunDisc: 0, sunHalo: 0.25, stars: 0.55, moonGlow: 0.35,
@@ -309,10 +390,11 @@ const DAY_KEYS = [
   {
     p: 0.2123,
     name: 'sunrise',
-    dir: 0.12, dirColour: 0xffa066,
-    hemi: 0.66, hemiSky: 0x7d95bc, hemiGround: 0x3a4234,
-    ambient: 0.98, ambientColour: 0x555d6a,
-    fill: 0.56, fillColour: 0x7089b4,
+    // c = 0.6. Was 0.12 / 0.66 / 0.98 / 0.56.
+    dir: 0.1025, dirColour: 0xffa066,
+    hemi: 1.72, hemiSky: 0x7d95bc, hemiGround: 0x3a4234,
+    ambient: 2.88, ambientColour: 0x555d6a,
+    fill: 1.635, fillColour: 0x7089b4,
     fog: 0x776f6a, fogDensity: 1.9,
     skyTop: 0x2a4d84, skyHorizon: 0xdb9c74, skyGround: 0x161a16, skySun: 0xffb072,
     sunDisc: 0.35, sunHalo: 1.15, stars: 0.12, moonGlow: 0.1,
@@ -321,10 +403,11 @@ const DAY_KEYS = [
   {
     p: 0.245,
     name: 'dawn',
-    dir: 0.6, dirColour: 0xffc48e,
-    hemi: 0.85, hemiSky: 0x9db2d0, hemiGround: 0x4a5540,
-    ambient: 0.96, ambientColour: 0x59605e,
-    fill: 0.8, fillColour: 0x86a8cf,
+    // c = 0.25. Was 0.6 / 0.85 / 0.96 / 0.8.
+    dir: 0.5636, dirColour: 0xffc48e,
+    hemi: 1.419, hemiSky: 0x9db2d0, hemiGround: 0x4a5540,
+    ambient: 1.735, ambientColour: 0x59605e,
+    fill: 1.44, fillColour: 0x86a8cf,
     fog: 0x8d857a, fogDensity: 1.7,
     skyTop: 0x2f5f9c, skyHorizon: 0xe6b58e, skyGround: 0x1a2018, skySun: 0xffcc96,
     sunDisc: 0.8, sunHalo: 1.2, stars: 0, moonGlow: 0,
@@ -340,7 +423,10 @@ const DAY_KEYS = [
     fog: 0x8a9c8c, fogDensity: 1.18,
     skyTop: 0x2f6aa6, skyHorizon: 0xcfd2c2, skyGround: 0x1c2319, skySun: 0xffdca4,
     sunDisc: 1, sunHalo: 1.05, stars: 0, moonGlow: 0,
-    shafts: 1.15, mist: 1.4, water: 0.94,
+    // 1.4 -> 1.12. The temperate curve had the dawn bank still burning off
+    // here; a rainforest's morning haze does not burn off, it thickens as the
+    // canopy warms. See the `mist` channel note above.
+    shafts: 1.15, mist: 1.12, water: 0.94,
   },
   {
     /**
@@ -376,7 +462,19 @@ const DAY_KEYS = [
     fog: 0x86a08e, fogDensity: 0.9,
     skyTop: 0x2a6fb4, skyHorizon: 0xc6d6cc, skyGround: 0x1f2620, skySun: 0xfff0cc,
     sunDisc: 1, sunHalo: 0.95, stars: 0, moonGlow: 0,
-    shafts: 0.92, mist: 0.7, water: 1.08,
+    // 0.7 -> 1.15, AND THIS IS THE ROW THE WHOLE MIST CHANGE IS ABOUT. Noon
+    // used to have the least air in the world, which is right for radiation fog
+    // and exactly backwards for a rainforest: the canopy is transpiring hardest
+    // under the hardest sun, and the band that hangs in it at midday is the
+    // single most "enchanted forest" thing this file draws. It is now the
+    // thickest daytime air rather than the thinnest.
+    //
+    // It cannot be lifted to 1.15 without the authored row at 1 sitting in a
+    // dip between here and early morning. The dip is 1.12 -> 1.00 -> 1.15 over
+    // twelve per cent of the cycle, which is under a minute and about a tenth
+    // of a stop of haze; the authored row's ones are not negotiable (see the
+    // note on it) and this is what fitting a curve around a fixed point costs.
+    shafts: 0.92, mist: 1.15, water: 1.08,
   },
   {
     p: 0.64,
@@ -388,7 +486,11 @@ const DAY_KEYS = [
     fog: 0x849c8a, fogDensity: 0.98,
     skyTop: 0x2f6ea8, skyHorizon: 0xc6d2c4, skyGround: 0x1d2419, skySun: 0xffe0aa,
     sunDisc: 1, sunHalo: 1, stars: 0, moonGlow: 0,
-    shafts: 1.05, mist: 0.9, water: 1,
+    // 0.9 -> 1.3. Mid-afternoon is the wettest air of the day in a wet forest:
+    // a morning's worth of transpiration is up there and nothing has cooled
+    // enough to drop it yet. It is also the hour the convective shower comes
+    // from, which `rainAtTime` does not know about and this at least gestures at.
+    shafts: 1.05, mist: 1.3, water: 1,
   },
   {
     /**
@@ -400,22 +502,26 @@ const DAY_KEYS = [
      */
     p: 0.762,
     name: 'golden',
-    dir: 0.74, dirColour: 0xffb87e,
-    hemi: 0.88, hemiSky: 0xa8bed6, hemiGround: 0x5a6442,
-    ambient: 0.94, ambientColour: 0x5b6459,
-    fill: 0.85, fillColour: 0x8aacd2,
+    // c = 0.25. Was 0.74 / 0.88 / 0.94 / 0.85.
+    dir: 0.6952, dirColour: 0xffb87e,
+    hemi: 1.469, hemiSky: 0xa8bed6, hemiGround: 0x5a6442,
+    ambient: 1.699, ambientColour: 0x5b6459,
+    fill: 1.53, fillColour: 0x8aacd2,
     fog: 0x93876f, fogDensity: 1.26,
     skyTop: 0x39699e, skyHorizon: 0xe7bd93, skyGround: 0x1e2119, skySun: 0xffc084,
     sunDisc: 1, sunHalo: 1.25, stars: 0, moonGlow: 0,
-    shafts: 1.35, mist: 1.3, water: 0.9,
+    // 1.3 -> 1.45, and it is the row that gets the most out of the change: the
+    // shafts are at their peak here and a shaft is only visible in something.
+    shafts: 1.35, mist: 1.45, water: 0.9,
   },
   {
     p: 0.7877,
     name: 'sunset',
-    dir: 0.32, dirColour: 0xff8f52,
-    hemi: 0.66, hemiSky: 0x8296b8, hemiGround: 0x424832,
-    ambient: 0.9, ambientColour: 0x535763,
-    fill: 0.58, fillColour: 0x7d9cc6,
+    // c = 0.6. Was 0.32 / 0.66 / 0.9 / 0.58.
+    dir: 0.2735, dirColour: 0xff8f52,
+    hemi: 1.72, hemiSky: 0x8296b8, hemiGround: 0x424832,
+    ambient: 2.645, ambientColour: 0x535763,
+    fill: 1.694, fillColour: 0x7d9cc6,
     fog: 0x6f5f58, fogDensity: 1.66,
     skyTop: 0x2c4c84, skyHorizon: 0xdf8f60, skyGround: 0x171a16, skySun: 0xff9450,
     sunDisc: 0.4, sunHalo: 1.3, stars: 0.05, moonGlow: 0.2,
@@ -425,10 +531,11 @@ const DAY_KEYS = [
     /** The other handover. `dir` is 0; the light becomes the moon here. */
     p: 0.815,
     name: 'dusk',
+    // c = 1. Was 0.82 / 1.22 / 0.72; `dir` is 0 and stays 0.
     dir: 0, dirColour: 0xc4a4b0,
-    hemi: 0.82, hemiSky: 0x6d89ba, hemiGround: 0x2e3446,
-    ambient: 1.22, ambientColour: 0x555d78,
-    fill: 0.72, fillColour: 0x6880b0,
+    hemi: 3.015, hemiSky: 0x6d89ba, hemiGround: 0x2e3446,
+    ambient: 5.162, ambientColour: 0x555d78,
+    fill: 3.024, fillColour: 0x6880b0,
     fog: 0x4c5270, fogDensity: 1.5,
     skyTop: 0x18294f, skyHorizon: 0x7a6a84, skyGround: 0x0e1018, skySun: 0xb47c8c,
     sunDisc: 0, sunHalo: 0.5, stars: 0.4, moonGlow: 0.5,
@@ -437,10 +544,11 @@ const DAY_KEYS = [
   {
     p: 0.87,
     name: 'nightfall',
-    dir: 0.25, dirColour: 0xc0d2f0,
-    hemi: 0.82, hemiSky: 0x577bba, hemiGround: 0x252e44,
-    ambient: 1.25, ambientColour: 0x546180,
-    fill: 0.75, fillColour: 0x6484b8,
+    // c = 1. Was 0.25 / 0.82 / 1.25 / 0.75.
+    dir: 0.189, dirColour: 0xc0d2f0,
+    hemi: 3.015, hemiSky: 0x577bba, hemiGround: 0x252e44,
+    ambient: 5.288, ambientColour: 0x546180,
+    fill: 3.15, fillColour: 0x6484b8,
     fog: 0x2f3a58, fogDensity: 1.22,
     skyTop: 0x0a1226, skyHorizon: 0x1e2a46, skyGround: 0x080a12, skySun: 0x9fb6e0,
     sunDisc: 0, sunHalo: 0, stars: 0.92, moonGlow: 0.95,
@@ -456,7 +564,11 @@ const DAY_KEYS = [
    * ==== AND IT WAS NOT IDENTICAL, FOR THE WHOLE LIFE OF THE TABLE ===========
    *
    * Eight of the fifteen channels disagreed with the row at 0, and the ones
-   * that disagreed most were the ones that carry the night:
+   * that disagreed most were the ones that carry the night. THE NUMBERS IN THE
+   * NEXT SIX LINES ARE HISTORY, not current values — the night compensation has
+   * since multiplied all of them (see THE NIGHT COMPENSATION above), and they
+   * are left as they were written because a record of a bug that has been
+   * rewritten to match today's constants stops being a record of anything:
    *
    *   dir       0.18 against 0.26      the moon, 31% dimmer
    *   hemi      0.58 against 0.80      the sky term, 28% dimmer
@@ -485,10 +597,12 @@ const DAY_KEYS = [
   {
     p: 1,
     name: 'midnight',
-    dir: 0.26, dirColour: 0xc0d2f0,
-    hemi: 0.8, hemiSky: 0x5478b8, hemiGround: 0x232c42,
-    ambient: 1.25, ambientColour: 0x525f80,
-    fill: 0.75, fillColour: 0x6484b8,
+    // c = 1, and these four MUST be the same literals as the row at p = 0 —
+    // the assertion below checks it. Was 0.26 / 0.8 / 1.25 / 0.75.
+    dir: 0.197, dirColour: 0xc0d2f0,
+    hemi: 2.941, hemiSky: 0x5478b8, hemiGround: 0x232c42,
+    ambient: 5.288, ambientColour: 0x525f80,
+    fill: 3.15, fillColour: 0x6484b8,
     fog: 0x2b3552, fogDensity: 1.15,
     skyTop: 0x070d1e, skyHorizon: 0x18233e, skyGround: 0x070910, skySun: 0x9fb6e0,
     sunDisc: 0, sunHalo: 0, stars: 1, moonGlow: 1,
@@ -596,6 +710,24 @@ const skyUniforms = {
   uSunColour: { value: new THREE.Color(AUTHORED_KEY.skySun) },
   /** x = sun disc, y = sun halo, z = stars, w = moon. All zero by day except x,y. */
   uNight: { value: new THREE.Vector4(1, 1, 0, 0) },
+  /**
+   * THE WEATHER, AS THE SKY SEES IT. x = cloud cover 0..1, y = lightning flash
+   * 0..1, zw = the strike's bearing as a unit (x, z) on the ground plane.
+   *
+   * ONE vec4 RATHER THAN A vec2 AND A vec2, and the bearing is in it rather
+   * than being derived in the shader, for the same reason `uNight` is one vec4
+   * rather than four floats: a uniform upload has a fixed cost and four of them
+   * a frame for four numbers is three uploads wasted. Deriving the bearing in
+   * the shader is not available anyway — it comes from a hash of the strike's
+   * SLOT INDEX, and the slot index is a JS integer that would itself have to be
+   * uploaded to get it there.
+   *
+   * (0, 0, …) is the authored value and it is what automation photographs. See
+   * the weather block in `applyDay`: `rainAtTime` returns 0 under
+   * `navigator.webdriver`, so cover is 0, so every `mix(a, b, cover)` below is
+   * `a + (b - a) * 0`, which is exactly `a`. The pinned frame cannot move.
+   */
+  uWeather: { value: new THREE.Vector4(0, 0, 0, 1) },
 };
 
 /**
@@ -637,6 +769,7 @@ function buildSky(scene) {
       uniform vec3 uGround;
       uniform vec3 uSunColour;
       uniform vec4 uNight;
+      uniform vec4 uWeather;
       uniform float uTime;
       uniform float uLevel;
       uniform float uWarmth;
@@ -667,7 +800,45 @@ function buildSky(scene) {
        * Bigger and they are fireflies in the sky; smaller and they scintillate
        * into noise as you turn, which is the failure everybody gets first.
        */
-      float rrStars(vec3 d) {
+      /**
+       * THE GALACTIC BAND, AS A FUNCTION OF DIRECTION AND NOTHING ELSE.
+       *
+       * A constant pole, so the Milky Way is welded to the sky exactly the way
+       * the stars are — turn your head and it stays, walk a kilometre and it
+       * stays. 1 - abs(dot(d, POLE)) is 1 - |sin(galactic latitude)|, so it
+       * is 1 on the galactic equator and 0 at either pole, and it is symmetric
+       * about the plane for free rather than needing the band drawn twice.
+       *
+       * The pole is a normalised literal rather than normalize(vec3(...))
+       * because a const initialiser wants a constant expression and this costs
+       * nothing to write out. The pole is 38.6° off vertical (acos 0.7814), so
+       * the BAND crosses the sky at 38.6° to the horizon, and that tilt is
+       * chosen rather than inherited: a galaxy overhead is a stripe
+       * across the top of the frame and you have to lie down to see it, and a
+       * galaxy on the horizon is behind the trees. Tilted, it crosses the sky
+       * diagonally and there is some of it in almost every shot.
+       *
+       * The smoothstep is fitted to what the eye sees rather than to the real
+       * thing's photometry: 0.80 puts the outer edge about 37° off the plane
+       * and 0.985 puts the core about 10° from it, which is a band that is wide
+       * enough to be a structure and narrow enough to be a band.
+       */
+      float rrGalaxy(vec3 d) {
+        const vec3 GAL_POLE = vec3(0.4208, 0.7814, -0.4608);
+        return smoothstep(0.80, 0.985, 1.0 - abs(dot(d, GAL_POLE)));
+      }
+
+      /**
+       * dense raises the star COUNT, and now a little of their brightness too.
+       * Handed the galactic band term by the caller, which has already computed
+       * it for the glow — one more argument against one more rrGalaxy call
+       * inside a function that is evaluated for every fragment of the dome.
+       *
+       * IT IS NO LONGER JUST galaxy. The caller multiplies the band by the
+       * dust field as well, so the Great Rift takes the STARS out and not only
+       * the haze between them; see the block on lane in main().
+       */
+      float rrStars(vec3 d, float dense) {
         vec3 sp = d * 520.0;
         vec3 cell = floor(sp);
         float h1 = rrHash(cell);
@@ -677,18 +848,124 @@ function buildSky(scene) {
         // Tuned up from 2500 after looking: through a gap in a canopy you only
         // ever see a few square degrees at a time, and 2500 put four stars in
         // it.
-        if (h1 < 0.99895) return 0.0;
+        //
+        /**
+         * AND SEVEN TIMES THAT INSIDE THE GALACTIC BAND, by moving the
+         * THRESHOLD rather than by drawing a second field.
+         *
+         * The band is not a bright stripe with the same stars in it — what it
+         * actually is is where the stars are, and the glow is the ones you
+         * cannot resolve. So the honest implementation is the cheap one: the
+         * same lattice, the same hash, one fewer cell in a hundred and fifty
+         * rejected. It costs one multiply-subtract and it cannot go out of step
+         * with the glow, because it IS the glow's term.
+         *
+         * ==== 0.0060 -> 0.0175, BECAUSE THE GLOW WAS DOING THE BAND'S JOB ====
+         *
+         * Photographed at the canopy station at night the Milky Way read as a
+         * pale grey wash — an overcast patch rather than a band of stars — and
+         * the reason is a ratio and not a bug. Seven times the field density is
+         * 7.05 cells in a thousand, which over the band is about 25000 stars;
+         * the unresolved glow underneath them was running at 0.055, three times
+         * the night sky's own zenith. So the eye saw a smooth stripe with some
+         * dots on it, and a smooth stripe is a cloud.
+         *
+         * A real Milky Way is the other way up: it is mostly RESOLVED POINTS
+         * with a faint haze between them. 0.99895 - 0.0175 is 0.98145, which is
+         * 18.55 cells in a thousand against the field's 1.05 — seventeen and a
+         * half times, and once the dust field has cut it (see lane) about
+         * nine times on average, so roughly 33000 stars over the band with the
+         * star clouds at twice that and the lanes at the bare field density.
+         * The glow came down by a factor of three at the same time.
+         *
+         * IT COSTS ALMOST NOTHING. This is the early-out for the whole
+         * function: the three jitter hashes and the disc below only run for
+         * cells that pass, so the change takes the proportion of dome fragments
+         * doing that work from 0.1% to 1.9%. Everything else on this branch —
+         * the fetch-free hash, the magnitude, the twinkle — is unchanged.
+         */
+        // 0.99895 -> 0.99835, i.e. 3600 stars over the sphere -> about 5900.
+        // The reason is a measurement rather than a taste: photographed from
+        // above the canopy at midnight, facing away from the moon, 0.05% of the
+        // frame was over 60/255. A star at this scale is around a pixel, so
+        // there is very little to be had from making each one brighter — the
+        // thing that makes a sky read as a sky is HOW MANY, and the cost is one
+        // more hash comparison in a branch that already rejects 998 cells in a
+        // thousand.
+        if (h1 < 0.99835 - dense * 0.0175) return 0.0;
         vec3 jit = vec3(rrHash(cell + 5.7), rrHash(cell + 13.1), rrHash(cell + 27.3));
         float dd = length(sp - cell - jit);
         // Magnitude: most stars are faint and a few are not, which is the thing
         // that makes a star field read as a sky rather than as a spray.
         float mag = 0.30 + 0.70 * fract(h1 * 613.0);
-        float disc = smoothstep(0.55 * mag + 0.18, 0.03, dd);
+        /**
+         * Written as 1 - smoothstep(lo, hi, x) and not as the shorter
+         * smoothstep(hi, lo, x). The GLSL spec leaves the reversed-edge form
+         * UNDEFINED when edge0 >= edge1; every driver in practice computes it,
+         * and "every driver in practice" is not something this project relies
+         * on when the correct form costs one subtract.
+         *
+         * THE RULE WAS ALREADY WRITTEN DOWN IN THIS FILE — in the rain-ring
+         * block of the water shader, in those words — AND THEN BROKEN EIGHT
+         * TIMES IN THE SAME FILE, including on the ground band, which is the
+         * mix that decides the entire lower half of the sky. All eight are now
+         * the defined form: this disc, the sunset azimuth, the meteor streak,
+         * the ground band, the moon disc, three mote fades and the rain/snow
+         * distance fade.
+         *
+         * NOT ONE PIXEL MOVES. smoothstep obeys s(1-t) = 1-s(t) exactly —
+         * 3(1-t)^2 - 2(1-t)^3 expands to 1 - 3t^2 + 2t^3 term for term — so the
+         * two forms are the same polynomial and not merely close. That is the
+         * only reason a sweep like this is worth doing at all rather than being
+         * a diff nobody can check.
+         */
+        float disc = 1.0 - smoothstep(0.03, 0.55 * mag + 0.18, dd);
         // Twinkle. Each on its own period and phase — a field blinking together
         // is Christmas lights. Shallow, because scintillation is atmosphere and
         // there is a lot of air between here and there but not that much.
         float tw = 0.76 + 0.24 * sin(uTime * (0.9 + h1 * 240.0) + h1 * 900.0);
-        return disc * mag * tw;
+        /**
+         * ==== TWILIGHT COMES OUT IN MAGNITUDE ORDER =========================
+         *
+         * The caller used to multiply the whole field by uNight.z, which is
+         * the one thing a real dusk never does: every star in the sky faded up
+         * together, at the same rate, out of the same blue. What actually
+         * happens is that three or four bright ones are simply THERE, twenty
+         * minutes before anything else, and the sky then fills in from the top
+         * of the magnitude scale down over the next half hour.
+         *
+         * So the fade is per star and it is keyed to that star's own mag,
+         * which this function has already computed for the disc size. A mag-1.0
+         * star starts at uNight.z = 0 and is fully out by 0.28; a mag-0.30 star
+         * does not begin until 0.50 and is not fully out until 0.78. mag is
+         * fract(h1 * 613) scaled into 0.30..1.0 and is uniform over that
+         * range, so at uNight.z = 0.35 about an eighth of the field is showing
+         * — a few dozen over the whole sphere, which is the handful you can
+         * pick out of a blue sky and no more.
+         *
+         * uNight.z is 0 at AUTHORED_PHASE and the caller's branch is skipped
+         * entirely, so this cannot reach a pinned frame.
+         */
+        float rise = clamp((uNight.z - (1.0 - mag) * 0.72) * 3.6, 0.0, 1.0);
+        /**
+         * AND A LITTLE MORE LIGHT PER STAR INSIDE THE BAND.
+         *
+         * Astronomically this is backwards — the extra stars in the band are
+         * the FAINT ones, which is exactly why the rest of the galaxy is a glow
+         * rather than a list. It is here because of a rendering limit rather
+         * than a physical one: below about one pixel a star stops getting
+         * dimmer and starts getting SMALLER, and a sub-pixel disc is thrown
+         * away by MSAA and by the bright-pass. So the faint end of the band
+         * would be drawn as nothing at all rather than as something faint, and
+         * the band would be a glow again by a different route.
+         *
+         * 30% at the core of the band, and the caller's 1.55 puts the brightest
+         * possible star at 2.0 against 1.55. The bright-pass knee is 0.85, so
+         * stars already bloom and are meant to; what this may not do is make a
+         * LARGE SMOOTH region cross it, and a disc 0.06 degrees across is the
+         * opposite of that.
+         */
+        return disc * mag * tw * rise * (1.0 + dense * 0.30);
       }
 
       void main() {
@@ -698,6 +975,124 @@ function buildSky(scene) {
         // Sky gradient. The exponent on the upward blend is what gives the
         // horizon its band of pale light instead of a linear ramp.
         vec3 col = mix(uHorizon, uTop, pow(clamp(h, 0.0, 1.0), 0.42));
+
+        /**
+         * ==== A SUNSET HAS A DIRECTION, AND THIS BAND DID NOT ================
+         *
+         * The mix above is a function of ELEVATION ONLY, so the whole 360° of
+         * horizon was the same colour at every instant of the cycle. By day
+         * that is very nearly true and nobody has ever noticed. At sunset it is
+         * the single most visible falsehood in the frame: the sky was orange
+         * behind you, orange to your left, and orange over the hill the sun had
+         * just gone down the far side of. The real thing is a warm arch maybe
+         * 90° wide over the sun and, opposite it, the Earth's own shadow rising
+         * — a cold blue-violet wedge with a rose band sitting on top of it.
+         *
+         * TWO TERMS, BOTH DERIVED FROM THE TRUE SUN.
+         *
+         *   away  how far round the compass this direction is from the sun.
+         *           A dot product of the two azimuths, run through a smoothstep
+         *           that is 0 within about 70° of the sun and 1 beyond about
+         *           148°, so the warm arch keeps the whole solar half of the
+         *           sky and the cold only ever lands behind you.
+         *   band  how close to the horizon this is. The anti-solar shadow is
+         *           a low thing — it stands about 6° up at sunset and it is
+         *           gone by 17° — so a term that dies at |h| = 0.30 is right
+         *           and one that ran to the zenith would be a tinted dome.
+         *
+         * THE COLD IS DERIVED FROM uTop RATHER THAN BEING A CONSTANT. The
+         * thirteen-row day table already tunes the zenith for every hour, and a
+         * hard-coded violet would fight it — it would be the same violet under
+         * a boreal winter sky and a tropical one. Rotating uTop's own blue a
+         * little toward magenta and taking it down keeps the anti-solar sky a
+         * DARKER, COLDER VERSION OF THE SKY ABOVE IT, which is exactly what the
+         * Earth's shadow is: the same air with the sun taken out of it.
+         *
+         * THE EPSILON IN normalize(d.xz) IS LOAD-BEARING. Looking straight
+         * up, d.xz is the zero vector, normalize of it is undefined, and on
+         * this hardware it comes back NaN — which propagates through the dot,
+         * through the smoothstep and into col, so the zenith flickers black
+         * as the head passes through vertical. max(length, 1e-4) costs one
+         * instruction and the direction it produces at the pole is arbitrary
+         * but finite, which is all that is needed because band is 0 there.
+         *
+         * ==== AND IT IS EXACTLY ZERO AT THE AUTHORED HOUR ====================
+         *
+         * AUTHORED_PHASE puts the sun at 38.2° — SUN_DIR is (0.36, 0.62,
+         * -0.7) normalised, so its y is 0.6188 — and noon puts it at 53.9°.
+         * Both are above 0.36, so smoothstep(0.10, 0.36, uSunDir.y) returns
+         * exactly 1.0 and lowSun is exactly 0.0. The branch is not taken, not
+         * one instruction of this runs, and every pinned automation frame is
+         * bit-identical to what it was before this block existed. The second
+         * factor is there so the wedge also dies at true night rather than
+         * painting a violet band round the midnight horizon, and multiplying by
+         * it cannot break the property: 0.0 * anything finite is 0.0.
+         */
+        float lowSun = (1.0 - smoothstep(0.10, 0.36, uSunDir.y))
+                     * smoothstep(-0.30, -0.10, uSunDir.y);
+        if (lowSun > 0.002) {
+          vec2 dAz = d.xz / max(length(d.xz), 1e-4);
+          vec2 sunAz = uSunDir.xz / max(length(uSunDir.xz), 1e-4);
+          // 1 - smoothstep(lo, hi, x), NOT smoothstep(hi, lo, x). The GLSL
+          // spec leaves the reversed-edge form undefined when edge0 >= edge1;
+          // this file already says so in the rain-ring block and then wrote it
+          // the undefined way here. Symbolically identical — smoothstep obeys
+          // s(1-t) = 1-s(t) — so nothing on screen moves, and lowSun is 0 at
+          // every pinned hour so nothing on screen could have moved anyway.
+          float away = 1.0 - smoothstep(-0.85, 0.35, dot(dAz, sunAz));
+          float band = 1.0 - smoothstep(0.0, 0.30, abs(h));
+          // +0.55 rad and the SIGN IS THE WHOLE COLOUR. rrHueRotate is
+          // Rodrigues about the grey axis, so a POSITIVE angle runs R->G->B->R:
+          // from uTop's blue, +31.5° goes toward magenta, which is the violet
+          // wanted, and -31.5° goes toward green, which is a sky nobody has.
+          vec3 cold = rrHueRotate(uTop, 0.55) * 0.74;
+          col = mix(col, cold, away * band * lowSun * 0.78);
+          /**
+           * THE BELT OF VENUS: a narrow rose wedge sitting ON the shadow, and
+           * it is additive rather than a mix because that is what it is —
+           * sunlight scattered back off air the shadow has not reached yet, on
+           * top of a sky that is already dark. A mix would have to know what it
+           * was mixing away from and would go grey where the shadow is
+           * deepest.
+           *
+           * 0.5° to 9° up, which is where it actually sits, and it is
+           * deliberately dimmer than it looks in a photograph: every long
+           * exposure of this has it far stronger than the eye ever sees it,
+           * and the pipeline has a glow accumulator that will find anything
+           * near the bright-pass threshold of 0.85 and smear it.
+           *
+           * ==== 0.55 -> 0.26, AND THE OLD NUMBER FAILED A TEST IT NEVER TOOK ==
+           *
+           * The paragraph above checked the belt against the BLOOM KNEE and
+           * passed — 0.62 * 0.55 = 0.34 of red on a 0.3 sky is 0.64, under
+           * 0.85, all true. It never checked it against the thing on the other
+           * side of the sky. Worked through at the sunset row, at the belt's
+           * own peak elevation, in linear:
+           *
+           *   the SOLAR horizon is 0.72 uHorizon + 0.28 uTop = (0.53, 0.21,
+           *     0.15), a luminance of 0.26.
+           *   the ANTI-solar horizon, after the Earth's-shadow mix has taken
+           *     0.73 of it toward cold, is about (0.22, 0.09, 0.16) — 0.12.
+           *   the old belt added (0.34, 0.17, 0.19), a luminance of 0.20, and
+           *     took it to 0.33.
+           *
+           * So the sky BEHIND you was brighter than the sunset in front of you,
+           * which is the "second sunset in the wrong place" this had to be
+           * checked for and is a straightforward inversion of the real thing.
+           * 0.26 adds 0.10 of luminance instead of 0.20 and lands the
+           * anti-solar horizon at about 0.21 — plainly a rose band, plainly
+           * dimmer than the sun's own half of the sky. The bloom argument is
+           * untouched and now has twice the margin it had.
+           *
+           * The tint moved 0.30/0.34 -> 0.36/0.42 at the same red. The belt is
+           * salmon sitting on violet, not scarlet: a linear R/G of 2.07 was
+           * further into the red than anything in the sky at that hour, and
+           * 1.72 with more blue under it lets the shadow's colour show through
+           * the band instead of being painted out by it.
+           */
+          float belt = smoothstep(0.008, 0.048, h) * (1.0 - smoothstep(0.048, 0.155, h));
+          col += vec3(0.62, 0.36, 0.42) * belt * away * lowSun * 0.26;
+        }
 
         /**
          * Stars go in BEFORE the ground band and before the clouds, which is
@@ -711,11 +1106,189 @@ function buildSky(scene) {
          * kind of shader branch there is.
          */
         if (uNight.z > 0.002) {
+          float galaxy = rrGalaxy(d);
+          /**
+           * THE MILKY WAY. A band of unresolved light plus a seven-fold rise in
+           * the star count inside it — see rrStars, which takes galaxy and
+           * lowers its own rejection threshold by it.
+           *
+           * THE FBM TAP IS THE WHOLE DIFFERENCE BETWEEN THIS AND AN AIRBRUSHED
+           * STRIPE. What you actually see when you look at the galaxy is not a
+           * smooth glow, it is a mottled one torn in half lengthways by the
+           * Great Rift — dark dust in front of the light, not gaps in it. One
+           * rrFbm3 tap, floored at 0.30 and swinging to 1.0, is that: the low
+           * tail of the noise reads as lanes and the high tail as star clouds.
+           * The domain is elongated ALONG the band (d * 3.1 with the vertical
+           * scaled up) because dust lanes are long and thin and an isotropic
+           * noise makes them round, which reads as cloud rather than as dust.
+           *
+           * galaxy * galaxy rather than galaxy, so the edges of the band go
+           * out faster than the middle and there is no visible boundary where
+           * the smoothstep begins.
+           *
+           * THE CEILING IS STILL CHOSEN AGAINST THE BLOOM, NOT AGAINST TASTE.
+           * The bright-pass threshold in pipeline.js is 0.85 with a soft knee,
+           * and a large smooth region sitting anywhere near it is the exact
+           * shape that makes the glow accumulator bloom a whole quadrant of sky
+           * into a haze. That constraint is unchanged and is why there is a
+           * number here at all.
+           *
+           * ==== 0.055 -> 0.018, AND THE LANES NOW CUT THE STARS TOO ==========
+           *
+           * What was on screen at the canopy station was a pale grey wash that
+           * read as an overcast patch. The mechanism was never wrong — a pole,
+           * a band, a dust tap and seven times the star density is the right
+           * set of parts — but the BALANCE was inverted: the glow was three
+           * times the night sky's own zenith and the stars in it were only
+           * seven times a sparse field, so the smooth term won and a smooth
+           * term is a cloud. A galaxy is mostly resolved points.
+           *
+           * So the glow is cut by three and the dust is applied as its SQUARE.
+           * Squaring a field that is uniform-ish on [0, 1] takes its mean from
+           * 0.5 to 0.33 and, much more to the point, takes the low tail down
+           * far harder than the high one — which is what a dust lane is. Peak
+           * (a star cloud, dust near 1) is 0.018, about the sky's own top, so
+           * the brightest haze in the band roughly doubles the sky behind it
+           * and everything else is under that. Mean is 0.018 * 0.36 = 0.0065,
+           * a third of the sky: a faint milkiness BETWEEN the points, which is
+           * what the term is for.
+           *
+           * lane is the same tap read as a mask on the star COUNT. Without
+           * it the Great Rift was a mottle painted on a wash — the dark lanes
+           * had exactly as many stars in them as the bright parts, which is the
+           * single clearest tell that a Milky Way is airbrushed. With it a lane
+           * drops to the plain field density and reads as a GAP in a star
+           * field, which is what dust in front of a galaxy actually looks like.
+           * smoothstep(0.24, 0.68, dust) rather than dust itself so the lanes
+           * bottom out completely instead of merely thinning.
+           */
+          float dust = rrFbm3(d * vec3(3.1, 7.4, 3.1) + 11.0) * 0.5 + 0.5;
+          col += vec3(0.60, 0.64, 0.86) * galaxy * galaxy
+               * (0.05 + 0.95 * dust * dust) * uNight.z * 0.018;
+          float lane = smoothstep(0.24, 0.68, dust);
           vec3 tint = mix(vec3(0.72, 0.80, 1.0), vec3(1.0, 0.88, 0.72), fract(rrHash(floor(d * 520.0)) * 37.0));
-          col += tint * rrStars(d) * uNight.z * 1.55;
+          // No uNight.z here any more: each star now gates itself on its own
+          // magnitude inside rrStars, which is what makes dusk arrive in order
+          // instead of all at once. See the block on rise.
+          /**
+           * 1.55 -> 2.55, MEASURED. Photographed from above the canopy at
+           * midnight, facing away from the moon, 0.05% of the frame was over
+           * 60/255 — i.e. essentially every star in the sky was under a
+           * quarter brightness and the field read as a faint dusting. The
+           * magnitude spread inside rrStars does the work of making most of
+           * them faint; this is the overall gain, and it was set before the
+           * moon glare came down and the exposure had anything left to give.
+           * The brightest stars still land under the bloom knee, which is
+           * what stops a star field turning into a field of soft blobs.
+           */
+          col += tint * rrStars(d, galaxy * lane) * 2.55;
+
+          /**
+           * ==== METEORS ========================================================
+           *
+           * A PURE FUNCTION OF THE CLOCK, so two people lying in the same
+           * clearing see the same one at the same instant with nothing on the
+           * wire. That is the same rule the weather and the sun already obey
+           * and it is the reason this is arithmetic on uTime rather than a
+           * spawner: a spawner cannot be joined late and cannot agree.
+           *
+           * THE SLOT IS 37 SECONDS AND ABOUT A THIRD OF THEM FIRE, so a meteor
+           * every hundred seconds or so — roughly a good dark-sky rate, and
+           * chosen from the other end as well: rarer and nobody in a session
+           * ever sees one, commoner and the sky is a firework display. 37 is
+           * prime, which keeps the slot boundary from beating with anything
+           * else on the clock.
+           *
+           * THE WHOLE THING IS BEHIND A UNIFORM BRANCH. fires and life are
+           * functions of uTime alone, so every fragment in the draw takes the
+           * same side of it and the cost for the 97.6% of the time there is no
+           * meteor is one hash and one compare. This is the same argument the
+           * star block above makes and it is why the geometry can afford to be
+           * built per-fragment rather than uploaded.
+           *
+           * AND IT IS NOT A LUMINANCE MODULATION. The streak is 0.011 rad wide
+           * and it crosses 36° in 0.9 s, so a given pixel is swept by it for
+           * about 16 ms, ONCE, roughly every hundred seconds. That is a single
+           * transient on a thin line, not a field oscillating at a rate — which
+           * is what the 3 Hz rule at the top of this project is about.
+           */
+          float slot = floor(uTime / 37.0);
+          float life = fract(uTime / 37.0) * 37.0;
+          float fires = rrHash(vec3(slot, 17.3, 3.1));
+          const float METEOR_LIFE = 0.9;
+          if (fires < 0.34 && life < METEOR_LIFE) {
+            /**
+             * The great circle it falls along, built from three hashes of the
+             * slot index — where it starts (ha, hb) and which way it goes (hc).
+             *
+             * aAx is where it starts. Its elevation is drawn from 0.15 to
+             * 0.95 rather than from the whole sphere: a meteor that begins
+             * below the horizon is a meteor nobody sees, and one that begins at
+             * the exact zenith makes the cross product below degenerate. 0.95
+             * leaves the cross product a length of at least 0.31, which is
+             * plenty to normalise.
+             *
+             * bAx is the direction of travel, a unit vector perpendicular to
+             * aAx, drawn uniformly round the plane so they do not all fall the
+             * same way. Together they parameterise the great circle as
+             * aAx*cos(t) + bAx*sin(t), which is the cheapest exact form there
+             * is — no matrices, no quaternion, two dot products to find where a
+             * view direction sits on it.
+             */
+            float ha = rrHash(vec3(slot, 5.3, 91.7));
+            float hb = rrHash(vec3(slot, 41.9, 7.1));
+            float hc = rrHash(vec3(slot, 63.1, 22.5));
+            float cy = mix(0.15, 0.95, hb);
+            float cr = sqrt(max(1.0 - cy * cy, 0.0));
+            float phi = ha * 6.2831853;
+            vec3 aAx = vec3(cr * cos(phi), cy, cr * sin(phi));
+            vec3 e1 = normalize(cross(aAx, vec3(0.0, 1.0, 0.0)));
+            vec3 e2 = cross(aAx, e1);
+            float psi = hc * 6.2831853;
+            vec3 bAx = e1 * cos(psi) + e2 * sin(psi);
+
+            /**
+             * The head's angle along the circle, and the tail 0.18 s behind it.
+             * A 0.62 rad sweep over 0.9 s is about 36° of sky, which is a long
+             * meteor and a short one is invisible at this resolution.
+             *
+             * The distance from the view direction to the SEGMENT is found by
+             * clamping the view direction's own angle on the circle into
+             * [tail, head] and measuring the chord to that point. That is exact
+             * — not an approximation to a capsule — and it is four dot products
+             * and a sincos. Measuring to the infinite great circle instead would
+             * draw a hairline all the way round the sky, which was the first
+             * version and looked like a scratch on the lens.
+             */
+            const float SWEEP = 0.62;
+            float th = (life / METEOR_LIFE) * SWEEP;
+            float t0 = max(th - SWEEP * (0.18 / METEOR_LIFE), 0.0);
+            float ang = atan(dot(d, bAx), dot(d, aAx));
+            float ac = clamp(ang, t0, th);
+            float ad = length(d - (aAx * cos(ac) + bAx * sin(ac)));
+            float along = clamp((ac - t0) / max(th - t0, 1e-4), 0.0, 1.0);
+            /**
+             * CLAMPED, AND THE CLAMP IS NOT DECORATION. The pipeline keeps a
+             * decaying glow accumulator (see _brightMaterial, threshold 0.85)
+             * whose entire purpose is to leave a wake behind a bright moving
+             * thing — which is lovely for a firefly and, for a streak crossing
+             * 36° of sky in under a second, is a white smear across the frame
+             * that is still there a second after the meteor has gone. So the
+             * head peaks at 0.92, just under the knee, and the taper takes the
+             * rest of the trail well below it.
+             *
+             * env fades the whole thing in over 60 ms and out over the last
+             * 40% of its life, because a streak that appears and vanishes on a
+             * frame boundary reads as a dropped frame rather than as a meteor.
+             */
+            float streak = (1.0 - smoothstep(0.0, 0.011, ad)) * (0.10 + 0.90 * along * along);
+            float env = smoothstep(0.0, 0.06, life)
+                      * (1.0 - smoothstep(METEOR_LIFE * 0.6, METEOR_LIFE, life));
+            col += vec3(0.86, 0.92, 1.0) * min(streak * env, 1.0) * 0.92 * uNight.z;
+          }
         }
 
-        col = mix(col, uGround, smoothstep(0.02, -0.26, h));
+        col = mix(col, uGround, 1.0 - smoothstep(-0.26, 0.02, h));
 
         // Sun: a small disc inside a wide glow. The glow is the part that
         // matters — it is what makes the sky look like it has a light in it.
@@ -726,10 +1299,22 @@ function buildSky(scene) {
         // not the disc. Without the gate a sun three degrees BELOW the horizon
         // still burns a hole through the ground band, because the band is a
         // mix and the sun is an add.
+        //
+        // AND THE CLOUD TAKES THEM DOWN. mix(1.0, k, cover) rather than a
+        // multiply by (1 - cover), because a real overcast does not delete
+        // the sun — it leaves a bright smudge where it is and a great deal of
+        // diffuse light everywhere else. The disc goes almost entirely (0.06 of
+        // it survives, which is a smudge) and the halo keeps a third, which
+        // becomes the "which way is the sun" cue that a flat grey sky otherwise
+        // loses completely. At cover = 0, mix(1.0, k, 0.0) is exactly 1.0, so
+        // this is a no-op to the bit in every dry frame including every pinned
+        // one.
         float sun = max(dot(d, uSunDir), 0.0);
-        col += uSunColour * pow(sun, 900.0) * 22.0 * uNight.x;
-        col += uSunColour * pow(sun, 12.0) * 0.34 * uNight.y;
-        col += uSunColour * pow(sun, 3.0) * 0.09 * uNight.y;
+        float discK = mix(1.0, 0.06, uWeather.x);
+        float haloK = mix(1.0, 0.34, uWeather.x);
+        col += uSunColour * pow(sun, 900.0) * 22.0 * uNight.x * discK;
+        col += uSunColour * pow(sun, 12.0) * 0.34 * uNight.y * haloK;
+        col += uSunColour * pow(sun, 3.0) * 0.09 * uNight.y * haloK;
 
         /**
          * The moon. A disc with a halo, and it is deliberately about twice its
@@ -747,16 +1332,39 @@ function buildSky(scene) {
          * moon and a white sticker. Guarded by the disc so the fetch only
          * happens in the handful of waves that contain one.
          */
+        /**
+         * ==== THE MOON WAS A SEARCHLIGHT, AND IT WAS EATING THE NIGHT SKY ====
+         *
+         * The disc was 2.4, the tight glow 0.5 and the broad one 0.055, and
+         * photographed from above the canopy at midnight the result was a white
+         * blob covering about a seventh of the frame with a faint dusting of
+         * stars round the edge of it. The stars were never the problem; the
+         * Milky Way work of the previous pass was correct and invisible.
+         *
+         * IT IS THE BLOOM THAT MAKES THIS SO SENSITIVE. pipeline.js takes a
+         * bright pass at a knee around 0.85 and accumulates it, so a disc at
+         * 2.4 linear is nearly three times over the knee and everything above
+         * it is smeared outward before the tone map ever sees it. Halving the
+         * source more than halves the glare.
+         *
+         * 1.30 / 0.20 / 0.026 keeps the disc unmistakably the brightest thing
+         * in the sky and still over the bloom knee — a moon SHOULD have a
+         * little glow, and one with none reads as a hole punched in the dome —
+         * while dropping the measured fraction of the frame above 110/255 from
+         * 1.41% to a fraction of that. The mottling, the chord-length disc and
+         * the deliberate double angular size are all untouched: this is only
+         * how bright it is, not what it is.
+         */
         if (uNight.w > 0.002) {
           float md = length(d - uMoonDir);
-          float disc = smoothstep(0.0132, 0.0098, md);
+          float disc = 1.0 - smoothstep(0.0098, 0.0132, md);
           if (disc > 0.0) {
             float mottle = 0.80 + 0.20 * rrNoise(d * 150.0);
-            col += vec3(0.97, 0.97, 1.0) * disc * mottle * uNight.w * 2.4;
+            col += vec3(0.97, 0.97, 1.0) * disc * mottle * uNight.w * 1.30;
           }
           float mn = max(dot(d, uMoonDir), 0.0);
-          col += vec3(0.66, 0.75, 0.95) * pow(mn, 260.0) * uNight.w * 0.5;
-          col += vec3(0.42, 0.52, 0.8) * pow(mn, 11.0) * uNight.w * 0.055;
+          col += vec3(0.66, 0.75, 0.95) * pow(mn, 260.0) * uNight.w * 0.20;
+          col += vec3(0.42, 0.52, 0.8) * pow(mn, 11.0) * uNight.w * 0.026;
         }
 
         // Clouds, as a function of direction only, projected onto a dome. They
@@ -764,13 +1372,104 @@ function buildSky(scene) {
         // real cloud cover does in perspective.
         vec3 cp = d / max(abs(h) + 0.16, 0.16);
         float cloud = rrFbm3(cp * 4.6 + vec3(uTime * 0.008, uTime * 0.003, 0.0));
-        cloud = smoothstep(0.0, 0.4, cloud) * smoothstep(-0.02, 0.3, h);
+        /**
+         * ==== OVERCAST IS THE SAME FIELD, THRESHOLDED LOWER ==================
+         *
+         * Today it can rain out of a blue sky with three fair-weather cumulus
+         * in it, and that is the single most obviously wrong thing the weather
+         * does — the drops are correct and the picture behind them says it is a
+         * nice afternoon.
+         *
+         * WIDENING THE SMOOTHSTEP IS THE WHOLE MECHANISM and it is worth saying
+         * why it beats the two alternatives. A SECOND noise layer for the storm
+         * cloud is a second fbm — three more texture fetches per fragment on a
+         * full-dome shader, for a field the first one already describes. And
+         * simply raising the final mix leaves the SHAPE of fair weather: fat
+         * separated blobs with blue between them, at 97% opacity, which reads
+         * as a painted ceiling rather than as weather.
+         *
+         * Dropping the lower edge from 0.0 to -0.55 and the upper from 0.40 to
+         * -0.15 does what actual thickening does: the parts of the field that
+         * were the gaps between clouds come up over the threshold and join, so
+         * the sky closes over from the edges of the cumulus inwards. Same field,
+         * same drift, no new fetch. -0.34 is chosen so that at full cover
+         * essentially all of the fbm's range is above the lower edge and the
+         * only remaining structure is the ragged underside.
+         *
+         * mix(a, b, 0.0) is exactly a, so a dry sky is bit-identical.
+         */
+        float cover = uWeather.x;
+        cloud = smoothstep(mix(0.0, -0.55, cover), mix(0.4, -0.15, cover), cloud)
+              * smoothstep(-0.02, 0.3, h);
         // Moonlit cloud is a dim blue-grey, not the daytime white. It also has
         // to stay ABOVE the night sky's own colour or the overcast would read
         // as holes in the sky rather than as cloud.
         vec3 cloudCol = mix(vec3(0.78, 0.81, 0.84), vec3(0.042, 0.058, 0.10), uNight.w);
-        cloudCol = mix(cloudCol, uSunColour * 1.3, pow(sun, 2.0) * 0.8 * uNight.y);
-        col = mix(col, cloudCol, cloud * 0.62);
+        // Storm cloud is SLATE, not white. A white cloud at 97% opacity is an
+        // overexposed sky and the wood under it looks lit from above by a soft
+        // box; the thing that makes an approaching front read is that the
+        // ceiling gets DARKER as it gets more complete. 0.72 rather than 1.0 so
+        // the daytime cloud never goes fully to the constant and keeps some of
+        // the hour's own colour in it.
+        cloudCol = mix(cloudCol, vec3(0.208, 0.222, 0.256), cover * 0.88);
+        // 0.285 at 0.72 left the deck at 0.42 linear — sRGB 0.68, a bright white
+        // ceiling, which is the 'overexposed sky' the line above warns about
+        // arriving by a different route. 0.208 at 0.88 lands at 0.27 linear,
+        // sRGB 0.56: a grey you can still see structure in, and dark enough that
+        // the wood underneath reads as being under something.
+        // The sun's warm underlighting of the cloud goes out with the cover for
+        // the same reason the disc does — there is a mile of water between the
+        // sun and the underside of a nimbostratus.
+        cloudCol = mix(cloudCol, uSunColour * 1.3, pow(sun, 2.0) * 0.8 * uNight.y * (1.0 - cover));
+                /**
+         * AND A NIGHT IS CLEARER THAN A DAY, which is both true and necessary.
+         *
+         * True: a still night radiates its heat to space and the cloud burns
+         * off from the top down, which is why the coldest nights are the
+         * clearest ones. Necessary: the stars, the Milky Way and the meteors
+         * are all drawn BEFORE the cloud and are therefore all occluded by it,
+         * and with the same field the day uses about half the sky was covered —
+         * so half of the best thing in the sky was behind a pale grey patch on
+         * every clear night. Cutting the night's cloud OPACITY rather than its
+         * coverage keeps the shape of the sky the same, so a cloud still
+         * crosses the moon and still catches its light; it simply stops being
+         * a lid.
+         *
+         * uNight.z is 0 by day, and mix(1.0, x, 0.0) is exactly 1.0, so every
+         * daylight frame including the pinned one is untouched.
+         */
+        col = mix(col, cloudCol, cloud * mix(0.62, 0.97, cover) * mix(1.0, 0.55, uNight.z));
+
+        /**
+         * ==== LIGHTNING, SEEN FROM UNDER IT ==================================
+         *
+         * A cloud-to-cloud flash lights the BASE of the cloud deck from inside,
+         * so what you see from the ground is a bloom in one bearing that spills
+         * a little way up and a lot along the horizon. Hence the two terms: a
+         * bearing term that peaks toward the strike and never quite reaches
+         * zero away from it (there is a whole sky of cloud carrying the light
+         * sideways), and an elevation term that dies by about 33° up.
+         *
+         * uWeather.zw is the strike bearing as a unit (x, z). The epsilon on
+         * d.xz is the same load-bearing one the sunset block above documents:
+         * normalize of a zero vector at the zenith is NaN, and NaN in an
+         * additive term paints the top of the sky black.
+         *
+         * THE PEAK IS 0.34 AND IT IS A CEILING, not a taste setting. See the
+         * lightning block in applyDay for the flash-rate arithmetic and the
+         * three-per-second rule; the reason it is capped HERE as well is the
+         * glow accumulator, which would otherwise hold a white sky for about a
+         * second after a 0.18 s flash and turn a strike into a fade.
+         */
+        if (uWeather.y > 0.002) {
+          vec2 fAz = d.xz / max(length(d.xz), 1e-4);
+          // Named toward rather than near: near and far are struct members of
+          // gl_DepthRange and at least one driver in the wild treats the bare
+          // identifiers as reserved. Not worth finding out which.
+          float toward = smoothstep(-0.30, 0.95, dot(fAz, uWeather.zw));
+          float lowSky = 1.0 - smoothstep(0.0, 0.55, h);
+          col += vec3(0.80, 0.84, 1.0) * uWeather.y * (0.22 + 0.78 * toward) * lowSky * 0.34;
+        }
 
         if (uLevel > 0.0005) {
           /**
@@ -938,6 +1637,7 @@ function buildShafts(scene, seed) {
       varying vec3 vLocal;
       varying vec3 vWorldNormal;
       varying vec3 vToEye;
+      varying vec3 vAxis;
       void main() {
         vUvS = uv;
         /**
@@ -961,6 +1661,9 @@ function buildShafts(scene, seed) {
         // field of independent light shafts must not do.
         vLocal = world.xyz;
         vWorldNormal = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+        // The beam's own axis in world space: the cone is built along +Y and
+        // lean points that at the sun.
+        vAxis = mat3(modelMatrix) * mat3(instanceMatrix) * vec3(0.0, 1.0, 0.0);
         vToEye = cameraPosition - world.xyz;
         gl_Position = projectionMatrix * viewMatrix * world;
       }
@@ -977,6 +1680,7 @@ function buildShafts(scene, seed) {
       varying vec3 vLocal;
       varying vec3 vWorldNormal;
       varying vec3 vToEye;
+      varying vec3 vAxis;
       void main() {
         /**
          * Fade at both ends, so the shaft has no top or bottom edge — AND THE
@@ -1055,7 +1759,13 @@ function buildShafts(scene, seed) {
          * be marching the beam, and a march is a per-pixel loop over the one
          * surface in this world that already covers the most screen.
          */
-        float radial = facing * facing;
+        // |N.V| is CONSTANT along a generatrix, so radial's iso-contours are
+        // straight lines through the apex. Side-on that is harmless. Near-axially
+        // the cone projects to a thin wedge, the contours run along it, and what
+        // is left is a flat hard-cornered panel. 1 - axial*axial is sin squared of
+        // the angle between beam and eye: exactly 1 across the beam, 0 down the barrel.
+        float axial = abs(dot(normalize(vAxis), normalize(toEye)));
+        float radial = facing * facing * (1.0 - axial * axial);
 
         /**
          * Out of range, out of the frame. See uReach.
@@ -1462,19 +2172,46 @@ function buildMist(scene) {
  * THE SNAP IS ABOUT THE GROUND SAMPLE, NOT ABOUT THE PATTERN. The pattern is
  * world-space noise and would be happy for the sheet to track the eye exactly.
  * What cannot track the eye is `aGround` — the terrain height under each vertex
- * — because that is 289 `heightAt` calls, which is 0.29 ms and cannot happen
- * every frame. So the sheet sits on a lattice and only re-samples when the
- * player crosses a cell: once per 36 m of walking, on a frame that is already
- * re-rendering the shadow map.
+ * — because that is 441 `heightAt` calls, which is about 0.44 ms and cannot
+ * happen every frame. So the sheet sits on a lattice and only re-samples when
+ * the player crosses a cell: once per 36 m of walking, on a frame that is
+ * already re-rendering the shadow map — and, since `_pendingMist`, on the frame
+ * AFTER that one, so it does not even land on the shadow frame.
  *
  * The three numbers are then forced by each other. The sheet has to still reach
  * past the alpha fade when the player is at the WORST place inside a cell,
- * which is a corner: 25 m from the centre. 120 m of half-width minus 25 is 95,
- * and the fade is over by 86, so the sheet's own edge can never be seen. That
- * margin is the only reason the border needs no feathering.
+ * which is a corner: 25 m from the centre, plus up to ANCHOR_HOLD of lag
+ * because the lattice is fed the shadow anchor and not the eye, so call it 34.
+ * 120 m of half-width minus 34 is 86, and the fade is over by 90, which is a
+ * margin of FOUR METRES. It was described here as 95 against 86 — the anchor
+ * lag was not in the sum — and even the corrected number is too thin to rest a
+ * hard-edged rectangle on. The shader now feathers the card in-plane as well;
+ * see `mistSheetMaterial`.
+ *
+ * ==== MIST_GRID WENT 16 -> 20, AND IT IS THE ARTEFACT FIX ===================
+ *
+ * At 16 segments a cell is 15 m across, and `aGround` is known ONLY at the
+ * cell corners: everything between them is a linear interpolation, so the
+ * surface the pooling threshold is cut against is faceted. Two things follow
+ * and both of them were on screen. The threshold contour runs STRAIGHT inside
+ * a cell, and it KINKS at the cell boundary, because a piecewise-linear height
+ * field is C0 and its gradient jumps there. A soft alpha ramp with a straight
+ * edge and a crease down it does not read as a soft alpha ramp; it reads as a
+ * translucent quad with a hard border, which is what was photographed at a
+ * jetty at golden hour — two straight edges crossing the frame diagonally are
+ * the two triangles of one cell.
+ *
+ * 20 segments is a 12 m cell: 441 lookups against 289, +0.15 ms on a re-seat
+ * that happens once per 36 m of walking and is deferred off the shadow frame.
+ * That halves the crease amplitude (it goes with the second difference of the
+ * terrain, so roughly with the square of the spacing) and — the part that
+ * matters more — puts the cell BELOW the noise wavelength that perturbs the
+ * threshold, which is what actually breaks the straight line. See the two
+ * octaves in the fragment shader: the fine one moved from 23 m to 8.7 m for
+ * exactly this reason, and a 8.7 m wiggle cannot break a 15 m straight edge.
  */
 const MIST_TILE = 240;
-const MIST_GRID = 16;
+const MIST_GRID = 20;
 const MIST_SNAP = 36;
 /**
  * The window a sheet is drawn in: (nearOut, nearIn, farIn, farOut) in metres.
@@ -1489,6 +2226,55 @@ const MIST_SNAP = 36;
  * that, and it deletes the most expensive fragments the feature has.
  */
 const MIST_FADE = new THREE.Vector4(6, 20, 58, 90);
+/**
+ * AND THE CANOPY BANDS GET THEIR OWN NEAR END, BECAUSE THE FAILURE THE ONE
+ * ABOVE GUARDS AGAINST CANNOT HAPPEN TO THEM.
+ *
+ * The two canopy sheets live at y = 16.5 and y = 23.5 — the most "enchanted
+ * forest" thing this file draws — and under the shared window the LOWER one was
+ * attenuated exactly where you look at it. `vDist` is the slant range to the
+ * sheet, so with the eye at 1.7 m the lower band is 14.8 m away at the zenith
+ * and `smoothstep(6, 20, 14.8)` is 0.689. It only reached full strength 13.5 m
+ * out horizontally, which is a 42-degree half-angle: the entire 84-degree patch
+ * of it centred on straight-up — which is the part of a canopy band anybody
+ * actually looks at — ran between 69% and 100% of itself, and the middle of
+ * that patch is the dimmest part.
+ *
+ * THE UPPER BAND AT 23.5 WAS NOT AFFECTED and it is worth saying so, because
+ * "the canopy mist is invisible" is half right and half wrong. 23.5 - 1.7 is
+ * 21.8, past the window's `nearIn` of 20, so that one was already at 1.0 from
+ * the zenith outward. What was really keeping the pair faint was their authored
+ * opacity, and that is fixed separately below.
+ *
+ * The far end is not the problem it looks like either: the fade runs out at 90
+ * m where the fog has already taken half the light (exp(-(0.0092*90)^2) =
+ * 0.504), so the handover is a handover and not a hole.
+ *
+ * WHY THE NEAR END IS SAFE TO MOVE HERE AND NOT THERE. The window's near end
+ * exists to stop a horizontal plane at eye height becoming a milky sheet across
+ * the lens — the failure this file has hit twice. A canopy sheet cannot produce
+ * it, and not by luck: `uAbove` is 1 for these, so the shader takes the SIGNED
+ * rise and `smoothstep(0.8, 3.4, vRise)` already deletes the sheet unless it is
+ * decisively overhead. That guard also floors `vDist`, because a sheet you are
+ * 3.4 m below cannot be nearer than 3.4 m. The near end is therefore a second
+ * lock on a door the rise term has already bolted, and it was set for the
+ * hollow sheets, which genuinely can arrive at your face.
+ *
+ * 5 and 13 rather than 0 and 0: the lock is kept, moved to where it binds on
+ * nothing. Standing on a ridge with the low band at head height, `vRise` is
+ * small, the rise term is near zero and this is near zero too — belt and
+ * braces on the one case that is left.
+ *
+ * THE FAR END IS NOT TOUCHED. 58/90 is not a taste decision; `MIST_TILE` is
+ * 240 m and the sheet is re-seated on a 36 m lattice off an anchor that itself
+ * lags the eye by up to ANCHOR_HOLD, so at the worst place in a cell the
+ * sheet's own straight edge is 86 m away and the fade is over by 90. That is a
+ * NEGATIVE margin of four metres in the worst corner, which is the second
+ * reason the in-plane feather below now exists rather than being optional.
+ * Wanting more distance means a bigger tile, which is a bigger `aGround`
+ * re-seat, which is the one thing the mist system is built around not doing.
+ */
+const MIST_FADE_CANOPY = new THREE.Vector4(5, 13, 58, 90);
 
 function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
   return new THREE.ShaderMaterial({
@@ -1513,7 +2299,11 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
        * is fully on. This is the whole "pools in hollows" mechanism.
        */
       uDepth: { value: new THREE.Vector2(depth[0], depth[1]) },
-      /** The distance window the sheet is drawn in. See MIST_FADE. */
+      /**
+       * The distance window the sheet is drawn in. See MIST_FADE for the
+       * hollow sheets and MIST_FADE_CANOPY for the two overhead bands, which
+       * need a much nearer near end and can safely have one.
+       */
       uFade: { value: fade.clone() },
       /**
        * How far above the eye a sheet has to be before it is drawn, so a card
@@ -1528,6 +2318,7 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
       varying float vDist;
       varying vec2 vWorld;
       varying float vRise;
+      varying float vEdge;
       void main() {
         vec4 w = modelMatrix * vec4(position, 1.0);
         vWorld = w.xz;
@@ -1538,6 +2329,20 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
         vRise = w.y - cameraPosition.y;
         vec3 toEye = cameraPosition - w.xyz;
         vDist = length(toEye);
+        /**
+         * HOW FAR THROUGH THE CARD THIS IS, 0 in the middle and 1 at the border.
+         *
+         * The Chebyshev distance and not the Euclidean one, because the card is
+         * a SQUARE: a radial falloff would reach 1 at the middle of an edge and
+         * only 1.41 at a corner, so it would either eat the middle of the sheet
+         * or leave the four corners on. max(|u|, |v|) is 1 on the whole
+         * rectangle and is therefore the coordinate the border actually lives at.
+         *
+         * From uv rather than from position.xz so it is independent of how
+         * the geometry was built and of the -90 degree rotate: PlaneGeometry's
+         * uv is 0..1 across the card whatever its size or segment count.
+         */
+        vEdge = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0;
         gl_Position = projectionMatrix * viewMatrix * w;
       }
     `,
@@ -1554,36 +2359,52 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
       varying float vDist;
       varying vec2 vWorld;
       varying float vRise;
+      varying float vEdge;
+      /**
+       * The alpha below which a sheet is not worth a blend. See the two gates.
+       */
+      const float MIN_ALPHA = 0.004;
+      /**
+       * The largest the noise below can push the pooling threshold, in metres.
+       *
+       * NO BACKTICKS IN THIS BLOCK — it is inside a template literal. See the
+       * warning on NOISE3 in living.js.
+       *
+       * rrNoise returns [-1, 1] (see NOISE3), the second octave is weighted
+       * 0.45, and the sum is multiplied by 3.2 — so 1.45 * 3.2 = 4.64 and no
+       * fragment can be perturbed past it. It is a BOUND and not a measurement,
+       * which is what lets the early-out below be exact rather than nearly
+       * right: overstate it and the gate simply stops rejecting, understate it
+       * and it starts eating mist.
+       */
+      const float POOL_SWING = 4.64;
       void main() {
         /**
-         * The body of it, as world-space noise rather than as a texture.
+         * ==== EVERYTHING THAT CAN KILL A FRAGMENT WITHOUT THE NOISE, FIRST ===
          *
-         * Two octaves and two fetches. The coarse one is what makes one bank of
-         * mist and not another; the fine one stops the coarse one reading as a
-         * single smooth blob. The clock term is a drift rather than a scroll —
-         * the domain moves, so the mist evolves in place instead of travelling
-         * across the world in a direction.
+         * This block used to sit BELOW the two rrNoise fetches, computed into
+         * a in the order the effect was written rather than the order the
+         * fragment can be rejected in. Every one of these terms is a function of
+         * a VARYING and of uniforms only, so a fragment the distance window or
+         * the rise gate has already zeroed was paying two trilinear 3-D texture
+         * fetches to arrive at an alpha of zero and discard.
          *
-         * COMPUTED FIRST BECAUSE THE POOLING TERM NEEDS IT. The ground under
-         * the sheet is known only at the vertices, on a 15 m grid, so a
-         * threshold on the interpolated value draws STRAIGHT LINES along the
-         * mesh triangles wherever the sheet fades in — and a straight line is
-         * the one thing mist may never have. Perturbing the depth by the noise
-         * before the threshold breaks every one of those edges for free, and it
-         * is physically the right statement as well: the top of a mist bank is
-         * not level, it is lumpy.
+         * That is not a rounding error at the station this file is measured at.
+         * canopy stands at eye height and looks up at 49 degrees, which puts
+         * the y = 2.6 m hollow sheet 0.9 m above the eye — smoothstep(0.8, 3.4,
+         * 0.9) is 0.006, so that sheet is ENTIRELY rejected, and being 0.9 m
+         * above the eye it covers essentially the whole upward-looking frame
+         * while being rejected. One full-screen layer of two texture fetches per
+         * pixel, for nothing, on the worst frame in the game.
+         *
+         * THE GATE IS EXACTLY CONSERVATIVE, which is the only reason it may be
+         * written as a discard rather than as a fade. Below, the final alpha is
+         * gate * pool * grain * thick with pool and grain both in [0, 1],
+         * and the final test is a < MIN_ALPHA * thick. So gate < MIN_ALPHA
+         * implies gate * pool * grain < MIN_ALPHA implies the final test would
+         * have rejected it too. Not "almost never visible" — cannot differ.
          */
-        float t = uTime * 0.013;
-        float n = rrNoise(vec3(vWorld * 0.0115, t));
-        n += 0.45 * rrNoise(vec3(vWorld * 0.043 + 17.0, t * 2.1));
-
-        // The pooling term. Nothing at all where the ground is close.
-        float pool = smoothstep(uDepth.x, uDepth.y, vDepth + n * 3.2);
-        // The distance window. The far end hides the sheet's own border, which
-        // is why the border needs no feathering; the near end keeps a sheet the
-        // player is standing in off the front of the lens. See MIST_FADE.
         float win = smoothstep(uFade.x, uFade.y, vDist) * (1.0 - smoothstep(uFade.z, uFade.w, vDist));
-        float a = uOpacity * pool * win;
         /**
          * A CARD AT EYE LEVEL IS A LAKE, and this is the guard against it.
          *
@@ -1609,7 +2430,7 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
          * effect. Walk downhill and they hand over continuously.
          */
         float rise = uAbove > 0.5 ? vRise : abs(vRise);
-        a *= smoothstep(0.8, 3.4, rise);
+        float lift = smoothstep(0.8, 3.4, rise);
         /**
          * And a hollow sheet is never a ceiling. Standing at the bottom of a
          * gorge the fill level is at your feet, but a step down a bank puts it
@@ -1617,11 +2438,127 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
          * and a white plane over your head is a lid however briefly it is
          * there. Above nine metres it is gone.
          */
-        if (uAbove < 0.5) a *= 1.0 - smoothstep(5.0, 9.0, vRise);
-        a *= clamp(0.42 + n * 0.72, 0.0, 1.0);
-        // The trip thickens the air, the same as it does the stream's cards.
-        a *= 1.0 + uLevel * 1.4;
-        if (a < 0.004) discard;
+        if (uAbove < 0.5) lift *= 1.0 - smoothstep(5.0, 9.0, vRise);
+        // The distance window is the far end of the same idea: its far half
+        // hides the sheet's own border and its near end keeps a sheet the
+        // player is standing in off the front of the lens. See MIST_FADE — and
+        // MIST_FADE_CANOPY, which is the same window with the near end pulled
+        // in to 5/13 for the two overhead bands, the lower of which was running
+        // at 69% of itself at the zenith.
+        /**
+         * ==== AND THE CARD FADES OUT AT ITS OWN BORDER =======================
+         *
+         * THE DISTANCE WINDOW ALONE WAS NEVER A GUARANTEE. It fades by VIEW
+         * DISTANCE, which is a circle centred on the eye; the card is a square
+         * centred on a lattice cell that the eye is somewhere inside. The
+         * comment on MIST_TILE did the sum and got a 95 m margin against an
+         * 90 m fade, but it left out the fact that the lattice is fed the
+         * SHADOW ANCHOR and not the eye, which lags by up to ANCHOR_HOLD. Put
+         * that back and the worst corner puts the card's own straight edge at
+         * 86 m, inside the fade, and a translucent grey rectangle with a hard
+         * border is exactly the one thing this project's design law forbids.
+         *
+         * So the card now dies at its own edge as well, unconditionally, and a
+         * geometry change can no longer put a border on screen.
+         *
+         * WIDE, BECAUSE A NARROW FEATHER ONLY MOVES THE EDGE. 0.62 to 0.995 of
+         * the half-width is 74 m to 119 m from the card's centre — a 45 m ramp,
+         * which at any distance you can see the border from is tens of degrees
+         * of arc and cannot be resolved as a line. A 5 m feather would delete
+         * the border and put a soft-edged border where the old hard one was;
+         * the only kind that works is one no wider than the card and no
+         * narrower than the sky it is drawn against.
+         *
+         * WHAT IT COSTS THE MIST, worked out at the worst case rather than the
+         * typical one. The feather's near lip is 74 m from the CARD'S CENTRE and
+         * the eye is at most 34 m off that centre (18 m of half-cell plus up to
+         * ANCHOR_HOLD of anchor lag, on the diagonal), so the soonest it can
+         * begin to bite is 40 m in front of you — and only along the one bearing
+         * the anchor has fallen behind in. Along that bearing it takes the mist
+         * out between 40 m and 85 m where the distance window would have taken
+         * it between 58 m and 90 m: a slightly earlier handover, over 45 m,
+         * which is a gradient and not an edge. Everywhere else, and at every
+         * typical position, the two never meet.
+         *
+         * Folded into gate rather than applied at the end so the early-out
+         * below stays exactly conservative: border is in [0, 1], so a smaller
+         * gate can only reject fragments the final test would also have
+         * rejected. See the block above on why that property is load-bearing.
+         */
+        float border = 1.0 - smoothstep(0.62, 0.995, vEdge);
+        float gate = uOpacity * win * lift * border;
+        if (gate < MIN_ALPHA) discard;
+        /**
+         * AND THE POOLING TERM CAN BE REJECTED WITHOUT THE NOISE TOO, because
+         * the noise only ever perturbs its threshold by POOL_SWING. Ground that
+         * is closer to the sheet than that cannot be reached by any value the
+         * field can take, so a hill coming up through a hollow sheet — which is
+         * most of a tile on a slope — costs a compare instead of two fetches.
+         */
+        if (vDepth + POOL_SWING <= uDepth.x) discard;
+        /**
+         * The body of it, as world-space noise rather than as a texture.
+         *
+         * Two octaves and two fetches. The coarse one is what makes one bank of
+         * mist and not another; the fine one stops the coarse one reading as a
+         * single smooth blob. The clock term is a drift rather than a scroll —
+         * the domain moves, so the mist evolves in place instead of travelling
+         * across the world in a direction.
+         *
+         * COMPUTED BEFORE THE POOLING TERM BECAUSE THAT TERM NEEDS IT. The
+         * ground under the sheet is known only at the vertices, on a 12 m grid,
+         * so a threshold on the interpolated value draws STRAIGHT LINES along
+         * the mesh triangles wherever the sheet fades in — and a straight line
+         * is the one thing mist may never have. Perturbing the depth by the
+         * noise before the threshold breaks every one of those edges for free,
+         * and it is physically the right statement as well: the top of a mist
+         * bank is not level, it is lumpy.
+         *
+         * ==== THE FINE OCTAVE WAS COARSER THAN THE GRID, SO IT BROKE NOTHING ==
+         *
+         * That paragraph was true as an argument and false as arithmetic, and
+         * the gap between the two is the grey quad that was photographed at a
+         * jetty. The two octaves were 87 m and 23 m of wavelength against a
+         * 15 m cell: BOTH were coarser than the thing they were supposed to be
+         * breaking up, so what they actually did was translate the straight
+         * edge bodily a few metres rather than make it wander. A perturbation
+         * can only break a feature it is finer than.
+         *
+         * 0.043 -> 0.115 is 23 m -> 8.7 m, comfortably inside the 12 m cell
+         * MIST_GRID now gives, so the contour wiggles about one and a half
+         * times per cell. The amplitude is unchanged and so is the WEIGHT — the
+         * lateral wander it buys is amplitude over the local slope of vDepth,
+         * about 1.44 m / 0.3 m per m = 5 m, which is most of a cell.
+         *
+         * THE WEIGHT MAY NOT MOVE, and that is why only the frequency did.
+         * POOL_SWING above is a bound on this sum and the early-out below is
+         * exact only while the bound holds: 0.45 is what makes it 4.64.
+         *
+         * The visible side effect is that the mist's own grain is finer than it
+         * was — wisps of about nine metres rather than of twenty-three. That is
+         * the better picture as well as the cheaper fix; twenty-three metres is
+         * a bank, and a bank with no texture in it is what a sheet reads as.
+         */
+        float t = uTime * 0.013;
+        float n = rrNoise(vec3(vWorld * 0.0115, t));
+        n += 0.45 * rrNoise(vec3(vWorld * 0.115 + 17.0, t * 2.1));
+
+        // The pooling term. Nothing at all where the ground is close.
+        float pool = smoothstep(uDepth.x, uDepth.y, vDepth + n * 3.2);
+        /**
+         * THE TRIP THICKENS THE AIR AND MAY NOT WIDEN IT, and that second half
+         * is the change. 1 + uLevel * 1.4 is 2.4 at full level, so every
+         * fragment whose sober alpha sat between 0.0017 and 0.004 — under the
+         * old flat cut, and invisible by construction — came back to life in a
+         * trip and was blended. The threshold is scaled by the same factor, so
+         * the sheet's FOOTPRINT is the sober one at every level and only its
+         * density moves. That is also the honest reading of the effect: a deeper
+         * trip is meant to make the air heavier, not to make the mist reach
+         * further than the mist reaches.
+         */
+        float thick = 1.0 + uLevel * 1.4;
+        float a = gate * pool * clamp(0.42 + n * 0.72, 0.0, 1.0) * thick;
+        if (a < MIN_ALPHA * thick) discard;
         gl_FragColor = vec4(uColour, a);
       }
     `,
@@ -1632,17 +2569,28 @@ function mistSheetMaterial({ colour, opacity, depth, height, fade }) {
  * The sheets, their geometry, and how they follow.
  *
  * TWO GEOMETRIES FOR FIVE SHEETS, and that is the whole reason this is
- * affordable. `aGround` is the expensive thing here — 289 terrain lookups —
+ * affordable. `aGround` is the expensive thing here — 441 terrain lookups —
  * and every hollow sheet wants exactly the same one, because they are at the
  * same place and differ only in how high they float and how thick they are. So
  * the hollow sheets share one geometry and the canopy sheets share another, and
  * a re-seat samples the terrain once for the whole system rather than once per
  * layer. Adding the fifth layer costs a draw call and nothing else.
  *
- * The canopy grid is COARSE on purpose: its ground term only has to know that a
- * hill is coming up through it, which is a hundred-metre feature, whereas the
- * hollow term has to resolve a gully. 5x5 against 17x17 is 25 lookups against
- * 289, and the whole re-seat is cheaper for it.
+ * The canopy grid is COARSER on purpose: its ground term only has to know that
+ * a hill is coming up through it, which is a hundred-metre feature, whereas the
+ * hollow term has to resolve a gully. 11x11 against 21x21 is 121 lookups
+ * against 441, and the whole re-seat is cheaper for it.
+ *
+ * IT WAS 5x5, WHICH IS A 60 METRE CELL, AND THAT WAS TOO COARSE TO BE SAFE.
+ * A canopy band at 16.5 m seen from underneath fills the upward frame, so one
+ * of its cells is tens of degrees of arc — and the pooling threshold cut
+ * against a linear interpolation over 60 m draws the cell's own two triangles
+ * on the sky. The `mistLayers` prefix puts a canopy band SECOND, so this was
+ * the first extra sheet anybody sees. 10 segments is a 24 m cell and 121
+ * lookups; with the hollow grid at 20 the whole re-seat is 562 heightAt calls,
+ * about 0.56 ms, against 314 and 0.31 before. It lands once per 36 m of
+ * walking and, since `_pendingMist`, on the frame after the shadow map rather
+ * than on it.
  */
 function buildWorldMist() {
   const group = new THREE.Group();
@@ -1661,7 +2609,7 @@ function buildWorldMist() {
     return g;
   };
   const hollowGeo = makeGeo(MIST_GRID);
-  const canopyGeo = makeGeo(4);
+  const canopyGeo = makeGeo(10);
 
   /**
    * THE LAYER ORDER IS THE ORDER THEY ARE WORTH, because the quality knob draws
@@ -1670,11 +2618,49 @@ function buildWorldMist() {
    * the other gives the middle distance a ceiling to be measured against — so
    * they are first and second, and the extra thicknesses come after.
    */
+  /**
+   * THE TWO CANOPY BANDS WERE RAISED, 0.085 -> 0.145 AND 0.06 -> 0.10.
+   *
+   * The near-fade fix above makes them visible from the ground; this makes them
+   * worth looking at once they are. Both numbers were authored for a temperate
+   * wood where a band in the canopy is a rare dawn event, and this is a
+   * rainforest, where it is most of what the air does — see the `mist` channel
+   * note on the day table.
+   *
+   * The arithmetic on why it is still a haze and not a lid: the shader
+   * multiplies this by `pool` (about 0.73 for a 16.5 m sheet over flat ground)
+   * and by the noise term `clamp(0.42 + n * 0.72, 0, 1)`, whose mean is about
+   * 0.42. So 0.145 arrives at roughly 0.044 of alpha, and the two bands
+   * together at under a tenth. The hour multiplies that and is capped at 1.9 by
+   * `worldK`, so the worst case anywhere in the cycle is about 0.17 — a wash,
+   * with the crowns fully readable through it.
+   *
+   * THE THREE HOLLOW SHEETS ARE LEFT ALONE. They are the ones that can become
+   * "a wall, not weather" — the failure `worldK`'s cap was added for — because
+   * they sit in the middle distance at eye level where a bank of grey deletes
+   * the wood behind it. A band overhead cannot delete anything but sky.
+   */
+  /**
+   * AND THE FIRST HOLLOW SHEET'S WINDOW WENT 1.2/7.0 -> 1.0/8.2.
+   *
+   * It is the narrowest ramp in the table and it is the first layer the quality
+   * prefix draws, which is why it was the one in the photograph. A 5.8 m window
+   * cut against a height field that is only known every 12 m turns a bank into
+   * a razor: the whole 0-to-1 of the alpha happens inside one cell wherever the
+   * ground falls 6 m across it, which the wall of a river channel does. 7.2 m
+   * spreads the same ramp over about a cell and a quarter, so the crease at the
+   * cell boundary has somewhere to hide. It is a 24% wider window at a
+   * mid-point 50 cm deeper, which over a five-metre dip is 0.93 of pool against
+   * 0.83 — a tenth of a stop less mist for a straight edge that is gone.
+   *
+   * The other four are left as they were. Their windows are already 6.6 to
+   * 13 m wide and none of them was ever the layer anybody complained about.
+   */
   const SHEETS = [
-    { geo: hollowGeo, y: 1.1, colour: 0xd8ece6, opacity: 0.15, depth: [1.2, 7.0], above: 0 },
-    { geo: canopyGeo, y: 16.5, colour: 0xd2e8dc, opacity: 0.085, depth: [7.0, 20.0], above: 1 },
+    { geo: hollowGeo, y: 1.1, colour: 0xd8ece6, opacity: 0.15, depth: [1.0, 8.2], above: 0 },
+    { geo: canopyGeo, y: 16.5, colour: 0xd2e8dc, opacity: 0.145, depth: [7.0, 20.0], above: 1 },
     { geo: hollowGeo, y: 2.6, colour: 0xdff0e8, opacity: 0.115, depth: [2.4, 9.0], above: 0 },
-    { geo: canopyGeo, y: 23.5, colour: 0xcfe4e4, opacity: 0.06, depth: [10.0, 26.0], above: 1 },
+    { geo: canopyGeo, y: 23.5, colour: 0xcfe4e4, opacity: 0.1, depth: [10.0, 26.0], above: 1 },
     { geo: hollowGeo, y: 4.2, colour: 0xe4f2ea, opacity: 0.08, depth: [4.0, 12.0], above: 0 },
   ];
 
@@ -1687,7 +2673,10 @@ function buildWorldMist() {
       opacity: s.opacity,
       depth: s.depth,
       height: s.above,
-      fade: MIST_FADE,
+      // The canopy bands take the near end that lets them be seen from under
+      // them; the hollow sheets keep the one that stops them being seen from
+      // inside them. See MIST_FADE_CANOPY.
+      fade: s.above > 0.5 ? MIST_FADE_CANOPY : MIST_FADE,
     });
     const mesh = new THREE.Mesh(s.geo, mat);
     mesh.position.y = s.y;
@@ -2229,7 +3218,7 @@ function buildMotes(scene, seed) {
         float dist = -mv.z;
         // Fade in the distance and very close up, so nothing pops at the
         // near plane and the far field does not turn into a wall of dots.
-        vFade = smoothstep(70.0, 30.0, dist) * smoothstep(1.2, 5.0, dist);
+        vFade = (1.0 - smoothstep(30.0, 70.0, dist)) * smoothstep(1.2, 5.0, dist);
         /**
          * The two animals are SMALLER THAN DUST AND CLOSER IN. A speck of dust
          * is lit by the sun and can be read at fifty metres; a gnat at fifty
@@ -2257,8 +3246,8 @@ function buildMotes(scene, seed) {
          * At 12% and 44 m it is about forty in range and a dozen lit, which is
          * a scatter you can actually watch.
          */
-        if (aKind > 0.5 && aKind < 1.5) vFade *= smoothstep(26.0, 11.0, dist);
-        else if (aKind > 1.5) vFade *= smoothstep(44.0, 20.0, dist);
+        if (aKind > 0.5 && aKind < 1.5) vFade *= 1.0 - smoothstep(11.0, 26.0, dist);
+        else if (aKind > 1.5) vFade *= 1.0 - smoothstep(20.0, 44.0, dist);
         gl_Position = projectionMatrix * mv;
         float grow = 1.0 + uLevel * 1.6;
         /**
@@ -2564,6 +3553,17 @@ function buildMotes(scene, seed) {
  * you can see. So this cloud is deliberately a local one and the far field is
  * done with fog and light instead, which is what distance does to real rain
  * anyway.
+ *
+ * AND SNOW USES THE WHOLE BOX WHERE RAIN USES HALF OF IT, which is the one
+ * place the paragraph above does not transfer. The argument against far rain is
+ * that a drop past 25 m is a subpixel streak that aliases into shimmer. A flake
+ * at 40 m is not: it is a round dot the same size it was at 10 m, moving at a
+ * metre a second, and it is perfectly resolvable — which is precisely why a
+ * snowfall reads as DEPTH and a rainfall reads as a texture over the lens. The
+ * near/far fade is therefore a mix on uSnow (24 -> 8 m for rain, 46 -> 16 for
+ * snow) and neither the count nor the span changes, so this costs some fill on
+ * particles that were being transformed anyway and nothing else. See the vFade
+ * line in the vertex shader.
  */
 const RAIN_SPAN = 46;
 const RAIN_COUNT = 3600;
@@ -2599,6 +3599,23 @@ function buildRain(scene, seed) {
       uRain: { value: 0 },
       /** Rain is lit by the sky, so it goes out at night like everything else. */
       uDaylight: { value: 1 },
+      /**
+       * ==== 0 IS RAIN AND 1 IS SNOW, AND IT IS A UNIFORM ON PURPOSE ==========
+       *
+       * A `#define` would be the obvious way to do this and it is the wrong
+       * one. ONE PROGRAM HAS TO SERVE BOTH LANDS: two defines means two
+       * compiled variants of a shader that is otherwise identical, which is two
+       * pipeline objects, two warm-up compiles (see `prewarm-wrong-target` for
+       * what an uncompiled variant costs the first time it is drawn) and a
+       * branch that cannot be interpolated. As a uniform it is six `mix` calls
+       * on constants, every one of which is exactly the rain expression at
+       * uSnow = 0 — `mix(a, b, 0.0)` is `a + (b - a) * 0.0` — so the rainforest
+       * is bit-identical to what it was and the taiga is the same draw call.
+       *
+       * It is also then a value rather than a fork, which leaves the door open
+       * to sleet as 0.5 without touching this file again.
+       */
+      uSnow: { value: 0 },
     },
     vertexShader: /* glsl */ `
       uniform float uTime;
@@ -2606,6 +3623,7 @@ function buildRain(scene, seed) {
       uniform float uPixelRatio;
       uniform float uSpan;
       uniform float uRain;
+      uniform float uSnow;
       attribute float aSeed;
       varying float vFade;
       varying float vSeed;
@@ -2624,11 +3642,85 @@ function buildRain(scene, seed) {
          * but without it the whole cloud wraps in lockstep and a horizontal
          * seam sweeps up the screen once every couple of seconds.
          */
-        float speed = 14.0 + aSeed * 5.0;
+        /**
+         * ==== AND SNOW IS THE SAME COLUMN AT A FIFTEENTH OF THE SPEED ========
+         *
+         * 0.9 to 1.5 m/s. A snowflake's terminal velocity really is about a
+         * metre a second and this is THE number that decides whether a
+         * particle system reads as snow or as slow rain — get it to 3 or 4 and
+         * the eye immediately calls it rain in the cold, because a drop's fall
+         * rate is one of the few absolute speeds people have a calibrated
+         * intuition for. The per-flake spread is kept (it is what stops the
+         * whole cloud wrapping in lockstep, see above) but it is proportionally
+         * much wider, 0.9..1.5 against rain's 14..19, because real flakes DO
+         * vary by that much where drops of one size do not.
+         */
+        float speed = mix(14.0 + aSeed * 5.0, 0.9 + aSeed * 0.6, uSnow);
         float column = 34.0;
         float y = position.y - uTime * speed;
         y = mod(y, column);
-        vec2 rel = position.xz - uEye.xz;
+        /**
+         * THE DRIFT GOES IN BEFORE THE WRAP, WHICH IS THE ONLY PLACE IT CAN GO.
+         *
+         * Falling straight down at 1 m/s is not snow either; snow is carried,
+         * and the give-away is that a flake's path is a slanted wander rather
+         * than a line. But the horizontal wrap below is a mod around the eye,
+         * and a mod only closes if what goes into it is uniformly distributed
+         * over the span — which it is for position.xz - uEye.xz PLUS ANY
+         * OFFSET AT ALL, however large or however time-varying, because adding
+         * a constant to a uniform distribution mod L leaves it uniform mod L.
+         * Applying the drift AFTER the wrap instead would push flakes past the
+         * box edge and leave a moving bald strip on the upwind side, which is
+         * what the first version did.
+         *
+         * So the term is free to be unbounded in time and it is: 0.55 m/s of
+         * steady set (against 1.2 m/s of fall, so about a 25° slant, which is a
+         * light breeze rather than a blizzard) plus two slow sines. The second
+         * sine carries aSeed, so every flake wanders on its own phase and the
+         * field shears instead of translating — a rigid translation of the
+         * whole cloud is a camera move, not weather.
+         */
+        vec2 drift = vec2(uTime * 0.55 + sin(uTime * 0.071) * 2.6,
+                          sin(uTime * 0.051 + aSeed * 6.2831853) * 3.1
+                            + cos(uTime * 0.039) * 1.7) * uSnow;
+        /**
+         * ==== AND THE FLAKE FLUTTERS ROUND ITS OWN LINE OF DESCENT ===========
+         *
+         * The drift above is a WIND: three terms whose shortest period is 88 s,
+         * so over the two or three seconds a flake is in frame it is a straight
+         * slanted line. A slanted straight line at one metre a second is still
+         * not snow. What tells you a thing is a snowflake rather than a slow
+         * white drop is that it does not fall along its own velocity — it
+         * tumbles, stalls, slides sideways and picks the fall up again, because
+         * a plate that big at that Reynolds number cannot fall stably.
+         *
+         * Two sines in quadrature is a slow ellipse round the line of descent,
+         * which is what that looks like from outside. 0.35 rad/s and 0.28 rad/s
+         * are 0.056 Hz and 0.045 Hz — deliberately incommensurate, so the path
+         * never closes and never repeats — at 0.55 m and 0.42 m of radius, so
+         * the peak lateral rate is 0.55 * 0.35 = 0.19 m/s against 1.2 m/s of
+         * fall. That is a wander of about nine degrees either side of vertical
+         * on top of the wind's twenty-five, which is the amount that reads as
+         * "carried" rather than as "swarming".
+         *
+         * EVERY FLAKE ON ITS OWN PHASE, off aSeed at two different scales, or
+         * the whole column sways together and that is a camera move.
+         *
+         * IT GOES IN BEFORE THE WRAP FOR THE REASON THE BLOCK ABOVE GIVES: any
+         * offset at all, however time-varying, leaves a uniform distribution
+         * uniform under mod. It is bounded here anyway, which the wind is not.
+         *
+         * LUMINANCE: nothing in this modulates a field. A flake's own colour and
+         * alpha are constant; what moves is where it is. The fastest thing a
+         * pixel can see is a 3-6 px flake crossing it, and at 0.19 m/s of
+         * lateral rate plus 1.2 m/s of fall a flake one metre away covers its
+         * own width about twice a second. 2 Hz, on a few hundred scattered
+         * points, with no term that is common to all of them — there is no
+         * full-field component to have a frequency at all.
+         */
+        vec2 flutter = vec2(sin(uTime * 0.35 + aSeed * 41.0) * 0.55,
+                            cos(uTime * 0.28 + aSeed * 73.0) * 0.42) * uSnow;
+        vec2 rel = position.xz - uEye.xz + drift + flutter;
         vec2 wrapped = uEye.xz + mod(rel + uSpan * 0.5, uSpan) - uSpan * 0.5;
         // The column hangs from above the eye rather than from the ground, so
         // looking up shows rain coming down at you, which is most of the shot.
@@ -2649,24 +3741,91 @@ function buildRain(scene, seed) {
          * is continuous with no reallocation and no popping.
          */
         float alive = step(aSeed, uRain);
-        vFade = alive * smoothstep(24.0, 8.0, dist) * smoothstep(0.6, 2.5, dist);
+        /**
+         * THE FAR FADE IS WIDENED FOR SNOW, and it is the one place where the
+         * "rain past 25 m is a grey shimmer" argument at the top of this block
+         * does not transfer. A raindrop at 30 m is a subpixel streak that
+         * aliases; a snowflake at 30 m is a slow round dot moving at a metre a
+         * second, which is exactly the thing you CAN still resolve — it is why
+         * a snowfall reads as depth and a rainfall reads as a texture. So rain
+         * keeps its 24 -> 8 m fade and snow gets 46 -> 16, which is the whole
+         * box (RAIN_SPAN is 46) with a soft edge rather than a fade that starts
+         * halfway across it.
+         */
+        vFade = alive
+              * mix(1.0 - smoothstep(8.0, 24.0, dist), 1.0 - smoothstep(16.0, 46.0, dist), uSnow)
+              * smoothstep(0.6, 2.5, dist);
         gl_Position = projectionMatrix * mv;
         // Longer streaks in heavier rain, which is what harder rain looks like.
-        float len = 15.0 + uRain * 9.0;
+        // Snow is not a streak at all: at 1 m/s a flake moves 17 mm between
+        // frames at 60 Hz, so the motion blur a rain streak is standing in for
+        // is genuinely not there. 2 m at this projection is a point a few
+        // pixels across, which is a flake.
+        float len = mix(15.0 + uRain * 9.0, 2.0 + uRain * 0.6, uSnow);
+        /**
+         * AND THE TUMBLE, WHICH IS THE OTHER HALF OF "IT TURNS".
+         *
+         * A flake is a flat plate. Rotating the sprite would show nothing — it
+         * is a round dot, see the fragment shader — but a plate that turns
+         * presents a changing AREA to the eye, edge-on to face-on and back, and
+         * that is a size the point sprite can express for one sine.
+         *
+         * 0.82 +/- 0.18 rather than a full collapse to edge-on: a real flake is
+         * a rimed clump rather than a disc, so it never disappears, and a
+         * particle that periodically vanishes reads as a dead pixel. 1.15 rad/s
+         * is 0.18 Hz, a period of five and a half seconds, which is slower than
+         * a real tumble and is chosen so it is legible at the 20-40 m the snow
+         * is mostly seen at rather than being a flicker.
+         *
+         * LUMINANCE: 0.18 Hz is far under 3, the swing is +/- 22% of one
+         * flake's area and never of the field, and aSeed * 137 puts every flake
+         * on its own phase, so there is no term common to the cloud and nothing
+         * to sum into a full-field pulse.
+         *
+         * mix(..., uSnow) so rain is bit-identical: at uSnow = 0 this is
+         * exactly 1.0 and the multiply is exact.
+         */
+        float tumble = mix(1.0, 0.82 + 0.18 * sin(uTime * 1.15 + aSeed * 137.0), uSnow);
         // Capped lower than the motes' 26 for the opposite reason: a mote that
         // fills the screen is a bloom, a raindrop that fills it is a white bar.
-        gl_PointSize = alive * min(52.0, uPixelRatio * len * 34.0 / max(dist, 1.0));
+        gl_PointSize = alive * min(52.0, uPixelRatio * len * tumble * 34.0 / max(dist, 1.0));
       }
     `,
     fragmentShader: /* glsl */ `
       uniform sampler2D uMap;
       uniform float uRain;
       uniform float uDaylight;
+      uniform float uSnow;
       varying float vFade;
       varying float vSeed;
       void main() {
         if (vFade <= 0.0) discard;
         vec4 tex = texture2D(uMap, gl_PointCoord);
+        /**
+         * ==== NO SECOND TEXTURE. THE FLAKE IS COMPUTED. =====================
+         *
+         * The obvious implementation of snow is a second canvas-drawn sprite
+         * and a second uniform sampler, and it would have been three lines in
+         * textures.js. It is not worth a texture: a snowflake at this size is a
+         * round dot with a soft edge, and a round dot with a soft edge is
+         * 1 - smoothstep(0.35, 0.5, length(gl_PointCoord - 0.5)) — five
+         * instructions, no upload, no memory, no second sampler binding, and no
+         * mip chain to go soft at distance. The streak NEEDS a texture because
+         * it is anisotropic and has structure along its length; this does not.
+         *
+         * 0.35 to 0.5 puts the hard core at 70% of the point's radius and the
+         * feather in the outer 30%, which at 3-6 px is one to two pixels of
+         * edge — enough to stop it being a square and not so much that it
+         * dissolves into a smudge.
+         *
+         * The fetch above still happens under snow. It is one sample the wave
+         * was going to take anyway on the rain path, the whole point of this
+         * being a uniform and not a define is that there is one program, and
+         * branching round it would cost more in divergence than the fetch
+         * costs. mix(tex.a, flake, 0.0) is exactly tex.a.
+         */
+        float flake = 1.0 - smoothstep(0.35, 0.5, length(gl_PointCoord - 0.5));
+        float shape = mix(tex.a, flake, uSnow);
         /**
          * NOT ADDITIVE, unlike every other particle in this file. Rain is not a
          * light source — it is a lens, and what it mostly does is pick up the
@@ -2675,12 +3834,35 @@ function buildRain(scene, seed) {
          * slightly blue-white keeps it looking like water.
          */
         vec3 col = mix(vec3(0.52, 0.60, 0.70), vec3(0.80, 0.86, 0.94), uDaylight);
-        float a = tex.a * vFade * (0.13 + uRain * 0.17) * mix(0.30, 1.0, uDaylight);
+        /**
+         * Snow is BRIGHTER AND LESS BLUE than rain, and both halves matter. A
+         * drop is a lens carrying the sky down; a flake is an opaque white
+         * scatterer, so it is very nearly the colour of whatever is lighting it
+         * rather than of the sky specifically. And it is more opaque per
+         * particle — you cannot see through a snowflake at all, where you can
+         * see through a raindrop — which is the 0.34 against 0.13.
+         */
+        col = mix(col, mix(vec3(0.60, 0.65, 0.74), vec3(0.97, 0.98, 1.0), uDaylight), uSnow);
+        float a = shape * vFade
+                * mix(0.13 + uRain * 0.17, 0.34 + uRain * 0.22, uSnow)
+                * mix(0.30, 1.0, uDaylight);
         if (a < 0.004) discard;
         gl_FragColor = vec4(col, a);
       }
     `,
   });
+
+  /**
+   * WHICH PRECIPITATION THIS LAND HAS. Read ONCE, at build time.
+   *
+   * The land cannot change inside a session — it rides the seed string as a
+   * prefix and the seed is fixed before anything is built (see `lands/index.js`
+   * and `the-land-layer`), so there is nothing for a per-frame read to catch.
+   * A land whose `weather` is anything other than 'snow', including the
+   * rainforest's `null`, gets 0 and therefore gets the identical shader it had
+   * before this uniform existed.
+   */
+  material.uniforms.uSnow.value = currentLand().weather === 'snow' ? 1 : 0;
 
   const points = new THREE.Points(geo, material);
   points.frustumCulled = false;
@@ -2693,12 +3875,42 @@ function buildRain(scene, seed) {
 /**
  * The stream.
  *
- * A flat plane with an analytic ripple: two crossed wave trains plus noise give
- * the normal, and the shading is a fresnel blend between a dark bed colour and
- * the sky colour. No reflection pass — at this scale, under a canopy, a real
- * reflection buys almost nothing and costs a second render of the world.
+ * A flat plane with an analytic ripple. No reflection pass — at this scale,
+ * under a canopy, a real reflection buys almost nothing and costs a second
+ * render of the world.
+ *
+ * FIVE THINGS HAPPEN IN ONE FRAGMENT SHADER, AND THEY ARE ALL ARITHMETIC ON A
+ * SURFACE THAT WAS ALREADY BEING SHADED. There is no second pass, no second
+ * light, no texture and no readback anywhere in here; the whole river is one
+ * draw of two triangles and it always was.
+ *
+ *   IT IS TRANSPARENT BY VIEW ANGLE. The alpha used to be the literal 0.9,
+ *   which is the single line that made this a lid. See the block on `alpha`.
+ *
+ *   IT RUNS DOWNSTREAM. Every wave and every noise octave is evaluated in the
+ *   CHANNEL's frame — along and across the river, with the meander taken out —
+ *   and the domain is advected rather than animated. See `uFlow`.
+ *
+ *   IT KNOWS HOW DEEP IT IS. `streamParams()` hands over the nine scalars of
+ *   the centre line and the four of the carve, so the shader can reproduce
+ *   terrain.js's bed profile per pixel. That is where the depth colour, the
+ *   alpha floor and the shore wash come from.
+ *
+ *   RAIN LANDS ON IT. A jittered ring lattice on world position, inside a
+ *   uniform branch that costs the dry world nothing.
+ *
+ *   A LANTERN LAYS A PATH DOWN IT. Six lines of half-vector arithmetic and an
+ *   inverse square, driven from main.js. Not a light — see `uLampPos`.
  */
 function buildWater(scene) {
+  /**
+   * The channel, captured once at build.
+   *
+   * Read at build rather than per frame because the world is a pure function of
+   * the seed and the river does not move within a session. The one thing that
+   * could invalidate it is a reseed, and a reseed rebuilds the scene.
+   */
+  const chan = streamParams();
   const material = new THREE.ShaderMaterial({
     name: 'water',
     transparent: true,
@@ -2755,6 +3967,74 @@ function buildWater(scene) {
       fogDensity: { value: 0.008 },
       /** 1 at the authored hour; the stream's own share of the day cycle. */
       uDaylight: { value: 1 },
+      /**
+       * WHICH WAY THE RIVER IS RUNNING — and until this existed, it wasn't.
+       *
+       * The two wave trains were `sin(p.x * 1.7 + p.y * 0.6 + t)` and friends:
+       * two travelling waves in two FIXED WORLD DIRECTIONS, with an fbm boiling
+       * in place on top. The stream's bearing is drawn from the seed, so on the
+       * overwhelming majority of worlds the water was visibly running sideways
+       * across its own channel, or upstream. On the pinned world it happens to
+       * be running at 130° to the channel, which is why nobody caught it: it
+       * looked like water, it just wasn't going anywhere in particular.
+       *
+       * Everything in the fragment shader is now evaluated in `(u, v)` — along
+       * and across the channel — and the whole domain is ADVECTED downstream
+       * rather than the phases being wound forward. Advection is the better
+       * shape for the same reason a river is: it moves the noise as well as the
+       * sine waves, so the boil travels with the water instead of sitting still
+       * in the world while the crests slide through it.
+       *
+       * NOMINAL BEARING, NOT THE LOCAL TANGENT. The `v` coordinate is measured
+       * from the meandering centre line, so the wave frame follows the bends
+       * anyway — see the derivation of `dv/dx` in the shader. Rotating the
+       * basis itself by the local tangent as well would double-count the bend
+       * and put a second-order term in the analytic normal for nothing.
+       */
+      uFlow: { value: new THREE.Vector2(chan.cos, chan.sin) },
+      /** The meander: (k1, a1, k2, a2) — see terrain.js's `streamParams`. */
+      uMeanderK: { value: new THREE.Vector4(chan.k1, chan.a1, chan.k2, chan.a2) },
+      /** The rest of the centre line: (phase1, phase2, offset). */
+      uMeanderP: { value: new THREE.Vector3(chan.p1, chan.p2, chan.dist) },
+      /** The carve: (depth at centre, half-width, exponent, rise). */
+      uBed: {
+        value: new THREE.Vector4(chan.bedDepth, chan.bedWidth, chan.bedPower, chan.bedRise),
+      },
+      /**
+       * The same `wet` the drops count themselves by, so the rings on the water
+       * and the rain in the air can never disagree about whether it is raining.
+       * Written in the weather block beside `rain.material.uniforms.uRain`.
+       */
+      uRain: { value: 0 },
+      /**
+       * ONE LAMP, AND IT IS NOT A LIGHT.
+       *
+       * The `uSunDir` note above says a moon path on a stream is one of the
+       * cheapest beautiful things available here because it is the same six
+       * lines with a different vector in them. This is the same six lines with
+       * a POINT in them instead of a direction, which nobody had done, and at
+       * night — the ferry's lantern coming down the river, a fire on a landing
+       * — it is the difference between a dark stream and a lit one.
+       *
+       * IT IS SIX LINES OF ARITHMETIC ON A SURFACE THAT IS ALREADY SHADING
+       * ITSELF. A second real scene light would recompile every material in the
+       * forest, which is the single most expensive thing anyone can do to this
+       * frame; a specular lobe evaluated against a position costs one subtract,
+       * one dot and a `pow` on two triangles. That is why there is exactly one,
+       * why it is chosen on the CPU (main.js picks the nearest of the ferry
+       * lantern and the hearth light) and why it will stay one.
+       *
+       * NO OCCLUSION AND NO RAYCAST. A lantern behind a tree still lays a path,
+       * and that is wrong. It is also unfindable: the attenuation is a hard
+       * inverse square, so the path is only ever bright within a few metres of
+       * a source you can see from the water, and requiring the source to be
+       * above the waterline is what stops a fire buried behind a bank from
+       * lighting the river through the hill.
+       */
+      uLampPos: { value: new THREE.Vector3(0, -1000, 0) },
+      uLampCol: { value: new THREE.Color(1.0, 0.78, 0.46) },
+      /** 0 disables the whole block. Written from main.js via `setLamp`. */
+      uLampPower: { value: 0 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -2780,30 +4060,311 @@ function buildWater(scene) {
       uniform vec3 fogColor;
       uniform float fogDensity;
       uniform float uDaylight;
+      uniform vec2 uFlow;
+      uniform vec4 uMeanderK;
+      uniform vec3 uMeanderP;
+      uniform vec4 uBed;
+      uniform float uRain;
+      uniform vec3 uLampPos;
+      uniform vec3 uLampCol;
+      uniform float uLampPower;
       varying vec3 vWorld;
       varying float vDepthFog;
 
       void main() {
         vec2 p = vWorld.xz;
-        // Two crossed wave trains at different speeds, then noise on top. The
-        // crossing is what stops it reading as a moving stripe pattern.
-        float w1 = sin(p.x * 1.7 + p.y * 0.6 + uTime * 1.4);
-        float w2 = sin(p.x * -0.7 + p.y * 2.1 + uTime * 1.05);
-        float n = rrFbm2(vec3(p * 0.55, uTime * 0.28));
-        float hgt = w1 * 0.02 + w2 * 0.018 + n * 0.05;
-        // Normal from the analytic derivative of the same field.
-        vec3 nrm = normalize(vec3(
-          -(cos(p.x * 1.7 + p.y * 0.6 + uTime * 1.4) * 1.7 * 0.02
-            + cos(p.x * -0.7 + p.y * 2.1 + uTime * 1.05) * -0.7 * 0.018 + n * 0.22),
-          1.0,
-          -(cos(p.x * 1.7 + p.y * 0.6 + uTime * 1.4) * 0.6 * 0.02
-            + cos(p.x * -0.7 + p.y * 2.1 + uTime * 1.05) * 2.1 * 0.018 + n * 0.22)
-        ));
 
+        /* ---- into the channel's own frame -------------------------------- */
+        /**
+         * u runs downstream, v across, and v is measured from the MEANDERING
+         * centre line rather than from a straight axis. This is terrain.js's
+         * streamBank with the abs() left off — same rotation, same two sines,
+         * same nine scalars, handed over by streamParams() so that no constant
+         * lives in two places.
+         *
+         * Measuring v from the centre line is also what makes the wave frame
+         * follow the bends for free: on a curve, lines of constant v are the
+         * curve, so a wave train laid out in (u, v) bends with the river
+         * without anything having to rotate.
+         */
+        float u = dot(p, uFlow);
+        float across = p.y * uFlow.x - p.x * uFlow.y;
+        float mp1 = u * uMeanderK.x + uMeanderP.x;
+        float mp2 = u * uMeanderK.z + uMeanderP.y;
+        float centre = uMeanderP.z + sin(mp1) * uMeanderK.y + sin(mp2) * uMeanderK.w;
+        float v = across - centre;
+        float bank = abs(v);
+        // d(centre)/du. The channel frame is not a rotation — it shears with
+        // the meander — and this is the whole of the difference. It is needed
+        // by the analytic normal below, so it is not an extra cost.
+        float mslope = cos(mp1) * uMeanderK.y * uMeanderK.x
+                     + cos(mp2) * uMeanderK.w * uMeanderK.z;
+        // (du/dx, du/dz) and (dv/dx, dv/dz).
+        vec2 dudp = uFlow;
+        vec2 dvdp = vec2(-uFlow.y, uFlow.x) - mslope * uFlow;
+
+        /* ---- how deep the water is, from the carve that made it ---------- */
+        /**
+         * terrain.js carves the channel by blending the ground toward
+         *   WATER_LEVEL - bedDepth + pow(clamp01(bank / bedWidth), bedPower) * bedRise
+         * and this plane sits at WATER_LEVEL, so the level cancels and the
+         * depth over any pixel is that expression negated. THE AUTHORITY IS
+         * heightAt IN terrain.js; this is a transcription, fed the same
+         * constants through streamParams().
+         *
+         * IT IS AN APPROXIMATION AND THE WHOLE DESIGN DOWNSTREAM ASSUMES SO.
+         * The carve is a lerp toward the profile with weight corridor * 0.94,
+         * plus 20 cm of bed noise, so where the river cuts a steep flank the
+         * true bed can be half a metre off this. That is invisible inside a
+         * wide soft gradient and glaring on a hard line — which is why the
+         * shore is a wash and not a contour, and why nothing here is ever
+         * compared against a threshold you could see.
+         */
+        float depth = max(0.0, uBed.x - pow(clamp(bank / uBed.y, 0.0, 1.0), uBed.z) * uBed.w);
+        float depthN = smoothstep(0.02, 1.0, depth);
+
+        /* ---- the surface, running downstream ----------------------------- */
+        /**
+         * ADVECTED, NOT ANIMATED. The domain is displaced downstream by time,
+         * so every field evaluated on it travels with the water: the noise boil
+         * moves with the crests instead of sitting still in the world while
+         * they slide through it, which is the thing that reads as current.
+         *
+         * 0.85 m/s because that is what this shader was already doing before it
+         * knew where downstream was: the old train had a 1.4 rad/s time term
+         * over a 1.80 rad/m wave vector, which is 0.78 m/s, and a little more
+         * than that is as fast as water can go before the noise smears.
+         */
+        vec2 q = vec2(u - uTime * 0.85, v);
+        /**
+         * CROSSED AT ±20° TO THE FLOW, DELIBERATELY NOT PARALLEL. Two trains
+         * running straight downstream put every crest square across the channel
+         * and never let them interfere: that is corduroy, and it is the single
+         * most common way a procedural river gives itself away. Twenty degrees
+         * is enough for the two lattices to beat into a cellular pattern and
+         * little enough that the water still obviously goes one way.
+         */
+        const vec2 D1 = vec2(0.9397, 0.3420);
+        const vec2 D2 = vec2(0.9397, -0.3420);
+        // Different wavelengths, and a small opposite drift on each on top of
+        // the advection, so the beat between them moves instead of being a
+        // fixed interference pattern travelling downstream as a rigid sheet.
+        float t1 = dot(q, D1) * 1.85 + uTime * 0.21;
+        float t2 = dot(q, D2) * 2.25 - uTime * 0.17;
+        float n = rrFbm2(vec3(q * 0.55, uTime * 0.10));
+        float hgt = sin(t1) * 0.020 + sin(t2) * 0.018 + n * 0.05;
+        /**
+         * The analytic gradient of exactly the field above, IN THE SAME FRAME.
+         * If these two ever disagree the lighting stops describing the geometry
+         * and the glints come unstuck from the waves — they slide across a
+         * surface that is moving somewhere else, which is unmistakable and
+         * unfixable-looking. Chain rule: d(t1)/dp = 1.85 * (D1.u * du/dp +
+         * D1.v * dv/dp), and dv/dp is where the meander enters.
+         */
+        vec2 g1 = (D1.x * dudp + D1.y * dvdp) * 1.85;
+        vec2 g2 = (D2.x * dudp + D2.y * dvdp) * 2.25;
+        /**
+         * The noise's contribution to the gradient is still the stand-in it has
+         * always been — the VALUE scaled, not the derivative, which is
+         * dimensionally nonsense and visually fine because it is a small
+         * high-frequency wobble on a normal that is mostly up. It is written
+         * through the frame vectors so that at the identity bearing it is
+         * bit-for-bit the n * 0.22 on both axes that was here before. Two
+         * more fbm taps would buy the honest gradient for two more trilinear
+         * fetches per pixel, and it has never been the thing you notice.
+         */
+        vec2 dh = cos(t1) * 0.020 * g1 + cos(t2) * 0.018 * g2 + 0.22 * n * (dudp + dvdp);
+
+        /* ---- rain landing on it ------------------------------------------ */
+        /**
+         * A uniform branch on a uniform, so the dry world — which is most
+         * worlds most of the time — pays for none of this.
+         */
+        float rainSpec = 1.0;
+        if (uRain > 0.002) {
+          /**
+           * The rings do NOT ride in the channel frame. Everything else in this
+           * shader travels with the current because it is made by the current;
+           * a raindrop is made by the sky, lands where it lands, and its ring
+           * spreads about a fixed point on the world. Putting it in q would
+           * have dragged every ring downstream at 0.85 m/s, which is a boat
+           * wake, not rain.
+           *
+           * FADED OUT WITH DISTANCE, because the ring is 5 mm wide and beyond
+           * thirty-odd metres that is far under a pixel: kept, it aliases into
+           * a fizz that reads as film grain rather than as weather. The
+           * specular collapse and the pale lift below are NOT faded — those are
+           * broad and they are what tells you at a distance that the river is
+           * being rained on.
+           */
+          // NOT called "near". GLSL ES does not reserve it, but gl_DepthRange
+          // has a member of that name and enough drivers have been strange
+          // about it over the years that it is not worth four saved characters.
+          float rainNear = 1.0 - smoothstep(12.0, 34.0, vDepthFog);
+          if (rainNear > 0.004) {
+            vec2 g = p * 7.0;
+            vec2 cell = floor(g);
+            vec2 f = g - cell;
+            /**
+             * FOUR HASHES PER CELL. Two is the minimum before a 7 cells/m
+             * lattice repeats visibly; jitter needs two on its own, and the
+             * phase and the density gate need one each or drops appear in step
+             * and in rows. They are ALU hashes rather than fetches from the
+             * baked noise lattice on purpose: that texture WRAPS at 64 cells,
+             * which is 9.1 m here, and a rain pattern with a nine-metre period
+             * is a tiled floor.
+             */
+            float hx = rrHash(vec3(cell, 1.7));
+            float hy = rrHash(vec3(cell, 9.3));
+            float hp = rrHash(vec3(cell, 23.1));
+            float hd = rrHash(vec3(cell, 41.9));
+            // The density rides the shower exactly as the drops in the air do
+            // — they count themselves by discarding against uRain — so the two
+            // come up and go away together instead of one leading the other.
+            float gate = step(hd, uRain) * rainNear;
+            float r = fract(uTime * 1.9 + hp);
+            vec2 rel = f - (vec2(0.28) + vec2(hx, hy) * 0.44);
+            float dist = length(rel);
+            float edge = dist - r * 0.16;
+            // 0.16 of a cell at full expansion against a centre jittered inside
+            // [0.28, 0.72]: the ring can never leave its own cell, which is
+            // what lets this be a single-cell lookup instead of the nine a
+            // Worley-style lattice would need.
+            // Written as 1 - smoothstep(lo, hi, x) rather than the shorter
+            // smoothstep(hi, lo, x): the GLSL spec leaves the reversed-edge
+            // form UNDEFINED, every driver in practice computes it, and "every
+            // driver in practice" is not a thing this project relies on when
+            // the correct form costs one subtract.
+            float ring = (1.0 - smoothstep(0.0, 0.035, abs(edge))) * (1.0 - r) * gate;
+            /**
+             * THE NORMAL AS WELL AS THE HEIGHT, and the normal is the one that
+             * matters. A ring in the height alone shifts the colour by a shade
+             * and does nothing else, which reads as a pattern printed on a
+             * still surface. What you actually see when rain hits water is the
+             * sky reflection and the specular breaking up, and that comes from
+             * the surface TILTING. The height term is kept because it feeds the
+             * depth-blended colour a little life; it is 2 mm, which is the
+             * amplitude that makes the slope below come out at the ring's own
+             * 5 mm half-width.
+             */
+            hgt += ring * 0.002;
+            /**
+             * An odd triangular lobe across the ring — zero on the crest, peak
+             * on each flank, opposite signs — which is the shape the derivative
+             * of a bump has. A gaussian derivative is the textbook answer and
+             * costs an exp per pixel per frame for a difference nobody can
+             * name on a 5 mm feature.
+             */
+            float e = clamp(edge / 0.035, -1.0, 1.0);
+            float lobe = e * (1.0 - abs(e)) * 4.0;
+            vec2 dir = rel / max(dist, 1e-4);
+            // Minus: outside the crest the height is falling, so the gradient
+            // points inward while lobe is positive there.
+            dh -= dir * (lobe * (1.0 - r) * 0.55 * gate);
+          }
+          /**
+           * A downpour destroys the coherent highlight, because the surface has
+           * no large flat facet left to make one on. Not zero — 0.15 — since
+           * the broken remains of it are what the rings are read against.
+           */
+          rainSpec = mix(1.0, 0.15, uRain);
+        }
+
+        vec3 nrm = normalize(vec3(-dh.x, 1.0, -dh.y));
         vec3 view = normalize(uEye - vWorld);
         float fres = pow(1.0 - clamp(dot(view, nrm), 0.0, 1.0), 3.0);
-        vec3 col = mix(uDeep, uShallow, clamp(hgt * 6.0 + 0.5, 0.0, 1.0));
-        col = mix(col, uSky, fres * 0.85);
+        /**
+         * THE COLOUR COMES FROM DEPTH NOW, NOT FROM WAVE HEIGHT.
+         *
+         * It used to be mix(uDeep, uShallow, hgt * 6 + 0.5) — the bed colour
+         * was chosen by the height of the wave standing over it. That is a
+         * number about the surface and not about the river, so the middle of
+         * the channel and a puddle at the edge came out the same green, and the
+         * deep water flickered between the two at wave frequency. Depth is what
+         * actually decides how much bed you are looking through. The waves keep
+         * a small share of it, because a crest genuinely does put a few more
+         * centimetres of water in the way than a trough does.
+         */
+        vec3 col = mix(uShallow, uDeep, smoothstep(0.06, 1.15, depth + hgt * 0.9));
+        /**
+         * ==== A MIRROR IS NEVER BRIGHTER THAN WHAT IT REFLECTS ===============
+         *
+         * This line was mix(col, uSky, fres * 0.85), and with the fresnel
+         * alpha in front of it the result was a river that read, in the middle
+         * distance, as a sheet of pale blue-white BRIGHTER THAN THE SKY IT WAS
+         * REFLECTING. Two independent errors, and they compound:
+         *
+         *   1. IT REFLECTED THE WRONG PART OF THE SKY. uSky is one colour for
+         *      the whole surface. But the direction a facet mirrors into is
+         *      reflect(-view, n), whose ELEVATION for a near-flat surface is
+         *      just view.y — and a river seen from a bank at thirty metres is
+         *      viewed at three degrees, so it is mirroring the sky three
+         *      degrees up, which is haze, not zenith blue. Putting the zenith
+         *      colour there is putting the brightest part of the dome on the
+         *      part of the water that shows the dullest.
+         *   2. IT REFLECTED ALL OF IT. Water's grazing reflectance really is
+         *      near unity, but that is for a MIRROR. A river surface has
+         *      centimetre-scale roughness the wave normals here do not model,
+         *      and roughness scatters most of the specular lobe out of any one
+         *      eye ray. 0.72 is fitted by eye rather than measured, and what it
+         *      is standing in for is that missing roughness.
+         *
+         * up is the reflected elevation and fogColor is what the sky looks
+         * like where it meets the ground — the hour's own haze, already a
+         * uniform, already lerped by the day table, so this costs one reflect
+         * and one mix and nothing at all in bandwidth. 0.28 of the sky is kept
+         * even at dead grazing so that the far channel is still a lighter shape
+         * than the bank it runs between rather than dissolving into the fog it
+         * is about to be fogged into anyway.
+         *
+         * ARITHMETIC, at the authored hour, thirty metres out with the eye at
+         * 1.7 m: view.y = 0.057, the smoothstep gives 0.09, so the mirror is
+         * 0.66 fog + 0.34 sky at 0.72 — a linear luminance of 0.25 against the
+         * 0.49 it was. Half as bright and green-grey instead of blue, which is
+         * a river. Looking straight down is untouched: fres collapses there and
+         * the whole point of the fresnel alpha, that you can see the bed and
+         * the fish, is a term this does not appear in.
+         *
+         * AND THE DEEP CHANNEL KEEPS MORE OF ITSELF. mix(1.0, 0.85, depthN) is
+         * a look decision and not physics — it is here because uDeep is the
+         * only thing in the frame that says where the channel is, and at
+         * grazing the mirror was painting over all of it. Fifteen percent is
+         * enough for the trench to read as a darker ribbon and small enough
+         * that nobody will call it a hole in the reflection.
+         */
+        float up = clamp(reflect(-view, nrm).y, 0.0, 1.0);
+        vec3 refl = mix(fogColor, uSky, 0.28 + 0.72 * smoothstep(0.0, 0.30, up)) * 0.72;
+        col = mix(col, refl, fres * 0.85 * mix(1.0, 0.85, depthN));
+        /**
+         * THE EDGE, AS A WASH AND NEVER AS A BAND.
+         *
+         * The shoreline used to be wherever the opaque bank happened to cut the
+         * plane: a hard analytic intersection with nothing on it at all. Thin
+         * water over a bright bed is pale, and the last few centimetres of it
+         * carry whatever the current has pushed to the side.
+         *
+         * WIDE, PALE, AND NOT WHITE — all three for the same reason. The depth
+         * this is drawn from can be half a metre out (see depth above); half a
+         * metre of error inside a 55 cm soft gradient cannot be seen, and the
+         * same error on a ten-centimetre white line is a white line lying in
+         * the wrong place. The noise term breaks the contour up further, so
+         * that even where it is exactly right it does not look drawn. It goes
+         * toward the sky colour rather than toward white because a white edge
+         * on a green river is a cartoon.
+         */
+        float shore = clamp((1.0 - smoothstep(0.0, 0.55, depth)) * (0.55 + 0.45 * n), 0.0, 1.0);
+        /**
+         * 0.55/0.42 -> 0.44/0.36, AND ONLY BECAUSE THE MIRROR CAME DOWN.
+         *
+         * This was the third pale term adding to the two above it, and it was
+         * authored while they were both too bright — it had to be strong to
+         * show up against them. With the mirror at 0.72 of a hazier colour, the
+         * same wash at the old weights is now the palest thing on the water and
+         * would take over the reading of the edge. Trimmed by about a fifth,
+         * which restores the RATIO it was tuned at rather than changing what
+         * the edge is meant to look like.
+         */
+        col = mix(col, mix(uShallow, uSky, 0.44), shore * 0.36);
 
         // The bed itself only ever has borrowed light on it, so it rides the
         // day. Exactly the identity at uDaylight = 1.
@@ -2818,11 +4379,56 @@ function buildWater(scene) {
         // worth undermining that to save a character.
         col *= mix(0.16, 1.0, uDaylight);
 
+        /**
+         * WHAT A DOWNPOUR DOES TO WATER YOU ARE LOOKING AT: it goes pale and
+         * flat. That is the same physics as the specular collapse — a million
+         * tiny random normals average to whatever the sky is — and it is
+         * stronger in the shallows because that is where the contrast it is
+         * destroying lived. Toward fogColor and not toward white, so it is
+         * the same grey the rest of the wet world is going.
+         */
+        col = mix(col, fogColor, uRain * (0.12 + 0.20 * (1.0 - depthN)));
+
         // Specular glints off the wave tops. Warm from the sun, cold from the
         // moon, and the moon's are the better ones.
         vec3 h = normalize(view + uSunDir);
         col += mix(vec3(0.66, 0.78, 1.0), vec3(1.0, 0.94, 0.8), uDaylight)
-             * pow(max(dot(nrm, h), 0.0), 90.0) * mix(0.3, 1.4, uDaylight);
+             * pow(max(dot(nrm, h), 0.0), 90.0) * mix(0.3, 1.4, uDaylight) * rainSpec;
+
+        /**
+         * THE LANTERN PATH — the same six lines as the glint above, with a
+         * POSITION in them instead of a direction.
+         *
+         * A tighter exponent because a near source subtends a smaller angle
+         * than the moon does, so what it lays down the water is a narrow bright
+         * road rather than a broad shimmer. 220 against the sun's 90 is that,
+         * and both are fitted by eye rather than derived.
+         *
+         * It is inside a uniform branch on uLampPower, so the daytime world
+         * and any frame with nothing lit nearby pay nothing at all for it.
+         */
+        if (uLampPower > 0.0001) {
+          vec3 lrel = uLampPos - vWorld;
+          float d2 = max(dot(lrel, lrel), 0.04);
+          vec3 lh = normalize(view + lrel * inversesqrt(d2));
+          /**
+           * A HARD INVERSE SQUARE, DOING THE OCCLUSION'S JOB. 0.50 at 4 m, 0.10
+           * at 12 m, 0.026 at 25 m. Nothing here raycasts and nothing knows
+           * where the trees are; what keeps a lantern from lighting water it
+           * cannot see is that by the time it cannot see it, it is too far away
+           * to matter.
+           */
+          float atten = 1.0 / (1.0 + d2 * 0.06);
+          /**
+           * ABOVE THE WATERLINE OR NOTHING. This plane IS the waterline, so
+           * lrel.y > 0.15 is exactly "the lamp is out of the water" — and it
+           * is what stops a hearth sitting in a hollow behind a bank from
+           * laying a path through the hill. The 15 cm is a margin so a lantern
+           * bobbing on the ferry cannot flicker the whole path off.
+           */
+          col += uLampCol * uLampPower * atten * step(0.15, lrel.y) * rainSpec
+               * pow(max(dot(nrm, lh), 0.0), 220.0);
+        }
 
         if (uLevel > 0.0005) {
           float f = rrFbm2(vec3(p * 0.09, uTime * 0.05));
@@ -2834,7 +4440,48 @@ function buildWater(scene) {
         float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vDepthFog * vDepthFog);
         col = mix(col, fogColor, clamp(fogFactor, 0.0, 1.0));
 
-        gl_FragColor = vec4(col, 0.9);
+        /**
+         * ==== THE ALPHA WAS A LITERAL, AND THAT LITERAL WAS THE LID ========
+         *
+         * It was vec4(col, 0.9). Ninety percent opaque at every pixel, at
+         * every view angle, over every depth — so the river was a flat pale
+         * sheet you could not see one thing through, and everything anyone had
+         * ever put underneath it was thrown away: the bed, the 1.6 m terrain
+         * lattice in the shallows, the fishing line and the hook, and thirty-six
+         * fish.
+         *
+         * THE PREVIOUS PASS FOUND HALF OF THIS AND THEN DESIGNED AROUND THE
+         * OTHER HALF ON A FALSE PREMISE, which is why it is worth writing down.
+         * depthWrite: false at the top of this material is that half, and it
+         * was necessary and correct. But shoal.js then reasons that "looking
+         * down into water from a bank is the one angle where the fresnel term
+         * collapses and the surface goes clear", and puts the entire shoal in
+         * the top 40 cm to exploit it. The fresnel term did collapse — in the
+         * COLOUR, where it stopped mixing in the sky. THE OPACITY NEVER VARIED
+         * WITH VIEW ANGLE AT ALL. Looking straight down at a fish you got the
+         * dark bed colour at 0.9, which is not "clear", it is a green lid, and
+         * the shoal was measured rendering perfectly and photographing as
+         * almost nothing for a second, independent reason.
+         *
+         * So the alpha is the fresnel, which is also the physics: a water
+         * surface seen edge-on is a mirror, and seen from above it is a window.
+         *
+         * AND THE FLOOR RIDES DEPTH, which is what keeps the honest version
+         * from being a glass-bottomed boat. Straight down over the trench it is
+         * 0.88 and the river keeps its body; straight down over the ten
+         * centimetres at the margin it is 0.10 and the bed, the gravel and the
+         * reed bases are simply there. Grazing, anywhere, it is 0.97 and the
+         * whole thing is a sheet of sky again — which is what a river looks
+         * like from every posture except leaning over it.
+         *
+         * WHAT THIS MAKES VISIBLE IS ALSO THE RISK, and it should be looked at
+         * before anything else here: the bed's own texture, the terrain mesh's
+         * facets in shallow water, and the fishing tackle were all shipped
+         * under the assumption that nobody could see them.
+         */
+        float alpha = mix(mix(0.10, 0.88, depthN), 0.97, fres);
+
+        gl_FragColor = vec4(col, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }
@@ -2870,7 +4517,44 @@ function buildWater(scene) {
   mesh.frustumCulled = false;
   mesh.renderOrder = 2;
   scene.add(mesh);
-  return { mesh, material };
+  /**
+   * Point the one lamp at the water, or turn it off.
+   *
+   * A METHOD RATHER THAN A UNIFORM main.js WRITES DIRECTLY, because the choice
+   * of which source wins is a per-frame decision made outside this file and the
+   * shape of the uniforms is not. Anything that wants to light the river hands
+   * over a world position, a colour and a power; if two things want to at once,
+   * the caller picks, and the fact that it MUST pick is the point — see the
+   * note on `uLampPos` for why there is exactly one.
+   *
+   * `power` of 0 (or omitted) disables the block in the shader entirely, which
+   * is what daytime and the whole world away from a fire should be doing.
+   *
+   * THREE SCALARS RATHER THAN A VECTOR OR AN OBJECT, because this is called
+   * every frame and both of the tidier signatures make the caller allocate: a
+   * fresh literal per frame, or a scratch Vector3 that then has to live
+   * somewhere in main.js and be kept in step with which source won. Three
+   * numbers is the shape that lets the caller read them straight out of a
+   * matrixWorld and pass them on.
+   *
+   * @param {number} x world position of the lamp
+   * @param {number} y — above WATER_LEVEL or the shader ignores it entirely
+   * @param {number} z
+   * @param {number} [power] 0 to disable; about 1 for a fire two metres up
+   * @param {{r: number, g: number, b: number}} [col] optional, sticky once set
+   */
+  function setLamp(x, y, z, power = 0, col) {
+    const u = material.uniforms;
+    if (!(power > 0)) {
+      u.uLampPower.value = 0;
+      return;
+    }
+    u.uLampPos.value.set(x, y, z);
+    u.uLampPower.value = power;
+    if (col) u.uLampCol.value.setRGB(col.r, col.g, col.b);
+  }
+
+  return { mesh, material, setLamp };
 }
 
 /**
@@ -3067,7 +4751,36 @@ function buildWater(scene) {
  *   the sun cooler still: doing so trades a residual that is somebody else's
  *   for a real error of its own at the edge, and the trunk goes grey.
  */
-const NO_SHADOW_SUN = 0.5;
+/**
+ * ==== AND THE RAINFOREST RE-CUT MOVED ONE OF THEM ==========================
+ *
+ * The four intensities this whole block was fitted against are not the four
+ * intensities any more — see THE FOUR INTENSITIES beside the hemisphere below,
+ * which took sun:shade from 1.23 stops to 2.94. Three of these four constants
+ * survive that and one does not, and it is worth being explicit about which,
+ * because "the lights moved so every light constant is now a guess" is the
+ * conclusion that would have thrown away a good fit.
+ *
+ * WHAT THE 0.5 WAS, RECOVERED FROM THE OLD NUMBERS. On Low there is no shadow
+ * map, so every surface is lit; the fit made Low's up-facing total equal High's
+ * TYPICAL frame, which is a blend of lit and shaded ones. Under the old lights
+ * Low came to 0.7399 + 0.0649 + 0.1179 + 0.6842 = 1.6069, against a High that
+ * was 2.3896 lit and 1.0211 shaded. The blend that lands on 1.6069 is 42.8%
+ * lit — which is a real, derived property of what these frames contain, and it
+ * is the only thing from the old fit that has to travel.
+ *
+ * APPLY IT TO THE NEW LIGHTS. High is now 2.0772 lit and 0.2709 shaded, so the
+ * same 42.8% typical frame is 1.0442. Low's three UNSCALED terms come to
+ * 0.2013 + 0.0153 + 0.0281 = 0.2447, leaving 0.7995 for the directional, and
+ * the new sun delivers 3.30 x 0.8411 x 0.6508 = 1.8064 at full strength. So the
+ * factor is 0.7995 / 1.8064 = 0.443.
+ *
+ * It had to move because the deepening cut the shade harder than the sun: a
+ * typical frame is now 35% darker while an all-lit frame is only 13% darker, so
+ * a directional held at half strength would have over-brightened Low by 10%.
+ * The hemisphere and ambient trims are proportional and need no rework.
+ */
+const NO_SHADOW_SUN = 0.443;
 const NO_SHADOW_HEMI = 0.9;
 const NO_SHADOW_AMBIENT = 0.8;
 const NO_SHADOW_FILL = 1;
@@ -3080,6 +4793,13 @@ const NO_SHADOW_FILL = 1;
  * shade mix is made of them: re-author any of those and this wants re-deriving
  * with them, or the sun will be compensating toward a hue the shade no longer
  * has.
+ *
+ * THE RAINFOREST RE-CUT MOVED THE INTENSITIES AND NOT THE COLOURS, SO IT
+ * SURVIVED, and it is worth recording that this was checked rather than
+ * assumed. The shade mix's red-to-green is a RATIO of weighted sums, so a cut
+ * that scales the three shade lights by 0.272, 0.236 and 0.238 very nearly
+ * cancels top and bottom: 0.71223 before, 0.71437 after. A 0.002 move, against
+ * a fit the block above holds to 0.03. Nothing here needed re-deriving.
  */
 const NO_SHADOW_SUN_COLOUR = new THREE.Color().setRGB(0.678921, 0.872999, 1);
 
@@ -3116,28 +4836,160 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
    *
    * Nothing changed: the row holds the same hex values these lines held.
    */
-  const hemi = new THREE.HemisphereLight(AUTHORED_KEY.hemiSky, AUTHORED_KEY.hemiGround, 1.25);
+  /**
+   * ==== THE FOUR INTENSITIES, AND WHY THEY WERE RE-CUT FOR A RAINFOREST =====
+   *
+   * These four numbers are the single most important thing in the biome and
+   * they were wrong by about two stops. What follows is the arithmetic, because
+   * "it looks flat" is not a thing anyone can act on and a ratio is.
+   *
+   * WHAT SUN:SHADE ACTUALLY WAS. Take an up-facing patch of forest floor and
+   * add up the irradiance reaching it, in the linear working space, weighted to
+   * luminance with Rec.709 (0.2126, 0.7152, 0.0722). The four light colours in
+   * linear are tabulated in the NO_SHADOW block above; their luminances are
+   * sun 0.8411, hemi sky 0.6577, ambient 0.1475, fill 0.4343. The two
+   * directionals arrive at an angle: the sun sits at 40.6 degrees after the
+   * `ay - 6` tilt in `_placeSun`, so N.L = 0.6508, and the fill's authored
+   * placement gives N.L = 0.6463.
+   *
+   *                       intensity   contribution
+   *     hemisphere          1.25        0.8221
+   *     ambient             0.55        0.0811
+   *     fill                0.42        0.1179
+   *     ---------------------------------------
+   *     SHADE (total)                   1.0211
+   *     sun                 2.50        1.3684
+   *     ---------------------------------------
+   *     SUN (shade + sun)               2.3896
+   *
+   *     sun:shade = 2.340 : 1 = 1.23 STOPS.
+   *
+   * Forty-three per cent of every photon in the world was unshadowable. A
+   * shadow map that can only ever take away 57% of the light cannot draw a
+   * shadow; it can draw a slightly duller patch of the same wood. That is what
+   * the flatness was, and no amount of work on the canopy, the mist or the
+   * shafts could have fixed it, because all three of those were being averaged
+   * against a floor that never went dark.
+   *
+   * WHAT A RAINFOREST IS. One to two per cent of the light landing on the
+   * canopy reaches the floor, and the whole drama of the biome is that this
+   * near-darkness is punctured by sunflecks that are twenty to fifty times
+   * their surroundings — 4.3 to 5.6 stops. The entire mechanism was compressed
+   * into one stop.
+   *
+   *                       intensity   contribution
+   *     hemisphere          0.34        0.2236
+   *     ambient             0.13        0.0192
+   *     fill                0.10        0.0281
+   *     ---------------------------------------
+   *     SHADE (total)                   0.2709
+   *     sun                 3.30        1.8063
+   *     ---------------------------------------
+   *     SUN (shade + sun)               2.0772
+   *
+   *     sun:shade = 7.67 : 1 = 2.94 STOPS.
+   *
+   * WHY THREE STOPS AND NOT FIVE. Five is what the real place does and it is
+   * not what a monitor can show. The shade term is what everything not in a
+   * sunfleck is made of — bark, the underside of every crown, the whole floor
+   * between the flecks — and at 4.5 stops it lands under the black point of an
+   * SDR display after ACES, so the wood stops having a readable interior and
+   * becomes a bright fleck floating in nothing. Three stops is eight times the
+   * contrast this had and still leaves shade at 13% of a sunfleck, which is
+   * legible. If the frame turns out to take more, the lever is these four
+   * numbers and nothing else.
+   *
+   * THE SUN WENT UP AS WELL AS THE OTHERS COMING DOWN, and that is deliberate:
+   * a ratio can be bought either by darkening the shade or by brightening the
+   * sun, and doing only the first is how you get a dim wood with good contrast
+   * instead of a dramatic one. The lit total barely moves (2.3896 -> 2.0772,
+   * -13%), so a sunfleck is still a sunfleck; almost all of the change is in
+   * the 73% that came off the shade.
+   *
+   * REJECTED: LEAVING THE FILL WHERE IT WAS. Its own note below says it exists
+   * to keep shadowed bark off black, which is exactly the job this change is
+   * deliberately un-doing — shadowed bark in a rainforest IS very nearly a
+   * silhouette. It comes down with the rest, in the same proportion, rather
+   * than being kept as a private exception that would have quietly put a third
+   * of the old shade back.
+   *
+   * THESE ARE THE AUTHORED LEVELS AND `DAY_KEYS` MULTIPLIES THEM. Every row of
+   * the day table carries `dir/hemi/ambient/fill` as MULTIPLIERS on these four
+   * (see `_recompose`: `authored.hemi * dayLight.hemi`), so changing them here
+   * moves the whole day at once and the table did not have to be rescaled
+   * channel by channel. What the table DID need is the night held still — see
+   * the NIGHT COMPENSATION block on the day table, which lifts the night rows'
+   * multipliers by exactly the inverse of the cut so that "a night you can walk
+   * through" survives a daytime rebalance it was never party to.
+   */
+  const hemi = new THREE.HemisphereLight(AUTHORED_KEY.hemiSky, AUTHORED_KEY.hemiGround, 0.34);
   scene.add(hemi);
 
   // A small omnidirectional floor under everything. Not physical, and not
   // trying to be: it is the difference between a shadowed trunk reading as
   // brown-in-shade and reading as a silhouette.
   //
+  // 0.55 -> 0.13 in the rainforest re-cut above. It contributes 0.0192 of the
+  // 0.2709 that shade is now made of, which is 7% — it is no longer holding
+  // anything off black on its own, and it is not supposed to. The hemisphere
+  // carries 83% of the shade and is the one to reach for if shade needs lifting.
+  //
   // It is also the light that carries the night. See NIGHT LEGIBILITY in the
   // day table: most of what makes midnight dark is the COLOUR of this and of
   // the hemisphere, not their intensities, because a night made by turning the
   // intensities down is a grey day and a night made by turning them blue is a
-  // night you can walk through.
-  const ambient = new THREE.AmbientLight(AUTHORED_KEY.ambientColour, 0.55);
+  // night you can walk through. That is why the night rows of DAY_KEYS were
+  // given a compensating gain when this number came down — the night's absolute
+  // ambient level is unchanged, and only the day was re-cut.
+  const ambient = new THREE.AmbientLight(AUTHORED_KEY.ambientColour, 0.13);
   scene.add(ambient);
 
-  const sun = new THREE.DirectionalLight(AUTHORED_KEY.dirColour, 2.5);
+  const sun = new THREE.DirectionalLight(AUTHORED_KEY.dirColour, 3.3);
   sun.position.copy(SUN_DIR).multiplyScalar(120);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 260;
-  const s = 58;
+  /**
+   * 58 -> 40, AND THE MAP 2048 -> 1024 WITH IT. THE TWO MOVED TOGETHER AND THAT
+   * IS THE ONLY REASON THIS IS AFFORDABLE TO LOOK AT.
+   *
+   * The requirement changed: 240 fps, and the frame that has to fit 4.166 ms is
+   * the one the ANCHOR STEP LANDS ON — `gpu + shadow`, not `gpu`. At the deep
+   * station that was 5.77 ms, so the shadow pass could not stay where it was.
+   *
+   * The cancellation proved below says the pass costs `ρ·N²` and the BOX
+   * CANCELS OUT, so the map edge is the only price and the box is then FREE to
+   * choose. That turns "make the shadow cheaper" from one decision into two:
+   * how much fill to buy (N), and then how to spend it (s). `shadow-visible.mjs`
+   * exists to answer the second, and it measured the three ways to spend a
+   * quarter of today's fill against the shipping frame — mean Δ out of 255 over
+   * four stations with ground in view:
+   *
+   *     N     s    mm/texel   range   mean Δ   worst station, px moved >24/255
+   *     2048  58      56.6     58 m     —      (the reference)
+   *     1024  58     113.3     58 m    0.22    0.37%  (glade)
+   *     1024  40      78.1     40 m    0.14    0.12%  (glade)
+   *     1024  29      56.6     29 m    0.09    0.58%  (stream)
+   *     1536  44      57.3     44 m    0.11    0.05%
+   *
+   * s = 29 has the lowest mean and the worst single frame, and those are the
+   * same fact: keeping today's texel exactly means every shadow inside 29 m is
+   * pixel-identical, and every shadow between 29 and 58 m is simply GONE. s = 40
+   * is the row that is never worst on either metric — 1.38x coarser dapple, and
+   * shadows that stop 18 m sooner. 1536 was measured too and does not fit the
+   * budget: `ultracut.mjs` puts 1536/44 at 4.15-4.26 ms armed.
+   *
+   * WHAT IT COSTS, PLAINLY. The near dapple is softer than it was; a leaf
+   * shadow that was three texels across is two. And the shadowless distance
+   * this file already admitted to — "a distant hillside is lit as though the
+   * sun reached all of it" — starts 18 m closer to the player.
+   *
+   * `alwaysNear` IN main.js MOVED WITH IT, 82 -> 61, on the same arithmetic:
+   * s + ANCHOR_HOLD + ~15 m of canopy lean. The two move together or not at
+   * all — see the third paragraph below, which is still the rule.
+   */
+  const s = 40;
   sun.shadow.camera.left = -s;
   sun.shadow.camera.right = s;
   sun.shadow.camera.top = s;
@@ -3146,10 +4998,99 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
   sun.shadow.normalBias = 0.05;
   scene.add(sun);
   scene.add(sun.target);
+  /**
+   * ==== WHY THE ORTHO BOX IS NOT WIDENED, WRITTEN DOWN SO IT STOPS BEING ASKED
+   *
+   * `s = 40` means no surface past 40 m of the anchor casts or receives a
+   * shadow, which is a real limitation: a distant hillside is lit as though the
+   * sun reached all of it. Three things say leave it.
+   *
+   * TEXEL DENSITY. The map is 1024 across 2s metres, so a texel is 80/1024 =
+   * 7.81 cm at the authored elevation. Going to s = 58 at the same map makes it
+   * 11.33 cm, +45% on every shadow edge in the frame — and the thing this wood
+   * is made of is DAPPLE, which is a shadow edge per leaf. Trading the sharpness
+   * of the near dapple for shadows on a hill you cannot resolve is the wrong way
+   * round. NOTE THE INVERSION THIS PARAGRAPH HAS BEEN THROUGH: it used to argue
+   * against widening at a fixed 2048. The map is 1024 now and the same
+   * arithmetic argues against widening twice as hard, because the texels it
+   * would stretch are already 38% bigger than the ones it was written about.
+   *
+   * COST. The shadow pass is a second traversal, and this project has measured
+   * that 84% of it is alpha-tested leaf cards. Widening the box at a FIXED map
+   * does not add cost — see the cancellation below — it spends the sharpness,
+   * and there is none spare: Ultra now stands at 3.7-4.0 ms armed against a
+   * 4.166 ms target, and that target is the frame the anchor step lands on.
+   *
+   * IT IS NOT THIS FILE'S TO WIDEN ALONE. main.js keeps every tree inside
+   * `alwaysNear: 61` m on the arithmetic 40 + ANCHOR_HOLD + ~15 (see the note
+   * on ANCHOR_HOLD). Raising s without raising that culls trees whose shadows
+   * are still inside the shadow camera, and their shadows blink off the ground
+   * in front of you. The two move together or not at all.
+   *
+   *
+   * ==== AND TIGHTENING IT SAVES NOTHING, WHICH IS NOT OBVIOUS ==============
+   *
+   * `shadowcost.mjs` measured `box 58 -> 38` at -0.27 ms, i.e. nothing, and
+   * that reads as a broken arm until the arithmetic is written down. It is not
+   * broken; it is a conservation law, and it is worth having in the file
+   * because "make the shadow box tighter" is the first thing anyone proposes.
+   *
+   * The map is a FIXED 2048 x 2048 grid stretched over the box, and the
+   * projection is ORTHOGRAPHIC, so a leaf card at 55 m rasterises to exactly as
+   * many texels as the same card at 5 m. Total texels touched is therefore
+   * (leaf area inside the frustum) / (metres per texel) squared. The numerator
+   * goes as s squared. The denominator goes as s squared. They cancel. Halving
+   * the box quarters the number of crowns and quadruples the texels each one
+   * covers, and the shadow pass does the same amount of rasterising either way.
+   *
+   * Which is why the ONLY measured lever on this pass is the map's edge — the
+   * savings from halving it track the texel counts almost exactly.
+   *
+   * AND THE COROLLARY IS THE ONE THAT WAS MISSED FOR MONTHS, so it is stated
+   * here as a rule rather than left to be re-derived: once the map is chosen,
+   * THE BOX IS FREE. Every value of `s` costs the same. So the box is not a
+   * performance decision at all, it is a picture decision — sharpness against
+   * range, at a fixed price — and the way to make it is to render both and count
+   * the pixels. `shadow-visible.mjs` does exactly that, and the table above
+   * `const s` is what it said. This is how 2048/58 became 1024/40 rather than
+   * 1024/58: same fill, 45% sharper, 18 m less reach.
+   *
+   * THE CASTER SPLIT IS STILL THE UNTAKEN LEVER, and it is the one thing the
+   * cancellation does NOT kill: stop the leaf layer casting past ~30 m while
+   * leaving the box where it is, and the vacated texels stay empty instead of
+   * being handed to the near crowns. `ultracut.mjs` prices the proxy for it at
+   * 0.70 ms — real, and less than the 1.15 a previous session predicted. It
+   * would cost a `mirrorOf` non-casting duplicate of the canopy, i.e. fifteen
+   * more draw calls whenever shadows are on. That change is forest.js's to make.
+   *
+   * THE SAME CANCELLATION RETIRES THE CASCADE PLAN, and the note recommending
+   * it is now inverted rather than merely stale. Two 2048 cascades were the
+   * right next lever when Ultra ran a 4096 map: 2 x 4.2 M texels against 16.8 M
+   * is half the fill. Ultra is a single 1024 now, so the same proposal is 8.4 M
+   * against 1.0 M — it octuples the shadow pass to buy near crispness in a
+   * rainforest, which is the trade that was already rejected once. Do not
+   * re-derive it from the old note.
+   */
+  /**
+   * ==== AND THE SHADOW CAMERA IS SNAPPED TO ITS OWN TEXEL GRID ==============
+   *
+   * See `_placeSun`, which is where it happens. This is the constant it needs:
+   * one shadow-map texel expressed in metres of world. Read off the live
+   * `mapSize` rather than baked, because the `shadowMapSize` quality knob moves
+   * it and a snap quantised to the wrong grid is worse than no snap at all —
+   * it would displace the map by an arbitrary fraction of a texel instead of
+   * landing it on one.
+   */
+  const shadowTexel = () => (2 * s) / sun.shadow.mapSize.x;
 
-  // A cool fill from the opposite side keeps shadowed bark from going to black
-  // without lifting the whole image, which is what an ambient light would do.
-  const fill = new THREE.DirectionalLight(AUTHORED_KEY.fillColour, 0.42);
+  // A cool fill from the opposite side. It used to be here to keep shadowed
+  // bark off black without lifting the whole image, which is what an ambient
+  // light would do — and 0.42 did that job well enough to be a third of the
+  // reason nothing in this wood could be dark. 0.42 -> 0.10 with the rest of
+  // the shade (see the block above the hemisphere): its remaining job is the
+  // COOL RIM on a trunk's shadow side, which is a hue, and a hue survives an
+  // intensity cut that a floor does not.
+  const fill = new THREE.DirectionalLight(AUTHORED_KEY.fillColour, 0.1);
   fill.position.set(-SUN_DIR.x * 60, 40, -SUN_DIR.z * 60);
   scene.add(fill);
   /**
@@ -3203,6 +5144,188 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
   };
   /** How long after the rain the floor is still giving its water back. */
   const STEAM_LAG = 240;
+
+  /**
+   * ==== PRECIPITATION AND WETNESS ARE TWO NUMBERS, AND THEY USED TO BE ONE ===
+   *
+   * `wet` did four unrelated jobs: how many particles are drawn, how thick the
+   * fog is, how dark the sun is, and how much steam comes off the floor
+   * afterwards. For rain all four are the same number and nobody had a reason
+   * to notice. For snow they are not: it snows for hours in a taiga and the
+   * ground does not get wet, the fog does not close in the way a warm rain's
+   * does, and nothing steams off a frozen floor at all. Left as one number, the
+   * winter wood would have looked rained-on the whole time it was snowing —
+   * dark, hazy, and with the sun down 45% — which is not what a bright
+   * snowfall looks like from underneath.
+   *
+   * So: `precipAt` is what falls out of the sky and drives the particles and
+   * the cloud deck, and `wet` in `applyDay` is what it has done to the ground.
+   * In every land but the taiga they are the same function and the same value,
+   * and in the rainforest `precipAt` IS `rainAtTime`.
+   */
+  const SNOWY = currentLand().weather === 'snow';
+  /**
+   * Same signal `rainAtTime` and `dayPhase` are pinned by, hoisted to a
+   * constant because it is now read on a path that runs every frame. See
+   * `forceWeather` below for what it costs and how to get round it.
+   */
+  const AUTOMATED = typeof navigator !== 'undefined' && !!navigator.webdriver;
+  /**
+   * THE FLOOR UNDER A TAIGA'S PRECIPITATION, and the reason there has to be
+   * one.
+   *
+   * `rainAtTime` is a rainforest's clock: dry four fifths of the time and then
+   * a burst, which is exactly right for a place whose weather IS the event.
+   * A boreal winter is the opposite — the snow is the standing condition and
+   * the clear hour is the event. Left on the rainforest's duty cycle the winter
+   * wood would have had snow in it about a fifth of an evening and the other
+   * four fifths would have been a cold wood with nothing happening in it, which
+   * is the same "the feature does not work" that the units bug in the weather
+   * block produced for four fifths of all seeds.
+   *
+   * 0.35 is a floor rather than a constant: the same two sines still ride on
+   * top of it, so a taiga still has heavier and lighter snow and still has
+   * squalls, it simply never fully stops. At 0.35 the count-by-discard in the
+   * rain shader keeps 35% of 3600 particles — 1260 flakes over a 46 m box,
+   * which is a steady fall you can see the far trees through.
+   */
+  const SNOW_FLOOR = 0.35;
+  /**
+   * WHAT IS FALLING at an instant of world clock. Same purity contract as
+   * `rainAtTime` and it inherits the webdriver pin through it: under automation
+   * `rainAtTime` is 0 and `Math.max(0, 0.35)` is 0.35 in the taiga — which is
+   * FINE and is stated here so nobody 'fixes' it. No pinned gate runs in the
+   * taiga: `check:land`, `check:terrain`, `check:day --only=identity`,
+   * `check:authored` and every row of `.perf/baseline.json` are on `grove-01`,
+   * which is the rainforest, where this function is `rainAtTime` exactly.
+   */
+  const precipAt = (sec) => (SNOWY && !AUTOMATED ? Math.max(rainAtTime(sec), SNOW_FLOOR) : rainAtTime(sec));
+
+  /**
+   * ==== THE ONE DOOR AUTOMATION HAS INTO THE WEATHER ========================
+   *
+   * NONE OF THIS IS REACHABLE BY ANY EXISTING GATE, and that is on purpose and
+   * is also a problem. `rainAtTime` returns 0 under `navigator.webdriver` — see
+   * the long block on it — so under automation there is no rain, no cover, no
+   * lightning and (through `AUTOMATED` above) no snow either. Every stored
+   * screenshot in `scripts/` is of a dry world and stays that way.
+   *
+   * WHY THE SNOW FLOOR IS PINNED TOO, when the taiga has no pixel-diffing gate
+   * of its own: because `gallery.mjs --lands=taiga` and `_taiga-shot.mjs` are
+   * before/after comparisons, and a 3600-particle field drifting on the wall
+   * clock would make every pair of taiga frames differ in a few thousand pixels
+   * for reasons that have nothing to do with the change being reviewed. That is
+   * exactly the failure `world-shots.mjs` was written about. Pinned, a taiga
+   * pair differs only where the code differs.
+   *
+   * SO THERE IS ONE EXPLICIT DOOR, and it is a function rather than a uniform
+   * poke. `world-shots --rain=` already writes `ru.uRain.value` directly after
+   * `applyDay` has run, which works for the drops and cannot reach the cloud
+   * deck, the sun's dimming, the fog or the flash — four things that are now
+   * most of what weather looks like. This sets the INPUTS instead, so
+   * everything downstream composes exactly as it does in a real storm:
+   *
+   *   RR.atmosphere.forceWeather({ precip: 0.9, cover: 1, lightning: 0.7 })
+   *   RR.atmosphere.forceWeather(null)   // back to the clock
+   *
+   * Fields are all optional and all 0..1 except `bearing`, which is radians:
+   *   precip     what falls. Drives the particles and, in a rain land, wetness.
+   *   wet        wetness on its own, if it has to differ from precip.
+   *   cover      the cloud deck. Set this alone to photograph an approach.
+   *   lightning  the flash envelope, held at a constant instead of fired.
+   *   bearing    which way the flash came from.
+   */
+  let _weatherForce = null;
+  /** The descriptor handed to the sound layer. Mutated, never reallocated. */
+  const _strike = { id: -1, energy: 0, bearing: 0, km: 0 };
+
+  /**
+   * ==== LIGHTNING ============================================================
+   *
+   * ON THE SAME PURE-CLOCK DISCIPLINE AS THE RAIN, for the same reason: a
+   * strike that two people in one clearing do not see at the same instant is
+   * worse than no strike, and a strike that has to be broadcast opens the door
+   * `one-client-simulates-the-animals` records deciding to keep shut. So it is
+   * a slot index, a hash of that index, and an envelope — no state, joinable
+   * late, and evaluable for a moment in the past if anything ever wants that.
+   *
+   * 6.5 s SLOTS with `hash < wet^2 * 0.35`. The square is what makes lightning
+   * belong to the storm rather than to the drizzle: at wet = 0.4 the chance is
+   * 5.6% a slot, about one strike a minute and a half, and at wet = 1.0 it is
+   * 35%, about one every nineteen seconds. A linear term put strikes into
+   * light rain, where they read as a bug.
+   */
+  const STRIKE_SLOT = 6.5;
+  /**
+   * The seed's own lightning, so two worlds are not struck in step. Drawn from
+   * the same `rainRng` stream as the two rain phases, immediately after them,
+   * so it is a pure function of the seed like everything else here.
+   */
+  const strikeSalt = Math.floor(rainRng() * 0x7fffffff);
+  /**
+   * An integer hash, NOT `makeRng`. `makeRng` builds a closure and this is
+   * evaluated every frame; the allocation would be small and permanent and
+   * pointless. Two rounds of xorshift-multiply is the standard 32-bit finaliser
+   * and it decorrelates consecutive slot indices completely, which is the only
+   * property needed — consecutive integers through a weak hash give a visible
+   * period, and a period in lightning is a metronome.
+   */
+  const strikeHash = (n) => {
+    let x = (n + strikeSalt) | 0;
+    x = Math.imul(x ^ (x >>> 15), 0x2c1b3c6d);
+    x = Math.imul(x ^ (x >>> 12), 0x297a2d39);
+    x ^= x >>> 15;
+    return (x >>> 0) / 4294967296;
+  };
+  /**
+   * ==== THE ENVELOPE, AND THE FLASH-RATE ARITHMETIC =========================
+   *
+   * THIS PROJECT'S RULE IS "NOTHING MAY MODULATE LUMINANCE ABOVE 3 Hz AND
+   * THERE IS NO NODE THAT CAN PRODUCE A FULL-FIELD FLASH", and lightning is
+   * plainly the hardest case that rule has ever been asked about. The
+   * arithmetic, written down so the next person does not have to redo it:
+   *
+   *   COUNT. One strike is two rising edges — the main stroke at t = 0 and one
+   *   re-strike at t = 0.09 s — and the whole thing is over by 0.20 s. Slots
+   *   are 6.5 s apart and at most one fires per slot, so the worst one-second
+   *   window anywhere on the clock contains exactly TWO edges. The general
+   *   flash threshold everyone works to is "more than three in any one second";
+   *   two is under it, and it is under it by construction rather than on
+   *   average. The MEAN rate at the very worst (wet = 1, every slot firing) is
+   *   2 edges per 6.5 s = 0.31 Hz.
+   *
+   *   DEPTH. The peak is 0.45 on `hemi` and 0.40 on `ambient`, and the sky term
+   *   is 0.34 at its brightest — of which only 22% is omnidirectional (see the
+   *   `toward` term in the sky shader), so the FULL-FIELD component of the sky
+   *   flash is about 0.075. Under the storm cover this fires in, `hemi` and
+   *   `ambient` are the shaded side of everything and the sun is down 45%, so
+   *   the frame luminance swing is around a fifth rather than the doubling a
+   *   naive white-out gives. It is a bright moment in a dark wood, not a strobe.
+   *
+   *   AND IT IS NOT A MODULATION. The 3 Hz rule is about a FIELD that
+   *   oscillates — an aurora, a pulse, a breathing canopy — where the eye has
+   *   time to entrain. Two transients 90 ms apart followed by at least 6.3 s of
+   *   nothing has no periodic component in that band at all.
+   *
+   * THE SHAPE. 55 ms rise-and-fall on the main stroke, then a second stroke at
+   * 90 ms at 78% carrying a 70 ms tail. That is a real cloud-to-cloud flash's
+   * signature and it is the reason lightning does not read as a light being
+   * switched: the re-strike is what your eye actually remembers.
+   *
+   * NOT A SINGLE-FRAME STEP EITHER. The rise is 12 ms, which is about a frame
+   * at 60 Hz and two or three at 240 — enough that the flash arrives rather
+   * than teleports, and short enough that it is still lightning.
+   */
+  const strikeEnv = (t) => {
+    if (t < 0 || t > 0.2) return 0;
+    // The decay starts where the rise finishes rather than at t = 0, so the
+    // envelope actually reaches 1.0. Multiplying a 12 ms ramp by a decay that
+    // began at zero peaks at 0.78 instead, which is a flash that never lands.
+    const main = clamp01(t / 0.012) * Math.max(0, 1 - Math.max(0, t - 0.012) / 0.055);
+    const re = t < 0.09 ? 0 : Math.max(0, 1 - (t - 0.09) / 0.07) * 0.78;
+    return Math.min(1, Math.max(main, re));
+  };
+
   const water = buildWater(scene);
 
   motes.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
@@ -3293,6 +5416,71 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
   let dayDir = 1;
   /** The `fogDistance` quality knob's multiplier. See `setFogScale`. */
   let fogScale = 1;
+  /**
+   * ==== THE LAND'S AIR. THREE SCALARS, AND DELIBERATELY NOT A SECOND TABLE ==
+   *
+   * `taiga.js` carried an advisory `sky: 'boreal'` that nothing read. What a
+   * boreal winter actually wants is a low flat sky, a long cold twilight and
+   * grey air, and the tempting way to get it is a second `DAY_KEYS` — which is
+   * ~15 keyframes of ~20 fields, nobody has measured what switching one costs,
+   * and it is a second copy to keep in step with every future lighting pass.
+   *
+   * Three multipliers applied where the table is CONSUMED gets the same look
+   * out of arithmetic on values `_recompose` already composes. It is the same
+   * discipline as `fogScale` and `caveT`: nobody assigns, everybody multiplies
+   * into one product, and the four opinions about the fog meet in one place.
+   *
+   * READ ONCE, AT BUILD TIME, like `uSnow` above and for the same reason: the
+   * land cannot change while the page is up, and a per-frame property read on
+   * something that cannot change is a habit that eventually gets copied into a
+   * loop that matters.
+   *
+   * THE RAINFOREST DECLARES 1 / 1 / null and is provably untouched: `x * 1` is
+   * exact, and a null tint is a branch not taken rather than a lerp by zero, so
+   * that land does not even recompute the float. The `??` is for a third land
+   * whose author forgets the field.
+   */
+  const AIR = currentLand().air ?? { hemi: 1, fog: 1, tint: null };
+  const AIR_TINT = AIR.tint ? new THREE.Color(AIR.tint.colour) : null;
+  /**
+   * A FOURTH FIELD, AND IT IS THE ONE THAT MEASURED WRONG.
+   *
+   * The three above were reasoned and they are right as far as they go. Then
+   * the winter wood's floor was MEASURED — `scripts/_snow-probe.mjs`, the mean
+   * colour of the ground band of the frame — and it came out at a saturation of
+   * 0.25 to 0.42 with a mean hue of 70-93 degrees standing under the trees.
+   * That is yellow-green, on snow. Halving the substrate showing through moved
+   * it by 0.01, which is what settled where it was actually coming from:
+   *
+   *   NOT THE ALBEDO. THE LIGHT.
+   *
+   * `hemiGround` is the bounce off the floor, and the table's value for it is a
+   * rainforest's — a dark green-brown, because that is what a rainforest floor
+   * is. A snowfield bounces WHITE, and it bounces a great deal of it: fresh
+   * snow is 0.8-0.9 albedo against leaf litter's 0.10. So every shaded surface
+   * in the taiga was being lit from below by a colour that does not exist in
+   * that land, and the snow was picking it up exactly as a bright diffuse
+   * surface should.
+   *
+   * So: one colour and two amounts, rotating the SKY and GROUND halves of the
+   * hemisphere separately, plus the ambient and fill that stand in for the rest
+   * of it. THE SUN IS DELIBERATELY NOT TOUCHED. Sunlight on snow at eight in
+   * the morning is warm — that is not the bug, and cooling the direct light
+   * would take the one warm thing in a cold world away and flatten the whole
+   * day. The complaint is about the SHADE, and the shade is the hemisphere.
+   *
+   * `null` in the rainforest, so that land takes a branch and not a lerp.
+   */
+  const AIR_LIGHT = AIR.light
+    ? {
+        sky: new THREE.Color(AIR.light.sky ?? 0xffffff),
+        ground: new THREE.Color(AIR.light.ground ?? 0xffffff),
+        sun: new THREE.Color(AIR.light.sun ?? 0xffffff),
+        skyAmount: AIR.light.skyAmount ?? 0,
+        groundAmount: AIR.light.groundAmount ?? 0,
+        sunAmount: AIR.light.sunAmount ?? 0,
+      }
+    : null;
   /**
    * How far underground the player is, 0..1. See `setCave`.
    *
@@ -3395,15 +5583,78 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
    * all night, which is a defensible look arrived at by an indefensible route.
    */
   let dayLit = 1;
+  /**
+   * ==== HOW SHUT THE SKY IS, 0..1. Written by the weather block in `applyDay`.
+   *
+   * THE OVERCAST DECK DARKENED THE WOOD AND DID NOT CHANGE ITS COLOUR, and the
+   * second half is most of why a storm did not land. `gloom` already takes the
+   * sun down and lifts the hemisphere — the wood genuinely goes dark under
+   * cover, that part works — but every colour in the frame stayed the colour of
+   * a clear afternoon, so the picture read as the same wood at dusk rather than
+   * as the same wood under a lid. What actually happens before rain is that the
+   * light goes FLAT and slightly YELLOW-GREY: the sun stops being a direction
+   * and becomes a ceiling, so the warm-toward-the-sun / cold-away-from-it
+   * difference that `_applyScatter` exists to draw simply stops existing.
+   *
+   * That makes this the right place for it and the only cheap one. The fog
+   * colour is owned by `_recompose` and re-derived from `base.fogColour` here
+   * every frame; the weather is computed later in `applyDay` than `_recompose`
+   * runs, so a lerp applied there would be overwritten by this function on the
+   * same frame. A scalar handed across instead is two colour operations on a
+   * function that is already doing three.
+   *
+   * IT IS AN EXACT NO-OP IN A DRY WORLD. `precipAt` returns 0 under
+   * `navigator.webdriver`, so cover and wet are 0, so this is 0, so both guards
+   * below are skipped and every pinned frame is what it was.
+   */
+  let stormGloom = 0;
+  const _stormTmp = new THREE.Color();
   function _applyScatter() {
     scene.fog.color.copy(base.fogColour);
+    /**
+     * THE HAZE GOES FLAT AND YELLOW-GREY FIRST, BEFORE THE SCATTER.
+     *
+     * Toward the hour's OWN luminance rather than toward a literal, so this
+     * cannot fight the day table: a boreal winter overcast and a tropical one
+     * are each a desaturated version of their own air rather than the same
+     * grey. 1.06/1.02/0.88 on that luminance is the yellow-grey — a sixth of a
+     * stop of warmth between red and blue, which is the amount that reads as
+     * "before a storm" rather than as "sepia".
+     *
+     * 0.6 of the way at full gloom rather than all of it: some of the hour has
+     * to survive or a storm at seven in the evening looks like a storm at noon.
+     */
+    if (stormGloom > 0.0005) {
+      const l =
+        scene.fog.color.r * 0.2126 +
+        scene.fog.color.g * 0.7152 +
+        scene.fog.color.b * 0.0722;
+      _stormTmp.setRGB(l * 1.06, l * 1.02, l * 0.88);
+      scene.fog.color.lerp(_stormTmp, stormGloom * 0.6);
+    }
     /**
      * Underground there is no sun and no sky, so there is nothing to scatter —
      * and the cave fog is a colour the whole cave was tuned against. Fading the
      * term out with depth rather than switching it off at a threshold keeps the
      * walk into a mouth continuous.
      */
-    const gate = (1 - caveT) * dayLit;
+    /**
+     * AND A SHUT SKY HAS NO DIRECTION IN IT EITHER, which is the second half of
+     * the storm and the half that is actually "flat".
+     *
+     * Forward scatter needs a SOURCE to scatter forward. Under a closed deck
+     * the sun is a ceiling rather than a direction: the haze toward it and the
+     * haze away from it are lit identically, so the warm-cold difference this
+     * function draws has to go out with the cover. `1 - stormGloom` and not a
+     * lerp toward neutral, because neutral IS `base.fogColour` (with the
+     * yellow-grey above already folded in) and that is what `gate` at zero
+     * leaves on the screen.
+     *
+     * It is the same reason the shafts go out with the sun a few lines into the
+     * weather block, and it is the cheapest half of this whole change: two
+     * multiplies that were already happening.
+     */
+    const gate = (1 - caveT) * dayLit * (1 - stormGloom);
     if (gate <= 0.001) return;
     /**
      * Warm toward the sun, cold away from it, and NEITHER AT RIGHT ANGLES.
@@ -3465,7 +5716,11 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
     const k = clamp01(dayDir);
     const comp = compensating ? k : 0;
     base.sunIntensity = authored.sun * dayDir * (1 + (NO_SHADOW_SUN - 1) * comp);
-    base.hemiIntensity = authored.hemi * dayLight.hemi * (1 + (NO_SHADOW_HEMI - 1) * comp);
+    // `AIR.hemi` is the land's, and it is 1 in the rainforest. It multiplies
+    // rather than assigns, so the hour and the no-shadow compensation both
+    // still own what they owned.
+    base.hemiIntensity =
+      authored.hemi * dayLight.hemi * AIR.hemi * (1 + (NO_SHADOW_HEMI - 1) * comp);
     ambient.intensity = authored.ambient * dayLight.ambient * (1 + (NO_SHADOW_AMBIENT - 1) * comp);
     fill.intensity = authored.fill * dayLight.fill * (1 + (NO_SHADOW_FILL - 1) * comp);
     base.sunColour.copy(dayLight.colour);
@@ -3473,6 +5728,27 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       base.sunColour.r *= 1 + (NO_SHADOW_RATIO.r - 1) * comp;
       base.sunColour.g *= 1 + (NO_SHADOW_RATIO.g - 1) * comp;
       base.sunColour.b *= 1 + (NO_SHADOW_RATIO.b - 1) * comp;
+    }
+    /**
+     * …AND A FRACTION OF THE LAND'S OWN LIGHT, IF IT HAS ONE.
+     *
+     * A LERP AND NOT A REPLACEMENT, and that distinction is the whole design.
+     * The day table's noon sun is #fff2d8 — a tropical warm white — and on a
+     * snowfield that is the single largest contributor to the measured hue of
+     * 44-46 degrees, i.e. the yellow the winter wood was reported as having.
+     * But the same table's golden hour is warm for a REASON, and a boreal
+     * golden hour is warm too; replacing the colour would take the one warm
+     * moment out of a cold world.
+     *
+     * Lerping toward a cool white by a fixed fraction moves every hour by the
+     * same proportion of the distance to neutral, so noon loses most of its
+     * yellow and sunset keeps most of its orange — which is what a high-latitude
+     * day actually looks like. The amount is deliberately much smaller than the
+     * hemisphere's, because this is the direct light and the complaint was
+     * about the shade.
+     */
+    if (AIR_LIGHT !== null && AIR_LIGHT.sunAmount > 0) {
+      base.sunColour.lerp(AIR_LIGHT.sun, AIR_LIGHT.sunAmount);
     }
     /**
      * FOUR OPINIONS ABOUT THE FOG AND ONE PLACE THEY MEET.
@@ -3487,8 +5763,27 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
      * float and the authored frame is untouched.
      */
     base.fogDensity =
-      authored.fogDensity * dayLight.fogDensity * fogScale * (1 + (CAVE_FOG_MUL - 1) * caveT);
-    base.fogColour.copy(dayLight.fog).lerp(CAVE_FOG_COLOUR, caveT);
+      authored.fogDensity *
+      dayLight.fogDensity *
+      AIR.fog *
+      fogScale *
+      (1 + (CAVE_FOG_MUL - 1) * caveT);
+    base.fogColour.copy(dayLight.fog);
+    /**
+     * The land's cold rotation, and it is a ROTATION rather than a colour.
+     * `dayLight.fog` is what makes dawn orange and midnight indigo; a land that
+     * assigned its own fog colour would delete the day cycle from the horizon,
+     * which is the largest thing in the frame. At 0.55 the hour still moves it
+     * and every hour of it comes out colder.
+     *
+     * BEFORE the cave lerp, so at depth the cave still wins outright — the
+     * measured target for that work was #7f9a86 in the open wood to #0a0d24 at
+     * thirty metres down, and a land tint applied after would have pulled the
+     * second one back toward the sky. A null tint is a branch not taken, so the
+     * rainforest's frame is bit-identical.
+     */
+    if (AIR_TINT !== null) base.fogColour.lerp(AIR_TINT, AIR.tint.amount);
+    base.fogColour.lerp(CAVE_FOG_COLOUR, caveT);
     /**
      * The fog colour is written to BOTH `base` and the fog itself, and the
      * second half is not belt and braces — it is a bug elsewhere.
@@ -3526,23 +5821,172 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
     _anchorY: NaN,
     /** Shadow map re-renders caused by the clock. Read by day-check.mjs. */
     sunSteps: 0,
+    /**
+     * THE PUBLISHED WEATHER SCALARS, DECLARED HERE WITH DEFAULTS RATHER THAN
+     * SPRINGING INTO EXISTENCE ON THE FIRST `applyDay`.
+     *
+     * `rainLevel` used to do the latter and every consumer had to write
+     * `?? 0` — see the two call sites in main.js. Anything read before the
+     * first tick (the audio graph builds early, and `ambience.js` will be
+     * reading `lightning` every frame) then gets `undefined`, which in an
+     * arithmetic expression is NaN and in a gain node is a thrown error.
+     *
+     *   rainLevel        0..1 WETNESS. Rain only; a snowing taiga publishes 0.
+     *   precipLevel      0..1 what is FALLING, whichever land. Drives particles.
+     *   precipKind       'rain' | 'snow'.
+     *   cloudCover       0..1 how closed the deck is. Runs 90 s ahead of the rain.
+     *   squallLevel      0..1 the wind's share of the front. Runs 40 s ahead.
+     *   steamLevel       0..1 the floor giving its water back after a shower.
+     *   lightning        0..1 the flash envelope, this frame. Peaks for ~0.2 s.
+     *   lightningBearing radians, compass bearing of the last strike. Holds.
+     *   strike           the descriptor ambience.js wants, or null. See below.
+     */
+    rainLevel: 0,
+    precipLevel: 0,
+    precipKind: 'rain',
+    cloudCover: 0,
+    squallLevel: 0,
+    steamLevel: 0,
+    lightning: 0,
+    lightningBearing: 0,
+    /** { id, energy, bearing, km } while a flash is on screen, else null. */
+    strike: null,
   };
+
+  /**
+   * ==== THE ANCHOR FRAME WAS DOING FOUR EXPENSIVE THINGS AT ONCE ============
+   *
+   * The frame on which the anchor moves is the one frame in ~360 that pays for
+   * the shadow map — 1.85 ms of GPU on a 4.18 ms frame, and the single largest
+   * spike the game has. It was ALSO the frame that re-seated the sun shafts (81
+   * seeded RNGs, 81 `heightAt` calls and two instance attributes re-uploaded)
+   * and the frame that re-seated the world mist (314 `heightAt` calls and two
+   * more attribute uploads). Three unrelated costs, deliberately placed on the
+   * same trigger because that trigger fires rarely — which is exactly the
+   * reasoning that turns a rare event into an unaffordable one.
+   *
+   * So the two CPU-and-upload jobs are handed to the frames AFTER the shadow
+   * commit, one each, and never share a frame with it or with each other. This
+   * is the same move main.js already makes with `shadowPending`, which keeps the
+   * shadow map off the frame the culler re-uploaded on, and it is made here for
+   * the same reason: none of these three is cheaper than it was, but no single
+   * frame carries more than one of them.
+   *
+   * WHAT A DEFERRED FRAME LOOKS LIKE, because it has to be nothing. The shafts
+   * re-seat on a 19 m lattice and the world mist on a 36 m one, so a frame of
+   * lag at a 4 m/s walk leaves both 1.7 cm behind where they would have been —
+   * against a mist tile whose nearest visible edge has 9 m of margin and shafts
+   * that are seeded per cell and fade out long before the lattice edge. It is
+   * two orders of magnitude below anything either system can express.
+   *
+   * NOT DEFERRED ON THE FIRST ANCHOR. A fresh session may spawn a long way from
+   * the origin the builders seeded at, and two frames of a shaft lattice around
+   * the wrong point is a visible thing rather than a 1.7 cm one.
+   */
+  let _pendingShafts = false;
+  let _pendingMist = false;
+  let _pendingX = 0;
+  let _pendingZ = 0;
+
+  /** The shadow camera's own basis, rebuilt per commit. See `_placeSun`. */
+  const _shX = new THREE.Vector3();
+  const _shY = new THREE.Vector3();
+  const _shZ = new THREE.Vector3();
+  const _shUp = new THREE.Vector3(0, 1, 0);
 
   /**
    * Point the sun at the anchor from wherever it is now.
    *
-   * Reproduces the arithmetic `follow` used to do inline, exactly — including
-   * the `ay - 6` on the target, which is not cosmetic: it tilts the light a
-   * further 2.4° above SUN_DIR, so the shipping sun is at 40.6° and not 38.2°,
-   * and anything that placed it differently would be a different world.
+   * Keeps the arithmetic `follow` used to do inline — including the `ay - 6` on
+   * the target, which is not cosmetic: it tilts the light a further 2.4° above
+   * SUN_DIR, so the shipping sun is at 40.6° and not 38.2°, and anything that
+   * placed it differently would be a different world — and then displaces the
+   * whole pair by under half a texel. That displacement is the rest of this
+   * comment.
+   *
+   * ==== THE ANCHOR JUMP USED TO MOVE EVERY SHADOW IN THE WORLD =============
+   *
+   * The anchor is hysteretic: it does not move at all until the body is
+   * ANCHOR_HOLD = 6 m away, and then it moves the whole 6 m in one frame. That
+   * is what makes the shadow map affordable (see `follow`), and it has a tell.
+   * The map is a fixed 2048 x 2048 grid pinned to the shadow camera, so moving
+   * the camera 6 m re-rasterises every shadow in the wood at a NEW SUB-TEXEL
+   * OFFSET: each edge lands on a different side of a different texel boundary
+   * and the entire dapple shifts by up to half a texel at once. One frame of
+   * every crown's shadow crawling, once per six metres walked. It is the
+   * classic shadow-shimmer artefact arriving in discrete jumps rather than
+   * continuously, which is if anything easier to see — a crawl reads as
+   * softness, a jump reads as a glitch.
+   *
+   * THE FIX IS THE STANDARD ONE AND IT IS FREE. Quantise the shadow camera's
+   * centre to the map's own texel grid, measured in the LIGHT'S basis rather
+   * than in world x/z — the grid is the light's, not the world's. Then a 6 m
+   * anchor jump moves the frustum by a whole number of texels, every texel
+   * covers the same patch of world it covered before, and the shadows do not
+   * move at all. About thirty flops, once per commit, on a frame that is
+   * already re-rendering the shadow map.
+   *
+   * THE BASIS IS THE ONE THREE WILL BUILD, not an approximation of it.
+   * `DirectionalLightShadow.updateMatrices` does `shadowCamera.lookAt(target)`
+   * with the default up, and `Matrix4.lookAt` gives z = normalize(eye - target),
+   * x = normalize(up x z), y = z x x. Those three lines are reproduced exactly
+   * below. Deriving the basis from `_lightDir` instead would be subtly wrong,
+   * because the eye is not on `_lightDir` from the target — the `ay - 6` puts
+   * six metres of vertical between them.
+   *
+   * BOTH ENDS MOVE BY THE SAME OFFSET, so `eye - target` is untouched and the
+   * light's direction, its elevation, the depth bias fitted to that elevation
+   * and the sky's sun disc all see nothing. It is a pure lateral slide of the
+   * frustum.
+   *
+   * WHAT IT DOES NOT BUY IS TIME. It is worth being blunt, because "texel
+   * snapping lets you skip re-renders" is a real technique in engines whose
+   * shadow camera tracks the eye every frame — there, snapping is what makes
+   * continuous tracking not shimmer. This one does not track continuously; it
+   * is already static between anchor moves, and the map between two commits is
+   * bit-identical whether it is snapped or not. Snapping cannot remove a
+   * re-render that hysteresis has already removed. See the block on the cadence
+   * in `follow` for where the time actually is.
+   *
+   * The degenerate case — light straight up, so `up x z` is zero — cannot
+   * happen (SUN_FLOOR holds the elevation between 30° and about 54°) and is
+   * guarded anyway, because the cost of the guard is one compare on a path that
+   * runs a few times a minute and the cost of being wrong is a NaN in every
+   * light matrix in the scene.
    */
   function _placeSun() {
     if (!Number.isFinite(api._anchorX)) return;
     const ax = api._anchorX;
     const az = api._anchorZ;
     const ay = api._anchorY;
-    sun.target.position.set(ax, ay - 6, az);
-    sun.position.set(ax + _lightDir.x * 110, ay + _lightDir.y * 110, az + _lightDir.z * 110);
+    const tx = ax;
+    const ty = ay - 6;
+    const tz = az;
+    const px = ax + _lightDir.x * 110;
+    const py = ay + _lightDir.y * 110;
+    const pz = az + _lightDir.z * 110;
+
+    _shZ.set(px - tx, py - ty, pz - tz).normalize();
+    _shX.crossVectors(_shUp, _shZ);
+    const lat = _shX.length();
+    let ox = 0;
+    let oy = 0;
+    let oz = 0;
+    if (lat > 1e-4) {
+      _shX.multiplyScalar(1 / lat);
+      _shY.crossVectors(_shZ, _shX);
+      const texel = shadowTexel();
+      const u = tx * _shX.x + ty * _shX.y + tz * _shX.z;
+      const v = tx * _shY.x + ty * _shY.y + tz * _shY.z;
+      const du = Math.round(u / texel) * texel - u;
+      const dv = Math.round(v / texel) * texel - v;
+      ox = _shX.x * du + _shY.x * dv;
+      oy = _shX.y * du + _shY.y * dv;
+      oz = _shX.z * du + _shY.z * dv;
+    }
+
+    sun.target.position.set(tx + ox, ty + oy, tz + oz);
+    sun.position.set(px + ox, py + oy, pz + oz);
     // The fill keeps its authored world anchoring — see the note beside it —
     // but its BEARING has to be the sun's opposite or a five o'clock wood gets
     // a nine o'clock rim light on the far side of every trunk.
@@ -3589,6 +6033,18 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
     water,
     skyUniforms,
     base,
+    /**
+     * Force the weather, or hand it back to the clock with `null`.
+     *
+     * The only way any of the storm is reachable from a script — see the long
+     * block on `_weatherForce` for why, and for the field list. Deliberately a
+     * setter on the atmosphere rather than a query parameter: it can be moved
+     * between two screenshots in one page load, which is what a before/after
+     * of an approaching front needs.
+     */
+    forceWeather(o) {
+      _weatherForce = o || null;
+    },
     /**
      * Rebalance the lights for a build with no shadow map.
      *
@@ -3711,9 +6167,61 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
      * shadow map re-renders in six seconds went from 21 to 3 — and three is
      * what the distance walked actually calls for. The other eighteen were the
      * camera swinging on its dolly while the body stood still.
+     *
+     *
+     * ==== A NOTE ON "THE SHADOW MAP IS 38% OF THE FRAME", WHICH IT IS NOT ====
+     *
+     * `scripts/gpu-compare.mjs` prints a row reading `− shadow cache  +1.89 ms
+     * (38%)`, and it has been read at least once as an outstanding cost waiting
+     * to be optimised away. It is the opposite. Every row in that script UN-DOES
+     * one shipping optimisation, so 1.89 ms is what this hysteresis ALREADY
+     * SAVES against re-rendering every frame. There is no 1.89 ms left on the
+     * table; it was collected when this function was written.
+     *
+     * THE STATION NUMBERS DO NOT HIDE IT EITHER. `scripts/perf/stations.mjs`
+     * sets `shadowMap.needsUpdate = true` on every timed frame, on purpose and
+     * with a long comment saying why (without it the batch prices one shadow
+     * pass and twenty-three cached ones and reports a different game). So the
+     * published 5.12 ms standing and ~7.15 ms moving BOTH already contain a
+     * full shadow pass. The station figures are pessimistic against the real
+     * loop, not optimistic.
+     *
+     * WHAT IT COSTS IN THE ACTUAL GAME, since that number does not exist
+     * anywhere else. One re-render per ANCHOR_HOLD metres of travel, plus about
+     * nine a minute from the clock while standing. At 4 m/s that is 0.67 a
+     * second; at 3.2-4.5 ms each and 240 frames a second, the amortised cost is
+     * 0.67 x 4 / 240 = 0.011 ms per frame. It is not a lever. What it IS is a
+     * spike: one frame in every 360 costs four times its neighbours, which is a
+     * stutter question and not a throughput one, and `scripts/stutter.mjs` is
+     * the instrument for it.
+     *
+     * SO ANCHOR_HOLD WAS LEFT AT 6. Raising it to 8 — the most forest.js's
+     * `alwaysNear: 61` allows without moving too, on 40 + hold + 15 — would cut
+     * the re-render rate by 25%, which is 0.003 ms per frame, in exchange for
+     * two more metres of shadow lag behind a walking player. A saving three
+     * decimal places below anything the frame can feel is not worth a
+     * regression you can see, and it is certainly not worth a change that has
+     * to be co-ordinated with another file to stay legal.
      */
     follow(camera, anchor = camera.position) {
       sky.sky.position.copy(camera.position);
+
+      /**
+       * Drain one deferred re-seat, and ABOVE THE EARLY-OUT so it drains on the
+       * ~99% of frames where the body has not moved. `else if` rather than two
+       * tests: the whole point is that they land on different frames.
+       *
+       * The position is the LATEST anchor rather than the one that armed the
+       * flag, which cannot matter at six metres per arming but is free to get
+       * right and would matter the day ANCHOR_HOLD moves.
+       */
+      if (_pendingShafts) {
+        _pendingShafts = false;
+        shafts.follow(_pendingX, _pendingZ);
+      } else if (_pendingMist) {
+        _pendingMist = false;
+        mist.world.follow(_pendingX, _pendingZ);
+      }
 
       /**
        * WHERE THE CAMERA IS LOOKING RELATIVE TO THE SUN, read here because this
@@ -3752,6 +6260,26 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        */
       const dx = anchor.x - this._anchorX;
       const dz = anchor.z - this._anchorZ;
+      /**
+       * A JUMP IS NOT A WALK, and only a walk gets its re-seats deferred.
+       *
+       * Read BEFORE the anchor is overwritten. Deferring exists to stop a
+       * walking cadence piling three costs onto one frame; a body that crossed
+       * more than two hold radii since the last anchor did not walk there — it
+       * spawned, joined a lobby, was seated at a station by the perf harness or
+       * came out of a cave — and that frame is atypical already, with nothing to
+       * spread the cost over.
+       *
+       * IT IS ALSO THE GUARD THE INSTRUMENTS NEED. A harness that seats the
+       * camera, calls `follow` once and captures the frame would otherwise
+       * photograph the shafts and the mist still lattice-seated around the
+       * PREVIOUS station. This repo has been wrong about a frame that had not
+       * finished arriving more than once; nothing that only settles on the
+       * second frame gets to be introduced quietly.
+       */
+      const first =
+        !Number.isFinite(this._anchorX) ||
+        dx * dx + dz * dz > 4 * ANCHOR_HOLD * ANCHOR_HOLD;
       // NaN on the first call, and NaN fails every comparison, which is the
       // answer we want: anchor immediately.
       if (dx * dx + dz * dz < ANCHOR_HOLD * ANCHOR_HOLD) return false;
@@ -3802,13 +6330,30 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       const step = Math.round(along / MIST_STEP) * MIST_STEP - along;
       mist.stream.position.set(bank.x + bx * step, 0, bank.z + bz * step);
       /**
-       * The world mist has its own, much coarser lattice — see MIST_SNAP. It
-       * returns early on most anchor moves, so the 314 terrain lookups a
-       * re-seat costs land about once per 36 m of walking rather than once per
-       * six.
+       * The world mist has its own, much coarser lattice — see MIST_SNAP — and
+       * the shafts a 19 m one, so both return early on most anchor moves: the
+       * 562 terrain lookups a mist re-seat costs land about once per 36 m of
+       * walking rather than once per six, and the shafts' 81 once per 19.
+       *
+       * ARMED HERE, RUN ON LATER FRAMES. Both are cheap on the anchor moves
+       * where they early-out and expensive on the ones where they do not, and
+       * the ones where they do not are a strict subset of the frames that are
+       * already re-rendering the shadow map. See the block on `_pendingShafts`
+       * for what that was costing and why the flags are unconditional: asking
+       * "would this one early-out?" here would mean duplicating each system's
+       * lattice test in this function, which is the coupling both `follow`s
+       * exist to avoid, and arming a flag that drains into an early-out costs
+       * one boolean.
        */
-      mist.world.follow(ax, az);
-      shafts.follow(ax, az);
+      _pendingX = ax;
+      _pendingZ = az;
+      if (first) {
+        shafts.follow(ax, az);
+        mist.world.follow(ax, az);
+      } else {
+        _pendingShafts = true;
+        _pendingMist = true;
+      }
 
       renderer.shadowMap.needsUpdate = true;
       return true;
@@ -3861,10 +6406,37 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
       _recompose();
       base.hemiSky.copy(d.hemiSky);
       base.hemiGround.copy(d.hemiGround);
-      hemi.color.copy(d.hemiSky);
-      hemi.groundColor.copy(d.hemiGround);
       ambient.color.copy(d.ambientColour);
       fill.color.copy(d.fillColour);
+      /**
+       * …and then the land's own shade, if it has one. See `AIR_LIGHT`.
+       *
+       * It goes on `base.*` rather than on the lights, because `base` is what
+       * the trip director reads when it rebuilds these every frame — writing
+       * only the lights would give a sober frame the cold shade and a tripping
+       * one the rainforest's, which is the exact shape of drift `_recompose`
+       * exists to prevent.
+       */
+      if (AIR_LIGHT !== null) {
+        base.hemiSky.lerp(AIR_LIGHT.sky, AIR_LIGHT.skyAmount);
+        base.hemiGround.lerp(AIR_LIGHT.ground, AIR_LIGHT.groundAmount);
+        /**
+         * THE AMBIENT AND THE FILL GO TOWARD THE GROUND COLOUR, NOT THE SKY'S,
+         * AND THE FIRST VERSION OF THIS LINE HAD IT THE OTHER WAY ROUND.
+         *
+         * Rotating them toward `sky` is the obvious reading — they stand in for
+         * skylight — and it measured WORSE: the probe's shaded-snow hue went
+         * further into the cyan it was supposed to be leaving, because the
+         * table's ambient is already a grey-teal and this was pushing it
+         * further blue. What a snowfield's indirect light actually is is the
+         * enormous white bounce off the floor, which is `ground`. The distance
+         * is short because these two are already close to neutral.
+         */
+        ambient.color.lerp(AIR_LIGHT.ground, AIR_LIGHT.groundAmount * 0.6);
+        fill.color.lerp(AIR_LIGHT.ground, AIR_LIGHT.groundAmount * 0.6);
+      }
+      hemi.color.copy(base.hemiSky);
+      hemi.groundColor.copy(base.hemiGround);
 
       // The fog colour is not written here. It goes through `dayLight.fog`
       // above and is composed with the cave depth inside `_recompose`, which is
@@ -3985,7 +6557,59 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * was two and a half days.
        */
       const wt = worldClock();
-      const wet = rainAtTime(wt);
+      /**
+       * `precip` is what is falling; `wet` is what it has done to the ground.
+       * In the rainforest they are the same number and this is `rainAtTime(wt)`
+       * exactly as it always was. See the `precipAt` block for why the taiga
+       * needs them apart, and note the ORDER: the visual level takes the floor,
+       * the wetness does not, so snow can never darken the wood or thicken the
+       * fog or make the floor steam.
+       */
+      let precip = precipAt(wt);
+      let wet = SNOWY ? 0 : precip;
+      /**
+       * ==== THE SKY GOES FIRST, AND THAT IS ONE ARGUMENT =====================
+       *
+       * `rainAtTime(wt + 90)` rather than `rainAtTime(wt)`. Ninety seconds of
+       * lead, and it is the whole difference between "it started raining" and
+       * "you watched it coming": the cloud deck closes over, the sun goes
+       * behind it, the light goes flat and grey — and then, a minute and a half
+       * later, the first drops. Weather that arrives without warning reads as a
+       * switch being thrown, which is what this one has always read as.
+       *
+       * IT IS FREE, AND THAT IS THE POINT OF `rainAtTime` BEING PURE. There is
+       * no forecast to keep, no state to advance and nothing to get out of step
+       * — the future is simply the same function evaluated later, exactly as
+       * `STEAM_LAG` is the same function evaluated earlier. Two clients agree
+       * about the front that is coming for the same reason they agree about the
+       * rain that is here.
+       *
+       * Ninety seconds because it is about as long as you can see a front
+       * coming over a forest canopy, and because the rain's own ramp from dry
+       * to full is a couple of minutes — much more lead and the sky would be
+       * fully overcast while the previous shower was still finishing.
+       */
+      let cover = precipAt(wt + 90);
+      /**
+       * The forced values, if a script has set any — see `forceWeather`.
+       * Applied HERE, at the top, where the clock's own answers are, so that
+       * the cloud deck, the gloom, the drops, the steam and the flash all
+       * compose from them exactly as they would from a real storm. Overriding
+       * a uniform further down reaches one of those five.
+       */
+      let forcedFlash = -1;
+      let forcedBearing = -1;
+      if (_weatherForce) {
+        const f = _weatherForce;
+        if (typeof f.precip === 'number') {
+          precip = clamp01(f.precip);
+          wet = SNOWY ? 0 : precip;
+        }
+        if (typeof f.wet === 'number') wet = clamp01(f.wet);
+        if (typeof f.cover === 'number') cover = clamp01(f.cover);
+        if (typeof f.lightning === 'number') forcedFlash = clamp01(f.lightning);
+        if (typeof f.bearing === 'number') forcedBearing = f.bearing;
+      }
       /**
        * Published as `rainLevel`, NOT as `rain` — `rain` on this same object is
        * the particle system, and assigning a float over it every frame turned
@@ -3994,9 +6618,43 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * `Object.assign` folds the systems into and also what the update writes
        * its published scalars to.
        */
+      /**
+       * `rainLevel` STAYS THE WETNESS. It is read by `main.js` (which puts it
+       * on the network snapshot for the ambience mix) and by `cave-seal.mjs`,
+       * and both of them mean "is it raining" — the sound of rain on a canopy
+       * and the test that the cave shuts the weather out. Snow makes neither
+       * noise nor a wet cave mouth, so a taiga publishing 0.35 here would put a
+       * rain bed under a silent snowfall. The particle level is published
+       * separately as `precipLevel` for anything that wants what is visible.
+       */
       api.rainLevel = wet;
+      api.precipLevel = precip;
+      /** 'rain' or 'snow'. For the HUD and for the sound agent's bed choice. */
+      api.precipKind = SNOWY ? 'snow' : 'rain';
+      /** How much cloud the sky is drawing right now, 0..1. Runs 90 s ahead. */
+      api.cloudCover = cover;
+      /**
+       * ==== THE SQUALL LINE, PUBLISHED FOR THE WIND =============================
+       *
+       * 40 s AHEAD OF THE RAIN, which is half the cloud's lead. The order a
+       * front actually arrives in is: the sky closes, then the wind gets up,
+       * then the rain. Three staggered evaluations of one pure function is the
+       * whole of that sequence and it costs three sines.
+       *
+       * `living.js` owns the wind and cannot see `rainAtTime` — it is a closure
+       * in here — so the coupling is a published scalar rather than an import,
+       * and `main.js` hands it to `updateWind` beside the trip level and the
+       * debug scale. It is a NUMBER rather than the function, so the wind
+       * cannot accidentally start evaluating the weather at a second instant
+       * and disagree with the sky about what is coming.
+       *
+       * Uses `precipAt`, so it is 0 under automation and pinned along with
+       * everything else in this block; see the note on `updateWind` for the
+       * separate reason the wind's own envelope must ALSO be pinned there.
+       */
+      api.squallLevel = precipAt(wt + 40);
       const ru = rain.material.uniforms;
-      ru.uRain.value = wet;
+      ru.uRain.value = precip;
       ru.uDaylight.value = lit;
       /**
        * BELOW THIS IT IS NOT DRAWN AT ALL. Not dimmed to nothing — genuinely
@@ -4014,7 +6672,7 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * sky does is hidden by the latch in main.js and this line is written
        * every frame. See `CAVE_BURIED`: it is the same depth, deliberately.
        */
-      rain.points.visible = wet > 0.02 && caveT <= CAVE_BURIED;
+      rain.points.visible = precip > 0.02 && caveT <= CAVE_BURIED;
       /**
        * WHAT RAIN DOES TO THE REST OF THE FRAME, AND IT IS ALL FREE — three
        * numbers that were already being written every frame, written slightly
@@ -4029,13 +6687,233 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * because an overcast sky is a huge soft source and the one thing that
        * genuinely brightens under cloud is the shadow side of everything.
        */
-      if (wet > 0.001) {
-        scene.fog.density = base.fogDensity * (1 + wet * 0.65);
-        sun.intensity = base.sunIntensity * (1 - wet * 0.45);
-        hemi.intensity = base.hemiIntensity * (1 + wet * 0.3);
+      /**
+       * SPLIT THREE WAYS NOW, because the cloud arrives before the rain does.
+       *
+       *   the FOG stays on `wet`. Fog is water in the air near the ground and
+       *     it is a consequence of the rain having fallen, not of the deck
+       *     overhead — and under snow it must not move at all, which it cannot,
+       *     because `wet` is 0 in the taiga by construction.
+       *   the SUN and the HEMISPHERE go on `max(wet, cover)`. These are what
+       *     the SKY does, and the sky is what changes first: by the time the
+       *     first drop lands the light has already gone flat, which is the
+       *     whole of the "you watched it coming" effect. Without this the
+       *     ninety-second lead is a cloud texture with a full sun still burning
+       *     through it, which looks like a bug rather than like a front.
+       *
+       * `max` rather than a sum, so the two never stack into a black wood at
+       * the moment the shower catches up with its own cloud. cover's
+       * coefficients are lower than wet's — 0.32 against 0.45 and 0.22 against
+       * 0.30 — so the light continues to drop a little as the rain itself
+       * arrives and the sequence still has two beats to it.
+       *
+       * ALL FOUR ARE STILL EXACT NO-OPS IN A DRY WORLD. Both terms are 0 under
+       * automation and the four guards below keep the assignments from
+       * happening at all, so not one of fog density, sun intensity, hemisphere
+       * intensity or shaft daylight is written and the pinned frame is what it
+       * was.
+       */
+      const gloom = Math.max(wet * 0.45, cover * 0.32);
+      const lift = Math.max(wet * 0.3, cover * 0.22);
+      /**
+       * …AND THE FIFTH THING, WHICH IS THE COLOUR OF THE AIR.
+       *
+       * Handed to `_applyScatter` rather than applied here, because the fog
+       * colour is rebuilt from `base.fogColour` in that function on every frame
+       * and anything written to `scene.fog.color` in this block is gone before
+       * it reaches the screen. See the block on `stormGloom`.
+       *
+       * NORMALISED BY 0.45, the largest coefficient above, so the scalar the
+       * scatter sees is 0..1 — "how shut is the sky" — and not "how much sun
+       * intensity was taken away". A number whose range depends on a
+       * coefficient somewhere else is the shape of thing that quietly stops
+       * meaning what its name says the first time either is tuned.
+       */
+      stormGloom = clamp01(gloom / 0.45);
+      if (wet > 0.001) scene.fog.density = base.fogDensity * (1 + wet * 0.65);
+      if (gloom > 0.0005) sun.intensity = base.sunIntensity * (1 - gloom);
+      if (lift > 0.0005) hemi.intensity = base.hemiIntensity * (1 + lift);
+      /**
+       * AND THE SHAFTS GO WITH THE SUN THAT MAKES THEM. A sun shaft is a beam
+       * of direct light in dusty air; under a closed deck there is no direct
+       * light, so a wood full of god rays under a storm sky is the same class
+       * of falsehood as the sun disc burning through the cloud. Re-written
+       * rather than composed because the hour's own value was assigned from
+       * `d.shafts` a few lines above and this is the same expression with one
+       * more factor — assignment keeps it idempotent if anything ever calls
+       * applyDay twice in a frame.
+       *
+       * It is the only line here that is NOT free: it changes an existing
+       * uniform, so the shafts still draw and still cost their fill. Taking
+       * them out of the draw entirely under cover would save that, and it is
+       * deliberately not done — `setDensity` is a quality knob the Auto
+       * governor owns, and a second thing writing `count` is the exact "two
+       * opinions about one number" failure `_recompose` exists to prevent.
+       */
+      if (gloom > 0.0005) shafts.material.uniforms.uDaylight.value = d.shafts * (1 - gloom);
+
+      /**
+       * ==== THE STRIKE ==========================================================
+       *
+       * See the `strikeEnv` block above for the flash-rate arithmetic and the
+       * reason the numbers are what they are. This is the per-frame half: which
+       * slot are we in, did it fire, and where.
+       *
+       * IT NEVER TOUCHES `sun.intensity` OR THE LIGHT DIRECTION, and that is
+       * not a stylistic preference — moving the directional invalidates the
+       * shadow map, which is 3.2-4.5 ms on the frame it happens (see
+       * `shadow-pass-is-leaf-fill`), and lightning would then cost more than
+       * everything else in this file put together on precisely the frames the
+       * player is looking hardest. The cheap implementation is also the
+       * physically correct one: a cloud-to-cloud flash is a source the size of
+       * a county seen through a mile of cloud, which is a shadowless global
+       * bounce and is exactly what `hemi` plus `ambient` model. A flash that
+       * cast hard shadows would be wrong as well as expensive.
+       *
+       * MULTIPLIED IN, NOT ADDED, AND IT CANNOT RATCHET. `hemi.intensity` is
+       * rebuilt from `base.hemiIntensity` by the trip director every frame and
+       * `ambient.intensity` is rebuilt by `_recompose`, which ran at the top of
+       * this same function — so both are fresh values that this line is the
+       * last writer of, and next frame's rebuild wipes it. That is the same
+       * seam `setShadowsEnabled` documents at length; it is used here rather
+       * than fought.
+       */
+      const strikeSlot = Math.floor(wt / STRIKE_SLOT);
+      let flash = 0;
+      let strikeBearing = 0;
+      let strikeKm = 0;
+      let strikeEnergy = 0;
+      let strikeId = -1;
+      if (forcedFlash >= 0) {
+        flash = forcedFlash;
+        strikeBearing = forcedBearing >= 0 ? forcedBearing : 1.1;
+        strikeKm = 1.2;
+        strikeEnergy = 1;
+      } else if (wet > 0.05 && strikeHash(strikeSlot) < wet * wet * 0.35) {
+        /**
+         * ==== HOW FAR AWAY IT WAS, DECIDED HERE AND ONLY HERE ================
+         *
+         * The distance is drawn first and the BRIGHTNESS FOLLOWS FROM IT, which
+         * is the way round that makes a storm read as a place rather than as an
+         * effect: most strikes are a pale flicker somewhere over the ridge and
+         * one in ten is close enough to light the trunks. Drawing brightness
+         * first and inventing a distance from it gets the same numbers and
+         * cannot be made consistent with anything else, because there is no
+         * "where" in it.
+         *
+         * h SQUARED biases the draw toward the near end: uniform in h gives a
+         * flat distribution over 14 km, which is a storm that is almost always
+         * far away and therefore almost always boring. 0.4 to 14 km, with the
+         * median around 3.9.
+         *
+         * AND IT IS A PURE FUNCTION OF THE SLOT, so the flash and the thunder
+         * that follows it are the same event on every client. `ambience.js`
+         * carries a long block on exactly this: if the sound layer rolled the
+         * distance itself, two people would see one flash and then count a
+         * different number of seconds, and each of them would be individually
+         * convincing. So the distance is decided by the layer that owns the
+         * clock and travels as a number.
+         */
+        const hKm = strikeHash(strikeSlot + 104729);
+        strikeKm = 0.4 + hKm * hKm * 13.6;
+        strikeEnergy = clamp01(1 - strikeKm / 15);
+        strikeId = strikeSlot;
+        // A far strike is a faint glow along the cloud base, not a dimmer
+        // version of a near one — hence a floor of 0.25 rather than a straight
+        // multiply. Sheet lightning fifteen kilometres off is still visible.
+        flash = strikeEnv(wt - strikeSlot * STRIKE_SLOT) * (0.25 + 0.75 * strikeEnergy);
+        // A bearing per slot, from a second draw on the same hash. Two strikes
+        // in a storm coming from the same compass point is what a distant cell
+        // looks like, and this deliberately does not model that — a hash on the
+        // slot puts each one somewhere new, which is what an overhead storm
+        // does and is the one you are standing in.
+        strikeBearing = strikeHash(strikeSlot + 8191) * TAU;
       }
+      /**
+       * PUBLISHED FOR THE SOUND. `atmosphere.lightning` is the 0..1 envelope
+       * and `atmosphere.lightningBearing` is where it was, in radians, so
+       * ambience.js can schedule a thunder at a delay proportional to a
+       * distance and pan it. Read once a frame; it is a plain float and there
+       * is nothing to subscribe to.
+       *
+       * The bearing HOLDS after the flash has decayed to zero rather than being
+       * reset, which is deliberate: thunder arrives seconds after its flash and
+       * a consumer that latched the bearing on the rising edge would otherwise
+       * have to keep its own copy.
+       */
+      api.lightning = flash;
+      api.lightningBearing = strikeBearing;
+      /**
+       * ==== THE STRIKE DESCRIPTOR, WRITTEN AGAINST ambience.js's INTERFACE ===
+       *
+       * `ambience.js` was built with a thunder receiver and no lightning to
+       * feed it, and its header names the exact shape it wants:
+       * `{ id, energy, bearing, km }`, non-null on the frames a flash is
+       * happening. This is that, and the field names are theirs rather than
+       * new ones — an interface that was written down and then not matched is
+       * worse than no interface.
+       *
+       *   id       the slot index. An integer, identical on every client, and
+       *            different for every strike. Their guard is
+       *            `id !== this._lastStrike`, so holding the descriptor for the
+       *            whole 0.2 s of the flash triggers the thunder exactly once —
+       *            which is deliberate: a consumer that misses the single rising
+       *            frame (a dropped frame, a tab regaining focus) still hears it.
+       *   energy   how bright, derived from the distance above.
+       *   bearing  radians in world xz.
+       *   km       how far, so the delay before the crack is shared.
+       *
+       * ONE OBJECT, MUTATED. It is published on frames that are already rare
+       * and it would be a trivial allocation, but the frame this fires on is a
+       * frame with a flash on it and the GC is the one thing that could turn a
+       * 0.2 s event into a visible hitch.
+       */
+      if (flash > 0.002) {
+        _strike.id = strikeId;
+        _strike.energy = strikeEnergy;
+        _strike.bearing = strikeBearing;
+        _strike.km = strikeKm;
+        api.strike = _strike;
+      } else {
+        api.strike = null;
+      }
+      if (flash > 0.002) {
+        hemi.intensity *= 1 + flash * 0.45;
+        ambient.intensity *= 1 + flash * 0.4;
+      }
+      /**
+       * The sky's own copy. cover, flash, and the bearing as a unit (x, z) so
+       * the shader can dot it against a view direction without a trig call.
+       * Written every frame — it is one vec4 upload on a material that is
+       * already uploading five.
+       */
+      skyUniforms.uWeather.value.set(
+        cover,
+        flash,
+        Math.sin(strikeBearing),
+        Math.cos(strikeBearing),
+      );
       const w = water.material.uniforms;
       w.uDaylight.value = d.water;
+      /**
+       * THE SAME `wet` EVERYTHING ELSE'S WETNESS IS, and it has to be that
+       * exact scalar rather than a second curve fitted to look similar.
+       *
+       * IT IS `wet` AND NOT `precip`, and the difference is one land. The drops
+       * in the air now count themselves by `precip` — what is falling — while
+       * `wet` is what has soaked into the world. In every rain land they are
+       * the same number and the sentence below is literally true. In the taiga
+       * `precip` is snow and `wet` is 0, which is the whole point: a river
+       * covered in impact rings while it snows is the exact failure the split
+       * was made for. The
+       * rings on the water gate their density with `step(hash, uRain)` and the
+       * drops in the air gate their count by discarding against the same
+       * number, so passing one value through both is what makes a shower start
+       * on the river and in the sky on the same frame. It also inherits the
+       * webdriver pin for free: `rainAtTime` returns 0 under automation, so
+       * every stored screenshot still photographs a dry river.
+       */
+      w.uRain.value = wet;
       // The glints come from whichever body is up. Continuous, not quantised —
       // see the note on the water's uSunDir.
       const glint = isNight(phase) ? _trueMoon : _trueSun;
@@ -4079,7 +6957,17 @@ export function buildAtmosphere(scene, renderer, seed = 'grove-01') {
        * negative, and the moment the rain stops the four-minutes-ago value is
        * still high while the present one has collapsed.
        */
-      const steam = clamp01(Math.max(0, rainAtTime(wt - STEAM_LAG) - wet) * 2.6);
+      /**
+       * AND NOTHING STEAMS OFF A FROZEN FLOOR. `SNOWY` short-circuits rather
+       * than the arithmetic being made to produce zero, because it would not:
+       * `wet` is 0 all the time in the taiga, so `max(0, rainAtTime(t-240) - 0)`
+       * is just the weather four minutes ago, and the winter wood would have
+       * spent a fifth of every evening under a rising bank of mist for a shower
+       * that never fell. The one-line guard says what is meant.
+       */
+      const steam = SNOWY
+        ? 0
+        : clamp01(Math.max(0, rainAtTime(wt - STEAM_LAG) - wet) * 2.6);
       api.steamLevel = steam;
       const mistK = d.mist * (1 + steam * 1.9);
       for (const mat of mist.mats) {

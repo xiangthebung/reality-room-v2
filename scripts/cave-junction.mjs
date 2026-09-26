@@ -81,16 +81,51 @@ for (const seed of SEEDS) {
     );
     await caveReady(page, c.k);
 
-    const count = await page.evaluate((k) => window.RR.caves.caves.get(k)?.paths?.length ?? 0, c.k);
-    for (let pi = 1; pi < count; pi++) {
+    /**
+     * ONE STATION PER OPENING, NOT ONE PER PASSAGE, and those stopped being the
+     * same number when a passage was allowed to rejoin one.
+     *
+     * A looping branch is welded into another passage's wall at BOTH ends and
+     * `_holesBy` carries two records for it, so there are two windows in the
+     * mesh and only one of them was ever stood in front of. The second is the
+     * one nobody has ever looked at, which historically is where every leak in
+     * this file has been.
+     *
+     * THE HOST IS THE PARENT AND NOT `paths[0]`, which is a separate bug this
+     * enumeration has always had: a lead off a lead leaves through its PARENT's
+     * wall, so a station placed on the trunk at the same ring index stands
+     * somewhere else entirely and photographs a passage with no junction in it.
+     * `cave-branch` documents fixing exactly this on its own side.
+     */
+    const stations = await page.evaluate((k) => {
+      const cave = window.RR.caves.caves.get(k);
+      if (!cave?.paths) return [];
+      const out = [];
+      for (let pi = 1; pi < cave.paths.length; pi++) {
+        const br = cave.paths[pi];
+        out.push({ pi, host: br.parent ?? 0, ring: br.base, aim: 1, kind: 'base' });
+        if (br.loopEnd && br.loopToIndex >= 0) {
+          out.push({
+            pi,
+            host: br.loopToIndex,
+            ring: br.loopRing,
+            aim: Math.max(0, br.x.length - 2),
+            kind: 'loop',
+          });
+        }
+      }
+      return out;
+    }, c.k);
+    for (const st of stations) {
+      const pi = st.pi;
       const info = await page.evaluate(
-        async ({ k, pi, back }) => {
+        async ({ k, pi, back, host, ring, aim }) => {
           const R = window.RR;
           const raf = () => new Promise((r) => requestAnimationFrame(r));
           const cave = R.caves.caves.get(k);
-          const main = cave.paths[0];
+          const main = cave.paths[host];
           const br = cave.paths[pi];
-          const base = br.base;
+          const base = ring;
           /**
            * BACK DOWN THE PASSAGE, NOT AT THE JUNCTION RING.
            *
@@ -108,7 +143,7 @@ for (const seed of SEEDS) {
           R.controller.keys.clear();
           R.controller.position.set(main.x[at], floor + 1.65, main.z[at]);
           R.controller.velocity.set(0, 0, 0);
-          R.controller.yaw = Math.atan2(-(br.x[1] - main.x[at]), -(br.z[1] - main.z[at]));
+          R.controller.yaw = Math.atan2(-(br.x[aim] - main.x[at]), -(br.z[aim] - main.z[at]));
           R.controller.pitch = 0;
           R.controller.applyToCamera();
           for (let i = 0; i < 12; i++) await raf();
@@ -228,24 +263,33 @@ for (const seed of SEEDS) {
           return {
             base,
             len: br.along ? br.along[Math.min(br.endRing ?? 0, br.along.length - 1)] : 0,
-            bore: 2 * br.r[0] * br.w[0],
-            dist: Math.hypot(br.x[1] - main.x[at], br.z[1] - main.z[at]),
+            bore: 2 * br.r[aim] * br.w[aim],
+            dist: Math.hypot(br.x[aim] - main.x[at], br.z[aim] - main.z[at]),
             leak,
             blind: br.blind ?? 0,
           };
         },
-        { k: c.k, pi, back: BACK }
+        { k: c.k, pi, back: BACK, host: st.host, ring: st.ring, aim: st.aim }
       );
-      const name = `${seed}-k${c.k}-br${pi}.png`;
+      const name = `${seed}-k${c.k}-br${pi}${st.kind === 'loop' ? '-loop' : ''}.png`;
       await page.screenshot({ path: `${OUT}/${name}` });
       const l = info.leak;
       /**
        * ONLY A NEAR ESCAPE COUNTS. `near` is rays that left the passage within
        * twenty metres, which at a station standing ten to fifteen metres back is
        * "at the opening". The rest are the two-centimetre aperture `closeEnd`
-       * leaves on the axis of every terminus in the world, sixty metres down the
-       * bore — a real hole and not this script's business, and counting it would
-       * make the gate fire on every straight branch ever built.
+       * leaves on the axis of every DOMED terminus, sixty metres down the bore —
+       * a real hole and not this script's business, and counting it would make
+       * the gate fire on every straight branch ever built.
+       *
+       * "EVERY TERMINUS IN THE WORLD" IS WHAT THIS USED TO SAY AND IT IS NO
+       * LONGER TRUE. A looping passage has no dome and therefore no aperture on
+       * its axis: it ends in a full-size ring inside another passage's bore, and
+       * a ray down its axis meets that passage's far wall. So a loop's far
+       * station is the one place in this gate where a distant miss is NOT the
+       * expected two-centimetre hole, and if one ever shows up there it is a
+       * genuine hole into the mountain. It would still have to escape within
+       * twenty metres to be counted, which is the right bar for both cases.
        */
       if (l.near) leaks.push({ name, ...l });
       console.log(

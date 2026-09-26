@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TAU, makeRng, rngRange } from '../core/util.js';
+import { TAU, damp, makeRng, rngRange } from '../core/util.js';
 import { NOISE3, makeLiving, tripUniforms } from '../trip/living.js';
 
 /**
@@ -45,6 +45,81 @@ const CARDS = 3;
 /** Embers per fire. */
 const EMBERS = 14;
 
+/**
+ * ==== COMPANY: THE FIRE KNOWS HOW MANY PEOPLE ARE SITTING AT IT ============
+ *
+ * The whole of gathering.js exists to give people somewhere to be, and until
+ * now the fire burnt at exactly the same height whether one person or five were
+ * on its logs. That is the one thing a fire is for. A fire that grows when the
+ * room fills up is the cheapest social signal in the project: from thirty
+ * metres through the trees you can see that there is somebody there.
+ *
+ * NOTHING NEW GOES ON THE WIRE, and that is what made it affordable. Positions
+ * and a sitting flag are already in every 18 Hz pose row, so every client can
+ * count the seated bodies inside a hearth's ring and arrive at the same number
+ * independently — the same zero-byte trick gathering.js already uses to put two
+ * people at the same fire without either of them saying where it is. See
+ * `setCompany` and the block above it in gathering.js.
+ *
+ * IT DOES NOT TOUCH THE BAKED GEOMETRY, which is the constraint that shaped
+ * everything below. Every flame card in the world is merged into ONE world-space
+ * buffer on purpose (see the four-draw-calls block above), so "make the fire
+ * bigger" must not mean "move a vertex" — rewriting positions would mean
+ * uploading the whole buffer whenever anybody stood up. The flame's height and
+ * width are already shader quantities, so the growth is a uniform.
+ *
+ * A PER-VERTEX SITE INDEX AND A SMALL UNIFORM ARRAY. `aSite` is baked once and
+ * never changes; `uCompany[]` is one float per fire, updated on the CPU at
+ * whatever rate the caller likes. Dynamic indexing of a uniform array in a
+ * shader is a WebGL2/GLSL ES 3.00 facility and three has been WebGL2-only since
+ * r163, so it is available; on the old ESSL 1.00 path it would have been
+ * illegal and this would have had to be a per-vertex attribute updated every
+ * frame instead.
+ *
+ * THE CARDS ARE BAKED AT FULL SIZE AND THE SHADER SHRINKS THEM BACK. A card is
+ * a fixed quad, so a flame cannot grow past its own geometry; so the quad is
+ * built `TALL`× higher and `WIDE`× broader than the sober flame needs and the
+ * fragment shader divides both back out. At `uCompany = 0` the arithmetic is
+ * exactly the identity — the same flame in the same world-space place, to the
+ * float — and the only cost is that the top 35% of a lonely fire's card
+ * discards on the first line. That is a few hundred pixels.
+ */
+const FLAME_TALL = 1.55;
+const FLAME_WIDE = 1.32;
+/**
+ * The same two as GLSL float literals, and this is not decoration: `1.55`
+ * interpolates fine but a future `2` would emit `2`, which is an INT in GLSL,
+ * and `2 - 1.0` does not compile. `toFixed` makes the shader immune to what
+ * somebody types above.
+ */
+const FLAME_TALL_F = FLAME_TALL.toFixed(4);
+const FLAME_WIDE_F = FLAME_WIDE.toFixed(4);
+/**
+ * How many seated bodies is "full".
+ *
+ * A hearth's ring is five logs of two seats, and the commons has fourteen; but
+ * the curve wanted here is not "what fraction of the seats are taken", it is
+ * "is this a fire somebody is at". One person should already be visible from
+ * the tree line, so the first body is worth a quarter of the whole effect and
+ * the fourth finishes it. Past four it saturates rather than continuing, which
+ * is right: a crowded fire is not a bonfire.
+ */
+const COMPANY_FULL = 4;
+/**
+ * Fraction of the way still to go after one second — `damp`'s convention.
+ *
+ * 0.6 arrives 95% of the way in six seconds, which is the number the brief
+ * asked for and is chosen against a specific failure: somebody standing up to
+ * fetch something must not snuff the fire. Six seconds is longer than any
+ * shuffle and shorter than a departure.
+ *
+ * It is also what keeps this legal under the flicker rule. The trip's law is
+ * that nothing may modulate luminance above 3 Hz; a six-second ease is 0.16 Hz
+ * at its very fastest, three orders of magnitude clear, and the flame's own
+ * flicker is unchanged.
+ */
+const COMPANY_SMOOTH = 0.6;
+
 const _v = new THREE.Vector3();
 
 /**
@@ -56,7 +131,7 @@ const _v = new THREE.Vector3();
  * the geometry is a quad and the silhouette can flicker without touching a
  * vertex buffer.
  */
-function flameMaterial() {
+function flameMaterial(company) {
   return new THREE.ShaderMaterial({
     name: 'campfire-flame',
     uniforms: {
@@ -65,14 +140,23 @@ function flameMaterial() {
       uNoiseTex: tripUniforms.uNoiseTex,
       /** Day 0 .. night 1. A fire in sunlight is embers and a heat shimmer. */
       uNight: { value: 1 },
+      /** One eased 0..1 per fire. See the COMPANY block at the top. */
+      uCompany: { value: company },
     },
     vertexShader: /* glsl */ `
       attribute float aSeed;
+      attribute float aSite;
+      uniform float uCompany[${company.length}];
       varying vec2 vP;
       varying float vSeed;
+      varying float vComp;
       void main() {
         vP = uv;
         vSeed = aSeed;
+        // Looked up here rather than in the fragment stage: it is constant over
+        // a card, so this is one indexed fetch per vertex instead of one per
+        // pixel of an additive quad that is mostly overdraw.
+        vComp = uCompany[int(aSite)];
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
@@ -83,11 +167,30 @@ function flameMaterial() {
       uniform float uNight;
       varying vec2 vP;
       varying float vSeed;
+      varying float vComp;
 
       void main() {
-        // uv.y runs 0 at the fuel to 1 at the tip.
-        float h = vP.y;
-        float x = vP.x - 0.5;
+        /**
+         * COMPANY, and the identity at zero.
+         *
+         * The card is baked ${FLAME_TALL} times taller and ${FLAME_WIDE} times
+         * wider than the sober flame needs (see the COMPANY block in
+         * campfire.js), so the whole of the growth is these two divisions. At
+         * vComp = 0, grow and spread are 1 and h and x come out as exactly
+         * uv.y * TALL and (uv.x - 0.5) * WIDE — which is the same WORLD
+         * position for a given h and x as the smaller card gave, because the
+         * quad grew by the same factors. Everything below is untouched.
+         */
+        float grow = 1.0 + vComp * (${FLAME_TALL_F} - 1.0);
+        float spread = 1.0 + vComp * (${FLAME_WIDE_F} - 1.0);
+        // uv.y runs 0 at the fuel to 1 at the tip of the flame — NOT of the card.
+        float h = vP.y * (${FLAME_TALL_F} / grow);
+        // Above the flame's own tip there is nothing, and this is a real early
+        // out rather than a tidiness: the envelope below is a polynomial in h
+        // that is not guaranteed to be negative past 1, so it must not be
+        // evaluated there.
+        if (h > 1.0) discard;
+        float x = (vP.x - 0.5) * (${FLAME_WIDE_F} / spread);
 
         /**
          * The lick.
@@ -167,7 +270,7 @@ function flameMaterial() {
  * loops on a period of its own, and the whole system is a hundred and sixty
  * points and no per-frame work at all.
  */
-function emberMaterial() {
+function emberMaterial(company) {
   return new THREE.ShaderMaterial({
     name: 'campfire-embers',
     uniforms: {
@@ -175,11 +278,15 @@ function emberMaterial() {
       uNoiseTex: tripUniforms.uNoiseTex,
       uNight: { value: 1 },
       uPixelRatio: { value: 1 },
+      /** The same array object the flame material holds. See `buildHearths`. */
+      uCompany: { value: company },
     },
     vertexShader: /* glsl */ `
       ${NOISE3}
       attribute float aSeed;
+      attribute float aSite;
       uniform float uTime;
+      uniform float uCompany[${company.length}];
       varying float vLife;
       varying float vSeed;
       void main() {
@@ -189,12 +296,23 @@ function emberMaterial() {
         float life = fract(uTime / span + fract(aSeed * 91.7));
         vLife = life;
 
+        /**
+         * The embers take the same pair as the flame, and they have to: a fire
+         * that has doubled in height with its spark column unchanged reads as a
+         * flame card that has been scaled rather than as a bigger fire. There
+         * is no baked-size trick needed here — an ember's whole trajectory is
+         * computed in this shader, so the two factors go straight on it.
+         */
+        float comp = uCompany[int(aSite)];
+        float grow = 1.0 + comp * (${FLAME_TALL_F} - 1.0);
+        float spread = 1.0 + comp * (${FLAME_WIDE_F} - 1.0);
+
         vec3 p = position;
         // Up, decelerating: an ember is buoyant and loses heat as it climbs.
-        p.y += life * (1.15 + fract(aSeed * 3.7) * 1.5) * (1.0 - life * 0.35);
+        p.y += life * (1.15 + fract(aSeed * 3.7) * 1.5) * (1.0 - life * 0.35) * grow;
         // …and out, because the column spreads.
         float a = aSeed * 6.2831;
-        float drift = life * life * (0.30 + fract(aSeed * 5.1) * 0.5);
+        float drift = life * life * (0.30 + fract(aSeed * 5.1) * 0.5) * spread;
         p.x += cos(a) * drift + rrNoise(vec3(aSeed * 9.0, uTime * 0.7, 0.0)) * life * 0.3;
         p.z += sin(a) * drift + rrNoise(vec3(aSeed * 9.0, uTime * 0.7, 4.0)) * life * 0.3;
 
@@ -270,10 +388,45 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
   const positions = new Float32Array(cardCount * 4 * 3);
   const uvs = new Float32Array(cardCount * 4 * 2);
   const seeds = new Float32Array(cardCount * 4);
+  /**
+   * Which fire each vertex belongs to. Baked once; never touched again.
+   *
+   * THE INVARIANT THAT MAKES THAT SAFE, WRITTEN DOWN BECAUSE IT IS NOWHERE
+   * ELSE. `aSite` is an index into `sites`, and `uCompany[]` is declared in both
+   * shaders with `sites.length` elements — so the buffer, the uniform array and
+   * the `Int32Array` gathering.js counts into are three descriptions of one list
+   * that must never disagree. They cannot today: `buildHearths` is called
+   * exactly once, from `buildGathering`, which main.js calls once at module
+   * scope, and no code path anywhere adds or removes a fire afterwards.
+   *
+   * ADDING A FIRE AT RUNTIME WOULD BREAK ALL THREE AT ONCE — a stale
+   * `uCompany[]` length is a shader recompile, a stale `aSite` is a fire reading
+   * somebody else's company, and a longer `counts` is silently ignored. If that
+   * is ever wanted, the answer is to rebuild this whole object (it is four draw
+   * calls and a few hundred triangles), not to patch the buffer.
+   *
+   * Baked as a float rather than as an integer attribute because `int(aSite)` in
+   * the vertex shader wants one anyway, and every value here is a small exact
+   * integer, so the truncation is exact.
+   */
+  const cardSites = new Float32Array(cardCount * 4);
   const indices = new Uint16Array(cardCount * 6);
 
   const emberPositions = new Float32Array(sites.length * EMBERS * 3);
   const emberSeeds = new Float32Array(sites.length * EMBERS);
+  const emberSites = new Float32Array(sites.length * EMBERS);
+
+  /**
+   * How busy each fire is, 0..1, and the target it is easing toward.
+   *
+   * `company` IS the uniform's value array — both materials hold a reference to
+   * this exact Float32Array, so `update` mutates one thing and two shaders see
+   * it. `Math.max(1, …)` because `uniform float uCompany[0]` does not compile,
+   * and a world with no fires at all is a legitimate outcome for a seed whose
+   * site search found nowhere.
+   */
+  const company = new Float32Array(Math.max(1, sites.length));
+  const companyWant = new Float32Array(company.length);
 
   const matrix = new THREE.Matrix4();
   const quat = new THREE.Quaternion();
@@ -311,9 +464,10 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
       logs.setMatrixAt(index * logsPerFire + i, matrix.compose(_v, quat, scale));
     }
 
-    // Flame cards, in world space, standing on the fuel.
-    const height = radius * 1.75;
-    const half = radius * 0.86;
+    // Flame cards, in world space, standing on the fuel. Baked at the FULL
+    // company size; the shader divides it back out. See the COMPANY block.
+    const height = radius * 1.75 * FLAME_TALL;
+    const half = radius * 0.86 * FLAME_WIDE;
     for (let c = 0; c < CARDS; c++) {
       const a = (c / CARDS) * Math.PI + index * 0.31;
       const dx = Math.cos(a) * half;
@@ -336,6 +490,7 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
         uvs[(base + k) * 2] = corners[k][3];
         uvs[(base + k) * 2 + 1] = corners[k][4];
         seeds[base + k] = cardSeed;
+        cardSites[base + k] = index;
       }
       const io = card * 6;
       indices[io] = base;
@@ -354,6 +509,7 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
       emberPositions[ember * 3 + 1] = site.y + 0.22;
       emberPositions[ember * 3 + 2] = site.z + Math.sin(a) * r;
       emberSeeds[ember] = rng();
+      emberSites[ember] = index;
       ember += 1;
     }
   });
@@ -366,9 +522,10 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
   flameGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   flameGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   flameGeo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+  flameGeo.setAttribute('aSite', new THREE.BufferAttribute(cardSites, 1));
   flameGeo.setIndex(new THREE.BufferAttribute(indices, 1));
   flameGeo.computeBoundingSphere();
-  const flames = new THREE.Mesh(flameGeo, flameMaterial());
+  const flames = new THREE.Mesh(flameGeo, flameMaterial(company));
   flames.name = 'hearth-flames';
   /**
    * Late, and after the leaves.
@@ -386,16 +543,40 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
   const emberGeo = new THREE.BufferGeometry();
   emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPositions, 3));
   emberGeo.setAttribute('aSeed', new THREE.BufferAttribute(emberSeeds, 1));
+  emberGeo.setAttribute('aSite', new THREE.BufferAttribute(emberSites, 1));
   emberGeo.computeBoundingSphere();
   /**
    * The bounding sphere is computed from the SPAWN points, and the shader lofts
-   * every ember up to 2.6 m above them. Without this the cloud is culled the
+   * every ember a long way above them. Without this the cloud is culled the
    * moment the fire's base leaves the frustum, so looking up at the sparks over
    * a fire makes them vanish. Growing the radius is cheaper than the alternative
    * of disabling frustum culling on a Points that is usually off screen.
+   *
+   * THE ARITHMETIC, WHICH WAS WRONG IN THE FIRST VERSION OF THIS COMMENT and is
+   * worth writing out because the sphere it defends is invisible when it fails.
+   * The vertex shader's rise is
+   *
+   *     life * (1.15 + fract(aSeed * 3.7) * 1.5) * (1.0 - life * 0.35) * grow
+   *
+   * and `life * (1 - 0.35 * life)` has its derivative `1 - 0.7 * life` still
+   * positive at life = 1, so the maximum over the ember's whole life is at the
+   * top of it: 0.65. With the amplitude at its ceiling of 2.65 that is 1.72 m
+   * sober, not the 2.6 m this comment used to claim, and 2.67 m at full company.
+   * Sideways it is `life² * 0.8 * spread` plus two `rrNoise` terms of ±0.3, so
+   * at most 1.06 + 0.42 = 1.48 m. The worst displacement of any ember from its
+   * spawn point is therefore hypot(2.67, 1.48) = 3.05 m.
+   *
+   * 3.2 + 2.6 * 0.55 = 4.63 m, which clears that by 1.58 m. The old number was
+   * generous and the new one is more generous still; both are correct, and the
+   * point of writing the measurement down is that the NEXT person to change
+   * `FLAME_TALL` or the rise curve can check it in ten seconds instead of
+   * discovering that the sparks over the busiest fire in the world pop out at
+   * one particular camera angle. That is the same class of mistake as forgetting
+   * the wider culling sphere on a leaning tree, and it only shows when somebody
+   * sits down.
    */
-  emberGeo.boundingSphere.radius += 3.2;
-  const embers = new THREE.Points(emberGeo, emberMaterial());
+  emberGeo.boundingSphere.radius += 3.2 + 2.6 * (FLAME_TALL - 1);
+  const embers = new THREE.Points(emberGeo, emberMaterial(company));
   embers.name = 'hearth-embers';
   embers.renderOrder = 3;
   group.add(embers);
@@ -428,6 +609,25 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
       embers.material.uniforms.uPixelRatio.value = r;
     },
 
+    /**
+     * How many seated bodies are at each fire, in `sites` order.
+     *
+     * A COUNT, NOT A FRACTION, because the caller is counting people and the
+     * curve from people to flame height is this file's business — see
+     * `COMPANY_FULL`. Short arrays are legal and mean "nobody at the rest",
+     * which is what a caller who has only looked at the near fires should be
+     * able to say without lying about the far ones.
+     *
+     * This is a TARGET. Nothing here is drawn until `update` has eased toward
+     * it, which is what stops somebody standing up from snuffing a fire.
+     */
+    setCompany(counts) {
+      for (let i = 0; i < companyWant.length; i++) {
+        const n = counts && i < counts.length ? counts[i] : 0;
+        companyWant[i] = n > 0 ? Math.min(1, n / COMPANY_FULL) : 0;
+      }
+    },
+
     /** 0 by day, 1 at night. Both materials and the light ride on it. */
     setNight(n) {
       flames.material.uniforms.uNight.value = n;
@@ -441,6 +641,18 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
      */
     update(dt, camera) {
       if (sites.length === 0) return;
+
+      /**
+       * Ease the company toward its target.
+       *
+       * A loop over a dozen floats once a frame, which is nothing, and it is
+       * deliberately not gated on "has anything changed": the whole value of
+       * the six-second constant is that the fire is still moving on the frames
+       * when the count is not, and a dirty flag would make it jump.
+       */
+      for (let i = 0; i < company.length; i++) {
+        company[i] = damp(company[i], companyWant[i], COMPANY_SMOOTH, dt);
+      }
 
       /**
        * Find the nearest fire and put the light on it.
@@ -487,7 +699,18 @@ export function buildHearths(parent, sites, seed = 'grove-01') {
         0.82 + 0.13 * Math.sin(flicker * 8.3) + 0.09 * Math.sin(flicker * 3.1 + 1.7);
       const night = this._night ?? 1;
       const reach = Math.max(0, 1 - distance / 26);
-      light.intensity = 2.7 * wobble * reach * (0.28 + 0.72 * night);
+      /**
+       * …and a fire with people at it throws more light.
+       *
+       * Free — this is the one PointLight in the world and its intensity is
+       * already recomputed every frame. `lit` rather than `best`, because the
+       * light is standing at the fire it was last handed over to and it should
+       * be as bright as THAT fire, not as the one it is about to move to.
+       * Half again at full company is the same proportion as the flame's own
+       * height, so the light and the thing making it agree.
+       */
+      const crowd = lit >= 0 && lit < company.length ? company[lit] : 0;
+      light.intensity = 2.7 * wobble * reach * (0.28 + 0.72 * night) * (1 + 0.5 * crowd);
     },
 
     dispose() {

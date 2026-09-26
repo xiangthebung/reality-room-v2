@@ -217,6 +217,29 @@ export const tripUniforms = {
   uNoiseTex: { value: bakeNoiseTexture() },
   /** Trip intensity, 0..1. Zero means every effect below is skipped. */
   uLevel: { value: 0 },
+  /**
+   * THE AFTERGLOW, in the same units as uLevel — and it is a FLOOR, not a level.
+   *
+   * You come down, the melt and the breathing are gone and the wood is solid
+   * again, and for the next several minutes the greens are still a little too
+   * deep and the light still finds the moss. The director decays it with a 360 s
+   * time constant from the moment a trip reaches its own end, and pressing N
+   * sets it to zero, because grounding yourself should genuinely put you back.
+   *
+   * IT IS SEPARATE FROM uLevel ON PURPOSE, AND THAT IS THE WHOLE DESIGN.
+   * uLevel is read by nine shaders outside this file — the sky, the clouds, the
+   * mist, the caves, the output pass's exposure and bloom — and by net/index.js,
+   * which tells the people standing next to you how far gone you are. Folding a
+   * floor into it would put an aurora in the sky and a fifth of a stop of bloom
+   * on the frame for five minutes after a trip ended, and would announce your
+   * afterglow to the room. So the gentle families get their floor applied on the
+   * JS side, where each one can be chosen individually (see the director), and
+   * the only thing this uniform does in the shader is open the two master
+   * guards. Everything with MOTION in it — the melt, the breath, the lean, the
+   * hills, the view breath — keeps reading uLevel and is therefore exactly zero
+   * while this is up.
+   */
+  uAfter: { value: 0 },
   /** Ego-death curve, 0..1, non-zero only in that phase. */
   uDissolve: { value: 0 },
   /**
@@ -391,12 +414,57 @@ export const tripUniforms = {
    * being run.
    */
   uSurge: { value: 0 },
+  /**
+   * ---- AND WHAT A SURGE ADDS, SPLIT OFF SO IT CAN HAVE A FRONT --------------
+   *
+   * uSurge above is the AMPLITUDE of the wave that is arriving; the five
+   * numbers below are the COEFFICIENTS the amplitude is multiplied by on its
+   * way into each family — MAX_GLOW * SURGE_GLOW and so on, with the debug
+   * gains and the family switches already folded in. See rrSurgeAt in
+   * LIVING_LIB for what is done with them.
+   *
+   * THE FIVE UNIFORMS THEY BELONG TO ARE UNCHANGED, AND THAT IS DELIBERATE.
+   * uGlow, uSat, uRim, uSwell and uPulse still carry exactly what they carried
+   * before the front existed: the plateau term PLUS the whole surge, applied
+   * globally. Every reader outside this file — the cave shader, the sky, the
+   * debug panel's live readout — therefore sees the same numbers it always saw
+   * and needs no edit. What the living materials do instead is subtract the
+   * part of the wave that has not reached this piece of world yet:
+   *
+   *     local = uGlow + uGlowSurge * (rrSurgeAt(p) - uSurge)
+   *
+   * which is algebraically identical to "plateau + coefficient * local surge"
+   * and is therefore the same effect written as a DEFICIT rather than as an
+   * addition. Writing it that way is what keeps the crest at exactly the
+   * amplitude the SURGE_ constants were tuned at — the wave, where it is, is
+   * the surge this project already shipped, and everywhere else is below it.
+   */
+  uGlowSurge: { value: 0 },
+  uSatSurge: { value: 0 },
+  uRimSurge: { value: 0 },
+  uSwellSurge: { value: 0 },
+  uPulseSurge: { value: 0 },
   /** Camera position, for distance-keyed effects. */
   uEye: { value: new THREE.Vector3() },
   /** bass, mid, high, transient — all 0..1, smoothed on the JS side. */
   uAudio: { value: new THREE.Vector4() },
   /** Wind phase, shared by every plant so the whole forest gusts together. */
   uWind: { value: new THREE.Vector2(0, 0) },
+  /**
+   * THE WIND'S ENVELOPE, as a multiplier on every plant's sway amplitude.
+   *
+   * uWind carries the PHASE of the gust and always has; nothing carried its
+   * strength, so the wood blew at exactly one amplitude from the day it was
+   * built. Separate uniform rather than a third component on uWind because the
+   * two are written from different things — the phase is a clock and this is a
+   * distribution plus the weather — and because a vec3 would silently change
+   * the size of a uniform every plant material declares.
+   *
+   * 1.0 IS THE AUTHORED VALUE AND IT IS EXACT. Every stored frame in scripts/
+   * was captured before this existed, which is the same thing as uGust = 1, so
+   * `gust * uGust` at 1.0 is `gust` to the bit. See updateWind, which pins it.
+   */
+  uGust: { value: 1 },
 };
 
 /**
@@ -554,6 +622,7 @@ float rrBend(float a, float arc) {
 const UNIFORM_DECL = /* glsl */ `
 uniform float uTime;
 uniform float uLevel;
+uniform float uAfter;
 uniform vec3  uEgo;
 uniform float uBreath;
 uniform float uBreathPhase;
@@ -574,9 +643,15 @@ uniform vec3  uGazeDir;
 uniform float uPulse;
 uniform float uRim;
 uniform float uSurge;
+uniform float uGlowSurge;
+uniform float uSatSurge;
+uniform float uRimSurge;
+uniform float uSwellSurge;
+uniform float uPulseSurge;
 uniform vec3  uEye;
 uniform vec4  uAudio;
 uniform vec2  uWind;
+uniform float uGust;
 `;
 
 /**
@@ -600,6 +675,58 @@ const LIVING_LIB = /* glsl */ `
 float rrCanopy(vec3 p) {
   return sin(dot(p.xz, vec2(0.043, 0.031)) - uTime * 0.20)
        + sin(dot(p.xz, vec2(-0.168, 0.207)) - uTime * 1.02) * 0.5;
+}
+
+/**
+ * THE SURGE ARRIVES FROM SOMEWHERE.
+ *
+ * You stand in the open and you SEE it start at the far trees — the colour
+ * going deep, the light coming out of the bark, the crowns swelling — and it
+ * comes across the ground toward you at walking pace, goes through you, and
+ * carries on into the wood behind.
+ *
+ * uSurge on its own cannot do that. It is one number for the world, so every
+ * wave arrived everywhere at once, which is the difference between a thing
+ * happening to the wood and a thing happening to the renderer: an event you
+ * cannot see coming and cannot watch leave is indistinguishable from a fader
+ * being moved. This is the same construction as rrCanopy directly above — a
+ * plane wave in world XZ, evaluated independently by every surface in the
+ * forest, so ten thousand objects that know nothing about each other brighten
+ * in step along a line that travels.
+ *
+ * THE ARITHMETIC, because a travelling luminance wave is exactly the shape this
+ * project's safety rule is about:
+ *
+ *   k = (0.0281, 0.0196) rad/m, so |k| = 0.03425 and the WAVELENGTH is
+ *   2 pi / |k| = 183 m — longer than you can see through this wood, which is
+ *   what makes it a front and not a ripple.
+ *   omega = 0.42 rad/s, so the SPEED is omega / |k| = 12.3 m/s. Fog holds the
+ *   visible wood to sixty or eighty metres, so the front crosses everything you
+ *   can see in about five seconds.
+ *   A FIXED POINT therefore modulates at omega / 2 pi = 0.067 Hz — a fifteen
+ *   second period, two orders of magnitude below the 3 Hz bar, and the finest
+ *   spatial feature of this field is the 183 m wavelength itself, so there is
+ *   no product of speed and spatial frequency hiding anywhere in it.
+ *
+ * It travels on a bearing of about 125 degrees, which is to say it comes at you
+ * out of the north-west quarter. Nothing depends on that; it is written down so
+ * that two people standing in the same clearing can agree about which way the
+ * wave went, which they can, because uTime is the shared world clock.
+ *
+ * THE FLOOR OF 0.34 IS THE POINT, NOT A SAFETY MARGIN. An effect that goes to
+ * nothing between waves announces that it was an effect; a three-to-one swing
+ * reads as the wood breathing harder in one place than another. Feeding a sine
+ * through smoothstep(-0.25, 0.75) also skews the duty cycle the way rrLung
+ * skews the breath: the crest holds for about 3.4 s of the 15 s period and the
+ * trough for 6.3 s, so this is a wave that arrives rather than an oscillator.
+ *
+ * The early-out is a uniform branch, so it is coherent across every wavefront
+ * and every sober frame in the game skips the whole function.
+ */
+float rrSurgeAt(vec3 p) {
+  if (uSurge < 0.002) return 0.0;
+  return uSurge * (0.34 + 0.66 * smoothstep(-0.25, 0.75,
+    sin(dot(p.xz, vec2(0.0281, 0.0196)) - uTime * 0.42)));
 }
 
 /**
@@ -714,16 +841,132 @@ const VERTEX_BODY = /* glsl */ `
                     + sin(uWind.y * 1.31 + rrPhase * 12.9) * 0.5;
       float stiff = 1.0;
     #endif
-    float amp = rrFlex * gust * (0.16 + 0.25 * uSway) * rrScale * stiff;
+    /**
+     * uGust IS THE LULL, and it multiplies rather than replacing.
+     *
+     * gust above is a travelling plane wave: it says WHERE in the forest the
+     * air is pushing hardest right now, and it is a function of world position,
+     * which is what makes a hundred separately placed plants read as one body
+     * of air. What it does not say is how hard, ever — its amplitude is a
+     * constant. uGust is that missing factor, a pure function of the room clock
+     * shared by every client, so the whole wood goes quiet together and leans
+     * together. See updateWind for the distribution and for why it is squared.
+     *
+     * It goes on amp rather than into the 0.35 + gust * 0.65 remap above on
+     * purpose: that remap is a FLOOR, so that a plant in the trough of the
+     * travelling wave still moves a little, and scaling a floor makes calm
+     * places dead rather than calm. Multiplying the finished amplitude keeps
+     * the spatial structure and scales the whole picture, which is what a lull
+     * does.
+     *
+     * At uGust = 1.0 this is the identical expression it was, bit for bit.
+     */
+    float amp = rrFlex * gust * uGust * (0.16 + 0.25 * uSway) * rrScale * stiff;
     transformed.x += flutter * amp;
     transformed.z += flutter * amp * 0.62;
     // Plants bend, they do not stretch: pull the tip down as it swings out so
     // the distance from the root stays roughly constant.
     transformed.y -= abs(flutter) * amp * 0.35 * rrFlex;
+
+    /**
+     * ==== THE UNDERGROWTH PARTS AS YOU WALK THROUGH IT ===================
+     *
+     * The ferns and the grass bend away from your boots and spring back behind
+     * you. It is the first thing in this project that makes the wood know you
+     * are in it, and it is deliberately OUTSIDE the uLevel guard: it is true
+     * sober, all day, and it is not a trip effect at all.
+     *
+     * THIS IS THE EXACT INVERSE OF A CHANGE THAT WAS REFUTED, AND THE
+     * DIFFERENCE IS THE WHOLE ARGUMENT.
+     *
+     * The lean — see the block further down — used to be applied to every plant
+     * with an aFlex, with a radius of 38 m, and it pulled each one TOWARD the
+     * camera. That combed every tuft in view into a straight line pointing at
+     * the eye: twenty thousand plants agreeing about a direction that is a
+     * property of the picture rather than of the world, which is the same
+     * failure as a screen-space filter arriving through geometry. It was
+     * removed from everything but trees for exactly that reason.
+     *
+     * Three things make this the opposite change rather than the same one
+     * wearing a different sign:
+     *
+     *   RADIUS. 1.4 m, not 38. About five tufts are inside it, all of them
+     *   under your feet and mostly out of frame — there is no field of plants
+     *   for the eye to read a pattern off, only the ones you are standing on.
+     *
+     *   DIRECTION. Away, not toward. A plant pushed away from a point is a
+     *   plant something is passing through; a plant pulled toward the camera is
+     *   a plant pointing at the camera. The radial pattern is the artefact and
+     *   only one of the two signs produces it.
+     *
+     *   WHO GETS IT. The band is the lean's own gate turned upside down —
+     *   smoothstep(0.45, 0.25, rrScale) against the lean's
+     *   smoothstep(0.25, 0.45, rrScale) — so the two partition the wood between
+     *   them and nothing takes both. Grass and ferns part; trees do not sway as
+     *   you walk up to them, which would be the thing that reads as a bug.
+     *
+     * THE AMPLITUDE IS 0.35 OF THE PLANT'S OWN aScale, which is 3.1 cm on grass
+     * and 5.6 cm on a fern — a little under the tip travel the wind already
+     * gives them (3.7 cm sober), so nothing here can move a plant further than
+     * a breeze does. check-plants.mjs budgets it as 0.35 * aScale times the same
+     * gate; ESTIMATED from the ceilings the director writes at the peak, that
+     * takes grass from about 0.39 of its own height to 0.45 in the worst case,
+     * against a ceiling of 0.55, and ferns from 0.30 to 0.35. The gate is what
+     * keeps it affordable — grass is the binding constraint on every
+     * displacement in this project, and this is the first term that has ever
+     * been added to its budget rather than taken out of it.
+     *
+     * IT BENDS RATHER THAN SLIDING. The y term is the same construction as the
+     * wind's pull-down four lines up: a constant fraction of the horizontal
+     * push rather than the exact arc-length drop, which for a 3 cm tip travel
+     * on a 0.5 m blade is a millimetre and invisible. What reads as bending is
+     * the tip dipping as it goes out, which is also what a boot does to a fern.
+     *
+     * COST. Two subtracts and a dot on every plant vertex in the world, then a
+     * branch that is false for every wavefront further than 1.4 m away — which
+     * is all of them but the handful under the player. aScale is one constant
+     * per geometry, so the rrScale half of the test is uniform across a draw
+     * call and costs nothing to evaluate.
+     *
+     * xz DISTANCE REACHES THROUGH WALLS, and at 1.4 m that is a fern on the far
+     * side of a boulder you are leaning against. Left alone deliberately:
+     * controller.roofed is the guard for things that matter at cave scale, and
+     * a centimetre of bend on a plant you cannot see is not worth a uniform.
+     */
+    vec2 rrAway = rrWorld.xz - uEye.xz;
+    float rrPartD2 = dot(rrAway, rrAway);
+    if (rrPartD2 < 1.96 && rrScale < 0.45) {
+      float rrPart = smoothstep(1.4, 0.35, sqrt(rrPartD2))
+                   * smoothstep(0.45, 0.25, rrScale)
+                   * rrFlex * rrScale * 0.35;
+      /**
+       * The floor inside the inversesqrt is not a NaN guard, it is a SPIN
+       * guard. The direction is undefined at the exact point the camera stands
+       * on, so a plant the axis passes through would pick an arbitrary bearing
+       * and change it every frame. Clamping the reciprocal length at 5 cm makes
+       * the push shrink linearly to zero over the last 5 cm instead, so the one
+       * plant directly under you is simply not pushed.
+       */
+      transformed.xz += rrAway * inversesqrt(max(rrPartD2, 0.0025)) * rrPart;
+      transformed.y -= rrPart * 0.45;
+    }
   #endif
 
   vRrField = vec4(0.0);
-  if (uLevel > 0.0005) {
+  /**
+   * THE GUARD OPENS FOR THE AFTERGLOW TOO, AND NOTHING INSIDE IT MOVES.
+   *
+   * uAfter is the floor left behind for a few minutes after a trip ends (see
+   * the uniform block). The fragment half needs vRrField for its colour, so the
+   * field has to be sampled — but every AMPLITUDE in here is written from the
+   * true level by the director, so uHills, uFlow, uBreathAmp, uLean and uPulse
+   * are all exactly zero while this is running on the floor alone. What it
+   * costs is the two trilinear fetches of the colour field; the melt's four are
+   * skipped by the uFlow test below, which is why that test earns its keep
+   * twice over.
+   */
+  float rrGentle = max(uLevel, uAfter);
+  if (rrGentle > 0.0005) {
     /**
      * THE COLOUR FIELD, SAMPLED AT THE VERTEX.
      *
@@ -910,128 +1153,153 @@ const VERTEX_BODY = /* glsl */ `
      * The lever that DID work is not doing fewer fetches, it is getting three
      * numbers out of one. See rrNoise3.
      */
-    // Fifty metres: the slow current the whole wood leans in.
-    vec3 rrPa = rrWorld * 0.019
-      + vec3(sin(uTime * 0.081), sin(uTime * 0.063 + 2.1), cos(uTime * 0.071)) * 0.55
-      + vec3(uTime * 0.007, uTime * 0.011, uTime * -0.009);
-    // Eighteen metres: the one that reads as a stand of trees writhing together.
-    vec3 rrPb = rrWorld * 0.055
-      + vec3(sin(uTime * 0.19), sin(uTime * 0.157 + 1.3), cos(uTime * 0.173)) * 0.8
-      + vec3(uTime * 0.02, uTime * 0.031, uTime * -0.018);
     /**
-     * The vertical component is damped to 0.55 of the horizontal ones, so the
-     * wood writhes sideways more than it heaves. That used to be three
-     * separate 0.55 multiplies on three separate scalars; it is one constant
-     * vector now, because the three components arrive together. See rrNoise3
-     * for why they do, and for what changed about the field when they started.
+     * AND THE WHOLE OF IT IS SKIPPED WHENEVER THE MELT IS IDLE, WHICH IS MOST
+     * OF EVERY TRIP.
+     *
+     * uFlow is held at exactly zero until the level passes 0.2 — see the melt
+     * curve in the director, and the argument there for why geometry
+     * distortion must not arrive before anything else does. So the entire
+     * come-up, the whole of the new afterglow, and every frame in which the
+     * melt family is switched off in the debug panel were computing six
+     * trilinear fetches, six sines, three cosines and a normalisation per
+     * vertex and then multiplying the answer by nothing.
+     *
+     * A uniform branch is coherent across every wavefront in the frame, so
+     * unlike the two rejected experiments recorded above — which tried to skip
+     * this per VERTEX, by distance, and measured flat because a wavefront
+     * spans every distance at once — there is no divergence to pay for. It
+     * removes 6 of the 8 fetches a plant vertex takes and 4 of 6 on terrain,
+     * on the layers that carry ~14.9 M vertices in a peak frame. Estimated
+     * from the measured cost of vectorising the melt (-1.06 ms at the peak for
+     * going from 18 fetches to 6): worth something close to a millisecond on
+     * an afterglow frame, and nothing at all at the peak, where uFlow is up
+     * and the branch is taken.
      */
-    const vec3 rrFlowAxis = vec3(1.0, 0.55, 1.0);
-    /**
-     * SIX BANDS TO FOUR, BY DELETING THE TWO MOST REDUNDANT ONES RATHER THAN
-     * BY REDESIGNING THE FIELD.
-     *
-     * The two slow domains were rrFbm2v, which is two fetches: an octave at the
-     * stated scale and a second at 2.03x it, weighted 0.6 and 0.3. So the melt
-     * had a six-band spectrum at 52.6 / 25.9 / 18.2 / 9.0 / 5.9 / 2.9 m —
-     * except that 25.9 and 18.2 are less than half an octave apart and carry
-     * 0.09 and 0.36 of the variance between them. The second octave of the
-     * coarse pair was very nearly a quieter copy of the first octave of the
-     * medium pair. The same is true of 9.0 against 5.9.
-     *
-     * Dropping those two second octaves leaves 52.6 / 18.2 / 5.9 / 2.9 — four
-     * fetches, each keeping its EXACT original domain, orbit vector and drift.
-     * Nothing about where the field is or how fast it churns changes; there is
-     * simply less of it, so the whole is scaled back up to put the variance
-     * where it was. That is one constant, and it is why this could be done
-     * without re-deriving the clocks the block above spent so long getting
-     * right.
-     *
-     * Measured over 200 k world positions and clock times against the real
-     * baked lattice, per component, in metres per unit of uFlow:
-     *
-     *   plants and props   std 0.1405 -> 0.1403     |max| 0.579 -> 0.565
-     *   terrain            std 0.1287 -> 0.1287     |max| 0.538 -> 0.479
-     *
-     * The peak comes DOWN while the typical excursion holds, which is what
-     * fewer octaves at matched variance always does — and it is free headroom
-     * for check-plants.mjs, whose flow term assumes a worst case of 1.0.
-     *
-     * The finest band keeps its old weight exactly (0.62 x 0.3), so the canopy
-     * does not fizz any harder than it already did. Raising it was the obvious
-     * way to hit the variance target with a clean geometric series and it was
-     * REJECTED for that reason: a 2.9 m feature on a 2-4 m leaf card is one
-     * sample per card, and doubling its amplitude would have bought a matched
-     * spectrum by making every card twitch independently.
-     *
-     * ALSO REJECTED, and it is the mirror image: compiling the rrPc pair out
-     * under RR_LEAF, which would take the canopy to four fetches for a further
-     * ~0.09 ms. The undersampling argument for it is sound — the terrain has had
-     * exactly this treatment since it was written, and for the same reason — and
-     * it is a preprocessor branch, so it does not repeat the mistake that killed
-     * "skip the melt on far trees" (no wavefront contains both a leaf and a
-     * trunk vertex). What stops it is the OTHER end: renormalise the leaves to
-     * keep their amplitude and a canopy then writhes on a different spectrum
-     * from the trunk holding it up, which is a stand of trees coming apart;
-     * leave the amplitude alone and the canopy moves 18% less than the wood it
-     * belongs to. Either way the crown and its trunk stop agreeing, and
-     * coherence is the thing this whole file is for. The better version of the
-     * idea is pivot sampling, which keeps the spectrum and fixes the shear —
-     * see the rejection note above leafCard in world/trees.js for why that is
-     * not here either.
-     */
-    vec3 rrFlow = (rrNoise3(rrPa) + rrNoise3(rrPb)) * 0.6 * rrFlowAxis;
-    /**
-     * A third octave at about six metres, which is what actually makes a TRUNK
-     * writhe rather than merely sway: over ten metres of trunk there is now more
-     * than one feature of the field, so the top goes one way while the middle
-     * goes the other. Its orbit is the fastest of the three — a seventeen-second
-     * period — because this is the scale at which movement is legible as
-     * movement rather than as a shape.
-     *
-     * It KEEPS both of its octaves where the two slower domains lost theirs.
-     * They are the only two bands in the field finer than ten metres, so there
-     * is nothing for either of them to be redundant against, and 2.9 m is where
-     * the writhe stops being a lean and starts being movement.
-     *
-     * The ground does not get it. The terrain mesh is a 1.6 m grid, so a
-     * six-metre feature is four samples across — enough to render as facets, and
-     * a faceted hillside is a worse artefact than the one being fixed. Terrain
-     * therefore runs on two fetches rather than four.
-     */
-    #ifndef RR_TERRAIN
-      vec3 rrPc = rrWorld * 0.17
-        + vec3(sin(uTime * 0.37), sin(uTime * 0.31 + 0.6), cos(uTime * 0.34)) * 0.9
-        + vec3(uTime * 0.05, uTime * 0.03, uTime * -0.04);
-      rrFlow += rrFbm2v(rrPc) * rrFlowAxis * 0.62;
-    #endif
-    /**
-     * Normalise the field so uFlow really is metres of travel. Was 0.42 when
-     * the two slow domains had a second octave each; the two constants below
-     * are 0.42 divided by how much of the standard deviation those octaves were
-     * carrying — 1.0962 with the fine pair present, 1.1181 without it.
-     */
-    #ifdef RR_TERRAIN
-      rrFlow *= 0.4696;
-    #else
-      rrFlow *= 0.4604;
-    #endif
+    if (uFlow > 0.0005) {
+      // Fifty metres: the slow current the whole wood leans in.
+      vec3 rrPa = rrWorld * 0.019
+        + vec3(sin(uTime * 0.081), sin(uTime * 0.063 + 2.1), cos(uTime * 0.071)) * 0.55
+        + vec3(uTime * 0.007, uTime * 0.011, uTime * -0.009);
+      // Eighteen metres: the one that reads as a stand of trees writhing together.
+      vec3 rrPb = rrWorld * 0.055
+        + vec3(sin(uTime * 0.19), sin(uTime * 0.157 + 1.3), cos(uTime * 0.173)) * 0.8
+        + vec3(uTime * 0.02, uTime * 0.031, uTime * -0.018);
+      /**
+       * The vertical component is damped to 0.55 of the horizontal ones, so the
+       * wood writhes sideways more than it heaves. That used to be three
+       * separate 0.55 multiplies on three separate scalars; it is one constant
+       * vector now, because the three components arrive together. See rrNoise3
+       * for why they do, and for what changed about the field when they started.
+       */
+      const vec3 rrFlowAxis = vec3(1.0, 0.55, 1.0);
+      /**
+       * SIX BANDS TO FOUR, BY DELETING THE TWO MOST REDUNDANT ONES RATHER THAN
+       * BY REDESIGNING THE FIELD.
+       *
+       * The two slow domains were rrFbm2v, which is two fetches: an octave at the
+       * stated scale and a second at 2.03x it, weighted 0.6 and 0.3. So the melt
+       * had a six-band spectrum at 52.6 / 25.9 / 18.2 / 9.0 / 5.9 / 2.9 m —
+       * except that 25.9 and 18.2 are less than half an octave apart and carry
+       * 0.09 and 0.36 of the variance between them. The second octave of the
+       * coarse pair was very nearly a quieter copy of the first octave of the
+       * medium pair. The same is true of 9.0 against 5.9.
+       *
+       * Dropping those two second octaves leaves 52.6 / 18.2 / 5.9 / 2.9 — four
+       * fetches, each keeping its EXACT original domain, orbit vector and drift.
+       * Nothing about where the field is or how fast it churns changes; there is
+       * simply less of it, so the whole is scaled back up to put the variance
+       * where it was. That is one constant, and it is why this could be done
+       * without re-deriving the clocks the block above spent so long getting
+       * right.
+       *
+       * Measured over 200 k world positions and clock times against the real
+       * baked lattice, per component, in metres per unit of uFlow:
+       *
+       *   plants and props   std 0.1405 -> 0.1403     |max| 0.579 -> 0.565
+       *   terrain            std 0.1287 -> 0.1287     |max| 0.538 -> 0.479
+       *
+       * The peak comes DOWN while the typical excursion holds, which is what
+       * fewer octaves at matched variance always does — and it is free headroom
+       * for check-plants.mjs, whose flow term assumes a worst case of 1.0.
+       *
+       * The finest band keeps its old weight exactly (0.62 x 0.3), so the canopy
+       * does not fizz any harder than it already did. Raising it was the obvious
+       * way to hit the variance target with a clean geometric series and it was
+       * REJECTED for that reason: a 2.9 m feature on a 2-4 m leaf card is one
+       * sample per card, and doubling its amplitude would have bought a matched
+       * spectrum by making every card twitch independently.
+       *
+       * ALSO REJECTED, and it is the mirror image: compiling the rrPc pair out
+       * under RR_LEAF, which would take the canopy to four fetches for a further
+       * ~0.09 ms. The undersampling argument for it is sound — the terrain has had
+       * exactly this treatment since it was written, and for the same reason — and
+       * it is a preprocessor branch, so it does not repeat the mistake that killed
+       * "skip the melt on far trees" (no wavefront contains both a leaf and a
+       * trunk vertex). What stops it is the OTHER end: renormalise the leaves to
+       * keep their amplitude and a canopy then writhes on a different spectrum
+       * from the trunk holding it up, which is a stand of trees coming apart;
+       * leave the amplitude alone and the canopy moves 18% less than the wood it
+       * belongs to. Either way the crown and its trunk stop agreeing, and
+       * coherence is the thing this whole file is for. The better version of the
+       * idea is pivot sampling, which keeps the spectrum and fixes the shear —
+       * see the rejection note above leafCard in world/trees.js for why that is
+       * not here either.
+       */
+      vec3 rrFlow = (rrNoise3(rrPa) + rrNoise3(rrPb)) * 0.6 * rrFlowAxis;
+      /**
+       * A third octave at about six metres, which is what actually makes a TRUNK
+       * writhe rather than merely sway: over ten metres of trunk there is now more
+       * than one feature of the field, so the top goes one way while the middle
+       * goes the other. Its orbit is the fastest of the three — a seventeen-second
+       * period — because this is the scale at which movement is legible as
+       * movement rather than as a shape.
+       *
+       * It KEEPS both of its octaves where the two slower domains lost theirs.
+       * They are the only two bands in the field finer than ten metres, so there
+       * is nothing for either of them to be redundant against, and 2.9 m is where
+       * the writhe stops being a lean and starts being movement.
+       *
+       * The ground does not get it. The terrain mesh is a 1.6 m grid, so a
+       * six-metre feature is four samples across — enough to render as facets, and
+       * a faceted hillside is a worse artefact than the one being fixed. Terrain
+       * therefore runs on two fetches rather than four.
+       */
+      #ifndef RR_TERRAIN
+        vec3 rrPc = rrWorld * 0.17
+          + vec3(sin(uTime * 0.37), sin(uTime * 0.31 + 0.6), cos(uTime * 0.34)) * 0.9
+          + vec3(uTime * 0.05, uTime * 0.03, uTime * -0.04);
+        rrFlow += rrFbm2v(rrPc) * rrFlowAxis * 0.62;
+      #endif
+      /**
+       * Normalise the field so uFlow really is metres of travel. Was 0.42 when
+       * the two slow domains had a second octave each; the two constants below
+       * are 0.42 divided by how much of the standard deviation those octaves were
+       * carrying — 1.0962 with the fine pair present, 1.1181 without it.
+       */
+      #ifdef RR_TERRAIN
+        rrFlow *= 0.4696;
+      #else
+        rrFlow *= 0.4604;
+      #endif
 
-    float rrFlowAmp = uFlow;
-    #ifdef RR_PLANT
-      // Same rule as every other displacement: a plant may only move as far as a
-      // plant of its size bends, and its roots stay in the ground.
-      rrFlowAmp *= rrScale * 0.45 * (0.25 + 0.75 * rrFlex);
-    #elif defined(RR_TERRAIN)
-      // Not under your own feet. The controller walks on the analytic height
-      // field, which knows nothing about this, so ground that moved within a
-      // couple of paces would push the camera through itself.
-      rrFlowAmp *= smoothstep(3.0, 22.0, distance(rrWorld.xz, uEye.xz));
-    #else
-      // Props are small and rigid: at their size this is a translation rather
-      // than a deformation, and a boulder sliding half a metre reads as a bug.
-      rrFlowAmp *= 0.25;
-    #endif
-    transformed += rrFlow * rrFlowAmp;
+      float rrFlowAmp = uFlow;
+      #ifdef RR_PLANT
+        // Same rule as every other displacement: a plant may only move as far as a
+        // plant of its size bends, and its roots stay in the ground.
+        rrFlowAmp *= rrScale * 0.45 * (0.25 + 0.75 * rrFlex);
+      #elif defined(RR_TERRAIN)
+        // Not under your own feet. The controller walks on the analytic height
+        // field, which knows nothing about this, so ground that moved within a
+        // couple of paces would push the camera through itself.
+        rrFlowAmp *= smoothstep(3.0, 22.0, distance(rrWorld.xz, uEye.xz));
+      #else
+        // Props are small and rigid: at their size this is a translation rather
+        // than a deformation, and a boulder sliding half a metre reads as a bug.
+        rrFlowAmp *= 0.25;
+      #endif
+      transformed += rrFlow * rrFlowAmp;
+    }
 
     /**
      * BREATHING — regional, along the surface normal.
@@ -1236,7 +1504,19 @@ const VERTEX_BODY = /* glsl */ `
        * swell arrives at each tree when the wave reaches it. Watch a stand of
        * them and the pulse visibly crosses the wood.
        */
-      transformed += objectNormal * rrCanopy(rrWorld) * uPulse * rrScale;
+      /**
+       * AND THE SURGE'S SHARE OF IT ARRIVES WHEN THE FRONT DOES.
+       *
+       * uPulse still carries the plateau plus the whole surge, for every reader
+       * outside this file; the deficit term takes back the part of the wave
+       * that has not got here yet. See rrSurgeAt in LIVING_LIB. Two waves are
+       * now crossing the canopy at different speeds — rrCanopy's 100 m gesture
+       * at 4.6 m/s and this 183 m front at 12.3 m/s — which is deliberate: they
+       * beat against each other instead of arriving together, so the canopy
+       * never inflates on a period you can count.
+       */
+      float rrPulseHere = uPulse + uPulseSurge * (rrSurgeAt(rrWorld) - uSurge);
+      transformed += objectNormal * rrCanopy(rrWorld) * rrPulseHere * rrScale;
     #endif
   }
 
@@ -1287,6 +1567,19 @@ const VERTEX_BODY = /* glsl */ `
 const FRAGMENT_LIB = /* glsl */ `
 vec3 rrSurf;
 vec2 rrUvOff;
+/**
+ * THE SURGE AS IT STANDS AT THIS FRAGMENT, and how far that is below the
+ * global amplitude.
+ *
+ * Computed once at the top of main, in rrPrepare, for the same reason the
+ * domain warp is: the swell wants it, the saturation wants it, the rim wants
+ * it and the moss glow wants it, and four terms disagreeing about where the
+ * wave has got to would be worse than no wave at all. rrSurgeD is zero or
+ * negative — see the uniform block on uGlowSurge for why the front is written
+ * as a deficit from the global value rather than as an addition to a plateau.
+ */
+float rrSurgeL;
+float rrSurgeD;
 
 /**
  * THE CONTOUR LATTICE WAS REMOVED HERE, AND THEN SO WAS ITS REPLACEMENT.
@@ -1324,6 +1617,8 @@ vec2 rrUvOff;
 void rrPrepare() {
   rrSurf = vTripWorld;
   rrUvOff = vec2(0.0);
+  rrSurgeL = rrSurgeAt(vTripWorld);
+  rrSurgeD = rrSurgeL - uSurge;
   /**
    * THE SKIN BREATHES ON THE SAME TRAVELLING WAVE THE GEOMETRY DOES.
    *
@@ -1339,7 +1634,17 @@ void rrPrepare() {
    * out along its normals is also the trunk whose grain is most stretched,
    * because both are the same number.
    */
-  float rrSw = uSwell * vRrField.w;
+  /**
+   * AND THE SURGE'S SHARE OF THE SWELL ARRIVES WITH THE FRONT.
+   *
+   * SURGE_SWELL is the largest of the six surge coefficients — 1.3 times the
+   * plateau ceiling — so this is the term the travelling wave is most visible
+   * in: the bark of the far trees starts heaving before yours does. The
+   * deficit is applied to the AMPLITUDE and not to the breath, so the phase of
+   * the swell is untouched and the wave changes how deeply a place breathes
+   * rather than when.
+   */
+  float rrSw = (uSwell + uSwellSurge * rrSurgeD) * vRrField.w;
   if (abs(rrSw) + uCreep < 1e-5) return;
 
   /**
@@ -1967,6 +2272,104 @@ const FRAGMENT_BODY = /* glsl */ `
      * on a pine.
      */
     rrBc += max(0.0, rrBrelief) * 0.014 * rrBdetail;
+
+    /**
+     * ==== MOSS ON THE SHADED SIDE OF EVERY PIECE OF WOOD ==================
+     *
+     * Sober, always on, and the one thing in this file that is not about the
+     * trip at all. It is here because the bark fragment path is here, and
+     * because logs and stumps share this material, so the same eight lines put
+     * moss on the shaded flank of every fallen log in the world for free.
+     *
+     * WHAT IT IS FOR. One side of every trunk is green and it is the SAME side
+     * on all of them, so a player can tell which way they are facing anywhere
+     * in the wood without a compass, without chrome, and without being told.
+     * This world has no map and no minimap by design; what it has instead is a
+     * hundred thousand trees that all agree about north.
+     *
+     * THE ASPECT IS DERIVED, NOT GUESSED. daylight.js puts the celestial pole
+     * 48 degrees up on a bearing of 146, which is what makes this wood southern
+     * and the sun track through the north. The sun's arc is symmetric about the
+     * pole's meridian, so the daylight-averaged sun direction is the ANTI-pole
+     * azimuth: sampled over the whole day at 20 k phases and weighted by
+     * sin(elevation), the mean horizontal sun bearing comes out at 326.0
+     * degrees, and its noon bearing at 326.0 as well. The permanently shaded
+     * flank of a vertical surface is therefore the one facing 146 degrees —
+     * the pole's own bearing, which is not a coincidence but the same symmetry
+     * read twice.
+     *
+     * In this world's axes, bearing b is (sin b, -cos b) in xz, so 146 degrees
+     * is (0.5592, 0.8290). The moon is the same arc half a cycle later, so it
+     * lights the opposite flank — but a full moon is about a millionth of the
+     * sun's irradiance, and moss is an accumulation over years. It does not get
+     * a vote.
+     *
+     * THE WORLD NORMAL COSTS TWO DOT PRODUCTS AND NOTHING ELSE. worldN =
+     * transpose(mat3(viewMatrix)) * viewN, and component i of that is
+     * dot(viewMatrix[i].xyz, normal) — the identical recipe the leaf shading
+     * block above uses to find its own up vector, and for the same reason: no
+     * new varying, no new fetch, no mat3 multiply. The horizontal components
+     * are used UNNORMALISED, so a face turned toward the sky contributes little
+     * and the top of a stump stays bare. That is a simplification and not an
+     * accident — moss on a horizontal surface is a different plant with a
+     * different rule, and putting it here would break the compass.
+     *
+     * faceDirection undoes three's DOUBLE_SIDED flip, exactly as the leaf block
+     * does: without it a log seen from behind would claim to face the other way
+     * and its moss would swap sides as you walked round it.
+     *
+     * rrBold IS THE HEIGHT GAUGE. It is 1 on the bole and 0 on the whips, so
+     * the moss lands on old thick wood and never on a twig. It is an imperfect
+     * proxy for "near the ground" — a tall straight bole is bold all the way up
+     * — and it is the honest one available, because the crown geometry is
+     * merged and instanced and nothing in this shader knows where the tree's
+     * base is. See the same argument, at length, in the leaf block above.
+     *
+     * rrBn PATCHES IT so it is a colonisation and not a coat of paint. That is
+     * the bark fissure field, already in a register, and it is squashed in Y —
+     * so the patches come out elongated along the grain, a metre or so tall and
+     * a hand's width around, which is what lichen and moss on a real trunk look
+     * like. During a trip it flows up the trunk with the fissures, because it
+     * is evaluated in the same domain; that is the creep doing what the creep
+     * is for, and sober it is exactly still.
+     *
+     * THE COLOUR IS CHOSEN BY LUMA AND NOT BY EYE, and this is the trap the
+     * tree-adorn palette records. This block runs after dithering_fragment, so
+     * gl_FragColor is tone-mapped and sRGB-encoded: a trunk whose linear value
+     * is 0.05 to 0.10 arrives here at about 0.24 to 0.35 of display white, and
+     * a botanically honest dark moss — which is genuinely darker than bark — is
+     * a stain on it, indistinguishable at three metres and invisible at ten.
+     * So the multiplier is chosen to RAISE Rec.709 luma by 15%:
+     * 0.2126*0.68 + 0.7152*1.34 + 0.0722*0.62 = 1.148. What reads as moss is
+     * the hue swing, and what makes it visible at all is being lighter than the
+     * thing it is on.
+     *
+     * The small addition afterwards is the same argument the skylight line
+     * above makes: a multiplier does nothing to black, and pine bark in shade
+     * is very nearly black, so on the darkest species the whole effect would
+     * fail silently. 0.02 of display green is a fortieth of the range — enough
+     * that the flank is green rather than black, far too little to read as
+     * light on an unlit surface.
+     *
+     * IT FADES OUT BY FORTY METRES, and that is not an optimisation either.
+     * This is a TINT applied after fog_fragment, so at range it would be
+     * painting the air rather than the wood — the mustard-middle-distance bug
+     * the ground block a few hundred lines down documents in full. Ending it at
+     * 42 m is the same fix as that block's fog-solidity term for one smoothstep
+     * instead of one exp, and it costs nothing you can see: past forty metres a
+     * trunk in this wood is a shape in the haze.
+     */
+    float rrMossN = dot(vec2(dot(viewMatrix[0].xyz, normal), dot(viewMatrix[2].xyz, normal)),
+                        vec2(0.5592, 0.8290));
+    #ifdef DOUBLE_SIDED
+      rrMossN *= faceDirection;
+    #endif
+    float rrMoss = smoothstep(0.25, 0.90, rrMossN)
+                 * smoothstep(-0.02, 0.30, rrBn)
+                 * rrBold
+                 * (1.0 - smoothstep(12.0, 42.0, rrBdist));
+    rrBc = mix(rrBc, rrBc * vec3(0.68, 1.34, 0.62), rrMoss);
+    rrBc += vec3(0.006, 0.020, 0.008) * rrMoss;
     gl_FragColor.rgb = rrBc;
   #endif
 
@@ -2163,7 +2566,19 @@ const FRAGMENT_BODY = /* glsl */ `
     gl_FragColor.rgb = rrG;
   #endif
 
-  if (uLevel > 0.0005) {
+  /**
+   * THE GENTLE FAMILIES HAVE A FLOOR UNDER THEM FOR A FEW MINUTES AFTERWARDS.
+   *
+   * See uAfter in the uniform block. The floor reaches the shader through the
+   * amounts themselves — uSat, uWarmth, uDetail and uGlow are written from
+   * max(level, afterglow) on the JS side — so the only thing that has to change
+   * here is the gate, which would otherwise skip the whole block the moment the
+   * level hit zero and take the afterglow with it. Nothing inside this block
+   * moves anything: it is colour, added light and surface detail, and every
+   * term with geometry or the picture in it reads uLevel and is exactly zero.
+   */
+  float rrGentle = max(uLevel, uAfter);
+  if (rrGentle > 0.0005) {
     vec3 rrC = gl_FragColor.rgb;
     float rrLum = dot(rrC, vec3(0.2126, 0.7152, 0.0722));
 
@@ -2356,7 +2771,16 @@ const FRAGMENT_BODY = /* glsl */ `
     float rrMx = max(rrC.r, max(rrC.g, rrC.b));
     float rrMn = min(rrC.r, min(rrC.g, rrC.b));
     float rrChroma = (rrMx - rrMn) / max(rrMx, 1e-4);
-    rrC = max(mix(vec3(rrLum), rrC, 1.0 + uSat * rrSolid / (1.0 + rrChroma * rrChroma * 2.6)), 0.0);
+    /**
+     * The surge's share of the saturation arrives with the front — see
+     * rrSurgeAt. The sum cannot go negative however deep the trough: uRim,
+     * uSat and the other three each already contain their own coefficient
+     * times the full uSurge, and the deficit can take back at most 0.66 of
+     * exactly that, so a third of the surge's contribution survives everywhere
+     * even at the very back of the wave.
+     */
+    float rrSatHere = uSat + uSatSurge * rrSurgeD;
+    rrC = max(mix(vec3(rrLum), rrC, 1.0 + rrSatHere * rrSolid / (1.0 + rrChroma * rrChroma * 2.6)), 0.0);
 
     // White balance toward warm, luminance preserving — the light changes
     // temperature without the frame getting brighter. Also keyed to rrSolid:
@@ -2563,7 +2987,12 @@ const FRAGMENT_BODY = /* glsl */ `
          * the band appear on the sunlit trunks and vanish on the ones in the
          * hollow, which is also far more legible than having it everywhere.
          */
-        rrC += mix(vec3(1.0), rrGlowCol, 0.7) * rrEdge * uRim * (0.18 + 0.82 * rrKey);
+        // The rim is where the front is most legible, because an outline
+        // either is there or is not: the far trees acquire edges a couple of
+        // seconds before the near ones do, so you watch the wood organise
+        // itself from the back forward. Same deficit as the saturation above.
+        rrC += mix(vec3(1.0), rrGlowCol, 0.7) * rrEdge
+             * (uRim + uRimSurge * rrSurgeD) * (0.18 + 0.82 * rrKey);
       }
     #endif
 
@@ -2583,7 +3012,8 @@ const FRAGMENT_BODY = /* glsl */ `
        * into a ripple, and no chance of it reading as a liquid.
        */
       float rrMossGlow = smoothstep(0.06, 0.52, rrFbm2(rrSurf * 0.13 + vec3(0.0, uTime * 0.015, 0.0)));
-      rrC += mix(vec3(0.30, 0.62, 0.24), rrGlowCol, 0.32) * rrMossGlow * rrKey * uGlow * 0.55;
+      rrC += mix(vec3(0.30, 0.62, 0.24), rrGlowCol, 0.32) * rrMossGlow * rrKey
+           * (uGlow + uGlowSurge * rrSurgeD) * 0.55;
 
       /**
        * And it gets LUSHER as the trip deepens rather than more chemical: the
@@ -2591,7 +3021,12 @@ const FRAGMENT_BODY = /* glsl */ `
        * ground's share of the peak, and it is the one direction it can be pushed
        * hard in without ceasing to be ground.
        */
-      rrC = mix(rrC, rrC * vec3(0.84, 1.12, 0.78), uLevel * 0.5);
+      // rrGentle, not uLevel: the lushness is the one thing on the floor that
+      // is worth having for its own sake afterwards. Moss you noticed while you
+      // were up there is still a little greener than the moss you remember, and
+      // there is nothing moving in this line for the memory to be checked
+      // against — see uAfter.
+      rrC = mix(rrC, rrC * vec3(0.84, 1.12, 0.78), rrGentle * 0.5);
     #endif
 
     #ifdef RR_LEAF
@@ -2639,8 +3074,14 @@ const FRAGMENT_BODY = /* glsl */ `
        * the foliage itself, so it is allowed to be its own colour.
        */
       float rrPl = rrCanopy(vTripWorld);
-      rrC *= 1.0 + rrPl * 0.15 * uLevel * (1.0 + uSurge);
-      float rrPlLit = max(0.0, rrPl) * uGlow;
+      // rrSurgeL rather than uSurge: the crown brightens when the wave reaches
+      // the tree it belongs to, so the canopy lights up in a band that crosses
+      // the wood rather than all at once. The vertex half inflates the same
+      // cards off the same number — see rrPulseHere — so the swelling and the
+      // brightening remain one event, which is the whole reason this term is
+      // worth more than its amplitude.
+      rrC *= 1.0 + rrPl * 0.15 * uLevel * (1.0 + rrSurgeL);
+      float rrPlLit = max(0.0, rrPl) * (uGlow + uGlowSurge * rrSurgeD);
       rrC += rrC * vec3(1.5, 1.05, 0.45) * rrPlLit * 0.16;
       rrC += rrGlowCol * rrPlLit * 0.04;
     #endif
@@ -3162,8 +3603,13 @@ const GUST_DONE_BELOW = 0.02;
  * @param {number} dt seconds, already zeroed by the caller when frozen
  * @param {number} gustBoost the trip level, 0..1
  * @param {number} scale the debug panel's wind multiplier; 1 in every real session
+ * @param {number} squall 0..1, `atmosphere.squallLevel` — the world's rain curve
+ *   evaluated 40 s in the future, so the wind gets up before the shower lands.
+ *   A NUMBER rather than the function, deliberately: if this file evaluated the
+ *   weather itself it would evaluate it at a second instant and could disagree
+ *   with the sky about what is coming.
  */
-export function updateWind(dt, gustBoost = 0, scale = 1) {
+export function updateWind(dt, gustBoost = 0, scale = 1, squall = 0) {
   const driveX = (scale - 1) * WIND_RATE_X + scale * gustBoost * 0.5;
   const driveY = (scale - 1) * WIND_RATE_Y + scale * gustBoost * 0.4;
   windSkewX += dt * driveX;
@@ -3192,4 +3638,54 @@ export function updateWind(dt, gustBoost = 0, scale = 1) {
   const w = tripUniforms.uWind.value;
   w.x = t * WIND_RATE_X + windSkewX;
   w.y = t * WIND_RATE_Y + windSkewY;
+  /**
+   * ==== THE LULL, AND THE SQUALL THAT RUNS AHEAD OF THE RAIN ================
+   *
+   * The gust in VERTEX_BODY is a travelling plane wave of CONSTANT amplitude,
+   * so this wood has blown at exactly one strength since it was built. Wind
+   * does not do that. It sits nearly still for a minute and then leans on the
+   * whole forest for twenty seconds, and the still minute is the entire reason
+   * the twenty seconds read as anything.
+   *
+   * TWO SINES, SUMMED, MAPPED TO 0..1, AND THEN SQUARED. The square IS the
+   * distribution: a raised sine spends half its life above its midpoint, and
+   * squaring pulls the mass down — the mean of (sin/2 + 1/2)^2 over a cycle is
+   * 0.375 — and it only approaches 1 near the crest of both sines at once. So
+   * the wood is mostly calm and occasionally, briefly, not. Cubing it was
+   * considered and rejected on the arithmetic: at a mean of 0.31 the sober
+   * forest stops moving enough to look alive between gusts, and a forest that
+   * is dead 80% of the time is a worse bug than one that is uniform.
+   *
+   * 0.055 and 0.021 rad/s are periods of 114 s and 299 s, beating about every
+   * three minutes. Slower and one player never sees both states in a session;
+   * faster and it is a pulse rather than weather. Range 0.55..1.45 sober
+   * (mean 0.888, so slightly calmer on average than today with peaks 45%
+   * higher), up to 2.0 under a squall.
+   *
+   * DERIVED FROM worldClock, LIKE THE PHASE ABOVE, and it has to be: two people
+   * in one clearing must have one wind, and an envelope integrated from dt is a
+   * function of how many frames this tab has drawn — which is the exact bug the
+   * skew/baseline split above exists to record.
+   *
+   * ==== PINNED TO EXACTLY 1.0 UNDER AUTOMATION =============================
+   *
+   * Without this line about fifteen pixel-diffing scripts break at once. Every
+   * stored frame in scripts/ was captured before uGust existed, which is the
+   * same thing as uGust = 1.0; any other value moves every leaf card and every
+   * blade of grass in the world on every shot, and 1.0 exactly means
+   * `gust * uGust` is `gust` to the bit rather than to a rounding error. Same
+   * mechanism and same reasoning as dayPhase returning AUTHORED_PHASE and
+   * rainAtTime returning 0 — three precedents, and this is the fourth.
+   *
+   * `probe.freeze` needs no special case: it pins the world clock, so t stops
+   * and this stops with it.
+   */
+  if (typeof navigator !== 'undefined' && navigator.webdriver) {
+    tripUniforms.uGust.value = 1;
+  } else {
+    const swell = (Math.sin(t * 0.055) * 0.5 + Math.sin(t * 0.021 + 2.4) * 0.5) * 0.5 + 0.5;
+    const lull = swell * swell;
+    const front = squall > 0 ? (squall > 1 ? 1 : squall) : 0;
+    tripUniforms.uGust.value = 0.55 + lull * 0.9 + front * 0.55;
+  }
 }

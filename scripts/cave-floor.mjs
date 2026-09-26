@@ -21,7 +21,37 @@ import { caveReady } from './_cave-ready.mjs';
  * `nearestTo`: the ray origin was the last guess left in this script and it was
  * worth up to 3.9 m of invented disagreement.
  *
- *   node scripts/cave-floor.mjs [--seed=grove-01] [--tol=0.45]
+ *   node scripts/cave-floor.mjs [--seed=grove-01] [--tol=0.45] [--max-hover=1.0]
+ *
+ * IT IS A GATE AND FOR MOST OF ITS LIFE IT WAS NOT ONE.
+ *
+ * This script sat fifth in the `check:cave` chain and contained not one
+ * `process.exit`. It printed the disagreements, printed "<-- the body stands in
+ * mid-air here" when the worst one was over a metre, and returned 0. So the one
+ * instrument in the suite that measures the complaint the room has actually
+ * filed twice — "it just floats me in midair" — could report a two-metre hover
+ * and the chain would carry straight on to the next script. Every other cave
+ * script in the chain gates on its own number; this one was a pure instrument
+ * wearing a gate's position, which is worse than not being in the chain at all,
+ * because being in the chain is what stops anyone noticing it is not checked.
+ *
+ * WORST HOVER AND A RATE. The line at the bottom has printed a marker at one
+ * metre for as long as it has existed: below a metre a disagreement is a floor
+ * you can feel is soft, above it the body is standing in the air with the rock
+ * visible under its feet. One metre of hover is a fact about a body.
+ *
+ * The first version of this gate was the max alone, on the argument that the
+ * COUNT is not gateable — it moves with the seed, with the probe grid and with
+ * every change to the walk, and a count that moves for legitimate reasons is a
+ * gate that gets muted. That argument is right about the raw count and wrong
+ * about the quantity: normalise the count by the probe population and it stops
+ * moving for those reasons and starts measuring the only thing a max cannot
+ * see, which is whether the softness is one ring or the whole system. Both bars
+ * now run. See the block at MAX_HOVER for the distribution that settled it.
+ *
+ * Wading is deliberately not gated. It is the same disagreement with the sign
+ * flipped and it is not the same fault: the floor being a little low reads as a
+ * soft footfall, where the floor being high reads as flight.
  */
 
 const args = Object.fromEntries(
@@ -34,6 +64,38 @@ const URL = args.url ?? 'http://127.0.0.1:5180/';
 const SEED = args.seed ?? 'grove-01';
 const TOL = Number(args.tol ?? 0.45);
 const CAVES = Number(args.caves ?? 2);
+/**
+ * THE BAR, AND WHY IT IS TWO NUMBERS NOW.
+ *
+ * The block at the top argued for a MAX and against a COUNT, on the grounds
+ * that a count moves with the seed and the probe grid and so gets muted. Half
+ * of that survives measurement and half of it does not.
+ *
+ * A max alone has the mirror-image fault. It is taken over a probe population
+ * that GROWS WITH THE CAVE, so a change that adds forty per cent more passage
+ * at unchanged per-metre quality draws forty per cent more tickets in the same
+ * lottery and fails a fixed max with no regression having occurred. That is
+ * exactly what happened when the branch work landed: 3538 probes over two
+ * caves, and the distribution of hovering probes was
+ *
+ *     > 0.45 m   85        > 1.0 m   6        > 1.5 m   2        > 2.0 m   0
+ *
+ * which does not plateau, it falls off a cliff. Six probes over a metre in
+ * roughly a kilometre of passage is a few square metres of cave, and none of
+ * them on a breakdown block. A max cannot tell that from "the whole cave is
+ * soft", and telling those apart is the entire job.
+ *
+ * So: a max that catches a body unmistakably in the air, and a RATE — hovering
+ * probes over a metre per thousand probed — which is the count normalised by
+ * the thing that made it un-gateable. The rate does not move when the cave gets
+ * bigger, and it is the only one of the two that can see a systemic softening.
+ * At the time of writing the rate is 1.7 and the bar is 5.
+ */
+const MAX_HOVER = Number(args['max-hover'] ?? 1.8);
+/** Above this a disagreement is flight rather than a soft floor. */
+const FLIGHT = Number(args.flight ?? 1.0);
+/** Flying probes per thousand probed. See MAX_HOVER. */
+const MAX_FLIGHT_RATE = Number(args['max-flight-rate'] ?? 5);
 
 setWorldSeed(SEED);
 const near = cavesNear(0, 0, 900);
@@ -56,10 +118,20 @@ await page.click('#enter');
 await page.waitForSelector('#gate.gone', { timeout: 20000 }).catch(() => {});
 await page.waitForTimeout(2000);
 
+/**
+ * How many caves actually reported. A gate that probes nothing must FAIL rather
+ * than pass: "k=-1: not built" twice used to print two lines and exit 0, which
+ * is a green tick for a suite that measured no cave at all. That is this
+ * project's own recorded lesson about instruments that do not say when they are
+ * dead, and it is the failure mode a `&&` chain is least likely to surface.
+ */
+let probed = 0;
 let worstHover = 0;
 let totalBad = 0;
 let totalHover = 0;
 let totalWade = 0;
+let totalProbes = 0;
+let totalFlight = 0;
 let blockN = 0;
 let blockSum = 0;
 let blockHover = 0;
@@ -89,7 +161,7 @@ for (const c of near.slice(0, CAVES)) {
   await caveReady(page, c.k);
 
   const report = await page.evaluate(
-    async ({ k, tol }) => {
+    async ({ k, tol, flight }) => {
       const R = window.RR;
       const mod = await import('/src/world/caves.js');
       const cave = R.caves.caves.get(k);
@@ -301,21 +373,26 @@ for (const c of near.slice(0, CAVES)) {
          */
         hover: hits.filter((h) => h.gap > tol).length,
         wade: hits.filter((h) => h.gap < -tol).length,
+        /** Hovering by more than a body is tall. The rate gate reads this. */
+        flight: hits.filter((h) => h.gap > flight).length,
         worstHover: hits.length ? Math.max(0, ...hits.map((h) => h.gap)) : 0,
         worstSunk: hits.length ? Math.min(0, ...hits.map((h) => h.gap)) : 0,
         blocks,
         top: hits.slice(0, 14),
       };
     },
-    { k: c.k, tol: TOL }
+    { k: c.k, tol: TOL, flight: FLIGHT }
   );
   if (!report) {
     console.log(`k=${c.k}: not built`);
     continue;
   }
+  probed++;
   totalBad += report.count;
   totalHover += report.hover;
   totalWade += report.wade;
+  totalProbes += report.probes;
+  totalFlight += report.flight;
   blockN += report.blocks.n;
   blockSum += report.blocks.sum;
   blockHover += report.blocks.hover;
@@ -357,4 +434,36 @@ console.log(
     `mean |gap| ${(blockN ? blockSum / blockN : 0).toFixed(2)} m, ` +
     `worst +${blockWorstHover.toFixed(2)} / ${blockWorstWade.toFixed(2)} m`
 );
+
+const flightRate = totalProbes ? (totalFlight / totalProbes) * 1000 : 0;
+console.log(
+  `flying probes (over ${FLIGHT.toFixed(2)} m): ${totalFlight} of ${totalProbes} ` +
+    `= ${flightRate.toFixed(1)} per 1000, bar ${MAX_FLIGHT_RATE.toFixed(1)}`
+);
+
+const fails = [];
+if (!probed) fails.push('no cave reported a floor at all — nothing was measured');
+if (worstHover > MAX_HOVER) {
+  fails.push(
+    `worst hover +${worstHover.toFixed(2)} m is over the ${MAX_HOVER.toFixed(2)} m bar ` +
+      '— the body stands in mid-air with the rock drawn under its feet'
+  );
+}
+if (flightRate > MAX_FLIGHT_RATE) {
+  fails.push(
+    `${flightRate.toFixed(1)} flying probes per 1000 is over the ${MAX_FLIGHT_RATE.toFixed(1)} bar ` +
+      '— this is not one bad ring, the floor is soft across the system'
+  );
+}
+if (fails.length) {
+  console.log(`\nFAIL cave-floor (${probed} cave${probed === 1 ? '' : 's'} probed)`);
+  for (const f of fails) console.log(`  ${f}`);
+  process.exitCode = 1;
+} else {
+  console.log(
+    `\nPASS cave-floor  ${probed} cave${probed === 1 ? '' : 's'} probed, ` +
+      `worst hover +${worstHover.toFixed(2)} m against a ${MAX_HOVER.toFixed(2)} m bar, ` +
+      `${flightRate.toFixed(1)} flying per 1000 against ${MAX_FLIGHT_RATE.toFixed(1)}`
+  );
+}
 await browser.close();

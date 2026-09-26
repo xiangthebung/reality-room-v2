@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clamp01, makeRng, wrapAngle } from '../core/util.js';
 import { WATER_LEVEL, heightAt, streamPointNear } from './terrain.js';
 import { daylightAt } from './daylight.js';
+import { ripple } from './ripples.js';
 import { makeLiving } from '../trip/living.js';
 
 /**
@@ -24,17 +25,33 @@ import { makeLiving } from '../trip/living.js';
  *
  * THE HARD PART IS NOT THE FISH, IT IS THE WATER ON TOP OF THEM.
  *
- * The surface is `vec4(col, 0.9)` with a fresnel blend to sky (see `buildWater`
- * in atmosphere.js), so a fish half a metre down is showing you one part in ten
- * of itself through a sheet that is mostly reflected sky — that is not "dimly
- * visible", it is invisible, and it is the exact trap the caught fish's own
- * depth numbers were written to avoid. Three things answer it, and none of them
- * touches the water shader:
+ * The surface USED TO BE `vec4(col, 0.9)` — a hard-coded literal, ninety
+ * percent opaque at every pixel and every view angle — so a fish half a metre
+ * down was showing you one part in ten of itself through a sheet that is mostly
+ * reflected sky. That is not "dimly visible", it is invisible, and it is the
+ * exact trap the caught fish's own depth numbers were written to avoid.
+ *
+ * READ THE NEXT PARAGRAPH BEFORE REASONING FROM THIS ONE. The three answers
+ * below were designed against that literal, and one of them was designed
+ * against a MISREADING of it that is worth keeping on the record: this header
+ * used to claim that "looking down into water from a bank is the one angle
+ * where the fresnel term collapses and the surface goes clear". The fresnel
+ * term did collapse looking down — in the COLOUR, where it stopped mixing in
+ * the sky. The OPACITY was a constant and did not vary with view angle at all,
+ * so straight down you got the dark bed colour at 0.9, which is a green lid.
+ * The shoal was measured rendering perfectly and photographing as nothing for
+ * TWO independent reasons, and only one of them was `depthWrite`.
+ *
+ * `buildWater` in atmosphere.js now derives the alpha from the fresnel with a
+ * floor that rides the water's depth, so the premise is finally true and the
+ * three answers below are a bonus rather than a workaround. Three things
+ * answer it, and none of them touches the water shader:
  *
  *   SHALLOW. The shoal lives in the top 40 cm, not the middle of the channel.
- *   Looking down into water from a bank is the one angle where the fresnel term
- *   collapses and the surface goes clear, so a fish near the top is legible from
- *   exactly the posture somebody stood on a bank is already in.
+ *   That is now genuinely the clearest part of the river seen from a bank —
+ *   the alpha floor is 0.10 at the margin against 0.88 over the trench — so a
+ *   fish near the top is legible from exactly the posture somebody stood on a
+ *   bank is already in.
  *
  *   RISES. A fish that comes up to the film, holds there with its back out for a
  *   second and slides down again is unmistakable — it is a moving edge in a
@@ -297,7 +314,9 @@ export function buildShoal({ scene, seed = 'grove-01', sound = null } = {}) {
        * what puts it in the same queue as the water, where `renderOrder` below
        * can put it AFTER — and being drawn after a surface you are under is the
        * whole of how anything is ever visible through it. (The other half of
-       * that is `depthWrite: false` on the water; see the long note in
+       * that is `depthWrite: false` on the water — and there was a THIRD half
+       * nobody found for a long time, which is that the water's alpha was the
+       * literal 0.9 at every angle. Both are in the long note on `alpha` in
        * atmosphere.js's `buildWater`.)
        *
        * Having got there, 0.85 is what makes it read as under the water rather
@@ -544,6 +563,10 @@ export function buildShoal({ scene, seed = 'grove-01', sound = null } = {}) {
             _at.y = WATER_LEVEL;
             _at.z = f.z;
             sound?.('splash', _at, 0.25 + clamp01(f.cm / 70) * 0.5);
+            // And it leaves a ring. Same event, same scaling by length as the
+            // loudness above — a sound with no mark on the water was exactly
+            // the mismatch ripples.js exists for.
+            ripple(f.x, f.z, 0.45 + clamp01(f.cm / 70) * 0.55);
             f.spooked = 0.6;
           }
         } else {
@@ -595,7 +618,15 @@ export function buildShoal({ scene, seed = 'grove-01', sound = null } = {}) {
            * down. Bounded below at 3 cm rather than at 0 so a rising fish shows
            * its back without ever ending up standing on the surface.
            */
-          if (f.rising > 0) f.rising = Math.max(0, f.rising - dt);
+          if (f.rising > 0) {
+            const wasRising = f.rising;
+            f.rising = Math.max(0, f.rising - dt);
+            // The ring is left when the fish drops back OFF the film, not when
+            // it starts coming up — the disturbance is the tail going down.
+            if (wasRising > 0 && f.rising === 0) {
+              ripple(f.x, f.z, 0.12 + clamp01(f.cm / 70) * 0.22);
+            }
+          }
           else if (f.spooked <= 0 && rng() < dt * (0.05 + dusk * 0.14)) {
             f.rising = 0.7 + rng() * 1.4;
           }
@@ -629,6 +660,7 @@ export function buildShoal({ scene, seed = 'grove-01', sound = null } = {}) {
             _at.y = WATER_LEVEL;
             _at.z = f.z;
             sound?.('splash', _at, 0.2 + clamp01(f.cm / 70) * 0.35);
+            ripple(f.x, f.z, 0.3 + clamp01(f.cm / 70) * 0.4);
           }
         }
 

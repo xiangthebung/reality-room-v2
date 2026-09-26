@@ -340,13 +340,32 @@ if (want('identity')) {
     };
   });
   const EXPECT = {
-    sunIntensity: 2.5,
+    /**
+     * THE FOUR INTENSITIES MOVED TOGETHER AND THEY MUST BE READ TOGETHER.
+     *
+     * These are not four independent numbers that happened to change. They are
+     * one ratio. The wood used to carry 2.22 of unshadowable light (hemi 1.25 +
+     * ambient 0.55 + fill 0.42) against a sun of 2.50 — 47% of every photon in
+     * the world arriving from a direction nothing could block. Lit floor 2.3896
+     * against shaded 1.0211 is 2.340:1, which is 1.23 stops, on a biome whose
+     * entire visual mechanism is that 1-2% of the light reaches the ground and
+     * a sunfleck is twenty to fifty times its surroundings.
+     *
+     * 0.34 / 0.13 / 3.30 / 0.10 puts it at 7.669:1 = 2.94 stops. Note where the
+     * change comes from: the lit value falls only 13%, the shade falls 73%. A
+     * brighter sun alone would not have done it and would have clipped.
+     *
+     * If you are here because this block failed: check whether somebody moved
+     * ONE of these. Moving one is always wrong. The number that matters is the
+     * ratio, and `atmosphere.js` carries the arithmetic beside the constants.
+     */
+    sunIntensity: 3.3,
     sunColour: 'ffeac4',
-    hemiIntensity: 1.25,
+    hemiIntensity: 0.34,
     hemiSky: 'bcd8ea',
     hemiGround: '60704a',
-    ambient: [0.55, '5d7060'],
-    fill: [0.42, '8fb4d8'],
+    ambient: [0.13, '5d7060'],
+    fill: [0.1, '8fb4d8'],
     fog: ['7f9a86', 0.0092],
     skyTop: '2f6ea8',
     skyHorizon: 'bcd0c4',

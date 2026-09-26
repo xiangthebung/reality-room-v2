@@ -321,6 +321,17 @@ export class AudioEngine {
     this._room = 0;
     /** …and how big the underground place is. 0 is a crawl, 1 is a chamber. */
     this._size = 1;
+    /**
+     * HOW CLOSED THE WOOD IS OVERHEAD, as a multiplier on the room send. See
+     * `setThicket`.
+     *
+     * One, so that every caller and every harness that predates it — which is
+     * all of them — sends exactly what it always sent. This is not a nicety:
+     * `roomSend` is upstream of the only reverb that is on every sound in the
+     * game, so a default that was not exactly 1.0 would move `audio-probe`'s
+     * numbers on every stage at once and blame whatever was measured last.
+     */
+    this._thicket = 1;
 
     /**
      * The player's trims, one per bus, inserted between the bus and everything
@@ -743,7 +754,60 @@ export class AudioEngine {
     const angle = v * Math.PI * 0.5;
     this.roomReturn.gain.setTargetAtTime(0.85 * Math.cos(angle), when, 0.045);
     this.caveReturn.gain.setTargetAtTime(0.95 * Math.sin(angle) * (0.34 + 0.66 * s), when, 0.045);
-    this.roomSend.gain.setTargetAtTime((0.3 + 0.22 * v) * (0.48 + 0.52 * s), when, 0.045);
+    this._writeRoomSend(when);
+  }
+
+  /**
+   * A THICKET IS WETTER THAN A CLEARING, AND THAT IS THE ONE THING A FOREST
+   * REVERB CAN SAY ABOUT WHERE YOU ARE STANDING.
+   *
+   * `setRoom` above already argues that a crawl and a chamber are not different
+   * reverbs, they are the same rock at a different send. Above ground the same
+   * argument holds with the sign flipped: a closed understorey and an open
+   * glade are the same trees and the same leaves — what differs is how much of
+   * what you make comes back, because in a thicket there is a reflector two
+   * metres away on every side and in a clearing the nearest one is thirty.
+   *
+   * SO IT IS A MULTIPLIER ON THE SEND AND NOT A THIRD CONVOLVER, and it must
+   * not be spent on the `roomReturn` instead. The return is the cave crossfade's
+   * arm: pulling it down in a clearing would bring the CAVE reverb's relative
+   * share up, which is the exact failure `setRoom` spends four paragraphs
+   * preventing.
+   *
+   * 0.78 + 0.44·c, so half canopy is EXACTLY 1.0 — the value `main.js` passed
+   * as a literal for the whole life of this project before the real number
+   * existed, and near enough the mean of the real one in closed forest. A dense
+   * thicket lands at 1.22 and a bald clearing at 0.78, a range of about 3.9 dB
+   * of send, which is roughly one step on a reverb mix knob: audible when you
+   * walk out of the trees and inaudible as a change being made.
+   *
+   * The deadband is 0.005 rather than `setRoom`'s 1e-3 because the caller
+   * evaluates canopy at 5 Hz off a smoothed value and this would otherwise
+   * schedule a ramp on frames where nothing moved.
+   *
+   * @param {number} c 0 open sky, 1 closed canopy
+   */
+  setThicket(c) {
+    if (!this.ready) return;
+    const t = 0.78 + 0.44 * clamp01(c);
+    if (Math.abs(t - this._thicket) < 0.005) return;
+    this._thicket = t;
+    this._writeRoomSend(this.ctx.currentTime);
+  }
+
+  /**
+   * The one place `roomSend.gain` is written, because three inputs now decide
+   * it and two of them are set from different callers on different frames.
+   * Before this existed `setRoom` owned the line, and `setThicket` writing its
+   * own copy would have meant whichever ran last won and the other's term
+   * silently vanished until the next time it happened to move.
+   */
+  _writeRoomSend(when) {
+    this.roomSend.gain.setTargetAtTime(
+      (0.3 + 0.22 * this._room) * (0.48 + 0.52 * this._size) * this._thicket,
+      when,
+      0.045
+    );
   }
 
   /**

@@ -1,4 +1,5 @@
 import { getWorldSeed, heightGrid, setWorldSeed } from './terrain.js';
+import { currentLand, setLand } from './lands/index.js';
 
 /**
  * The ground, built off the main thread.
@@ -50,8 +51,28 @@ import { getWorldSeed, heightGrid, setWorldSeed } from './terrain.js';
  * because nothing here keeps a chunk after it has posted it.
  */
 self.onmessage = (e) => {
-  const { key, ox, oz, seg, cell, seed = 0 } = e.data;
+  const { key, ox, oz, seg, cell, seed = 0, land } = e.data;
   if (seed !== getWorldSeed()) setWorldSeed(seed);
+  /**
+   * THE ONE REALM THAT CANNOT DERIVE ITS LAND FROM THE SEED.
+   *
+   * Every other realm is handed the seed STRING and the land is a prefix on it,
+   * so `setWorldSeed` chooses both. This one is handed a uint32 — `ground.js`
+   * posts `getWorldSeed()`, deliberately, because a number in a payload that
+   * already carries five typed arrays costs nothing — so the land has to travel
+   * beside it as a field.
+   *
+   * Stamped per chunk rather than sent once at spawn for exactly the reason
+   * `ground.js` gives about the seed: there is no "once". `_spawn` is also
+   * called on recovery, `onerror` drops a worker mid-session, and a message that
+   * arrives before the worker's module has evaluated is a race nobody wants to
+   * reason about. `setLand` is a single object assignment.
+   *
+   * Without this the ground under a winter wood would be painted with the
+   * rainforest's six substrates and no snow, in whichever chunks a worker
+   * happened to build — which is most of them, and which nothing would report.
+   */
+  if (land && land !== currentLand().id) setLand(land);
   const g = heightGrid(ox, oz, seg, cell);
   self.postMessage({ key, ox, oz, ...g }, [
     g.position.buffer,

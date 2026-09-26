@@ -1,0 +1,151 @@
+grove-01 k= 0  5 passages  693 m (347 branch)  turn 460/338 deg/100m  17 corners  tallest 53.3 m  widest 48.0 m  83 m over 15 m tall, 56 m over 25  107198 tris  overlap 0 stacked 0
+    junctions: wanted 7, tried 7, built 4  (57% of tried, 57% of wanted)  refused: 0 no wall / 2 too few nodes / 1 buried  |  subs: wanted 2 tried 2 built 0 (0/2/0)  |  loops: wanted 1, closed 1 (1 off the trunk, 0 off a lead)
+    loop search: 3 lead(s) offered, 1374 rings scanned, 78 shortlisted, 1 closed
+      refused: 141 at the base doorway / 922 out of the 10-42 m band / 82 too steep / 59 circuit too short / 38 no wall / 54 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 5 clashed
+      best available: nearest passage 12 m, enclosure 148 m, circuit 222 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p2->p0@233  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 24 nodes, 16 corners (67%), 0 by the escape hatch;  mean hold 0.610  mean rockGen 0.500  mean overburden 7.0 m  |  21.6 m of trunk per corner
+grove-01 k=-1  4 passages  521 m (322 branch)  turn 611/250 deg/100m  16 corners  tallest 21.0 m  widest 32.4 m  50 m over 15 m tall, 0 m over 25  78320 tris  overlap 1 stacked 0
+    worst: p0 rings 212-268  41 m apart along the line, 9.5 m apart in space against 10.6 m of section (dy 3.2)
+    junctions: wanted 4, tried 4, built 2  (50% of tried, 50% of wanted)  refused: 0 no wall / 2 too few nodes / 0 buried  |  subs: wanted 2 tried 2 built 1 (0/1/0)  |  loops: wanted 2, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 5 lead(s) offered, 999 rings scanned, 0 shortlisted, 0 closed
+      refused: 141 at the base doorway / 738 out of the 10-42 m band / 119 too steep / 0 circuit too short / 0 no wall / 1 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 27 m, enclosure 39 m, circuit 155 m (bar is 90)
+    graph: alpha 0, mean degree 1.75, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 17 nodes, 13 corners (76%), 1 by the escape hatch;  mean hold 0.581  mean rockGen 0.609  mean overburden 10.5 m  |  15.3 m of trunk per corner
+grove-01 k= 1  7 passages  907 m (466 branch)  turn 316/305 deg/100m  17 corners  tallest 24.5 m  widest 37.9 m  80 m over 15 m tall, 0 m over 25  139138 tris  overlap 0 stacked 124
+    junctions: wanted 9, tried 9, built 5  (56% of tried, 56% of wanted)  refused: 0 no wall / 3 too few nodes / 1 buried  |  subs: wanted 1 tried 1 built 1 (0/0/0)  |  loops: wanted 3, closed 3 (2 off the trunk, 1 off a lead)
+    loop search: 9 lead(s) offered, 3692 rings scanned, 180 shortlisted, 3 closed
+      refused: 282 at the base doorway / 2662 out of the 10-42 m band / 205 too steep / 111 circuit too short / 23 no wall / 229 arriving side-on
+      paid:    0 bore too small / 0 connector length / 5 no rock over the connector / 10 clashed
+      best available: nearest passage 14 m, enclosure 289 m, circuit 425 m (bar is 90)
+    graph: alpha 6, mean degree 2.29, 3 closure(s) — p2->p0@391, p4->p0@414, p6->p0@356  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 33 nodes, 15 corners (45%), 2 by the escape hatch;  mean hold 0.600  mean rockGen 0.516  mean overburden 24.6 m  |  29.4 m of trunk per corner
+grove-02 k= 1  5 passages  525 m (242 branch)  turn 255/275 deg/100m  8 corners  tallest 28.2 m  widest 46.3 m  61 m over 15 m tall, 22 m over 25  80020 tris  overlap 0 stacked 56
+    junctions: wanted 6, tried 6, built 3  (50% of tried, 50% of wanted)  refused: 0 no wall / 2 too few nodes / 1 buried  |  subs: wanted 1 tried 1 built 1 (0/0/0)  |  loops: wanted 3, closed 1 (0 off the trunk, 1 off a lead)
+    loop search: 6 lead(s) offered, 1626 rings scanned, 16 shortlisted, 1 closed
+      refused: 185 at the base doorway / 1203 out of the 10-42 m band / 103 too steep / 63 circuit too short / 7 no wall / 49 arriving side-on
+      paid:    0 bore too small / 0 connector length / 2 no rock over the connector / 1 clashed
+      best available: nearest passage 10 m, enclosure 80 m, circuit 131 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p4->p1@76  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 16 nodes, 6 corners (38%), 0 by the escape hatch;  mean hold 0.599  mean rockGen 0.540  mean overburden 10.9 m  |  47.2 m of trunk per corner
+grove-02 k=-1  9 passages  1347 m (679 branch)  turn 188/201 deg/100m  18 corners  tallest 82.9 m  widest 71.1 m  257 m over 15 m tall, 102 m over 25  204692 tris  overlap 0 stacked 181
+    junctions: wanted 10, tried 10, built 6  (60% of tried, 60% of wanted)  refused: 0 no wall / 2 too few nodes / 2 buried  |  subs: wanted 4 tried 4 built 2 (0/0/2)  |  loops: wanted 2, closed 2 (2 off the trunk, 0 off a lead)
+    loop search: 2 lead(s) offered, 1820 rings scanned, 37 shortlisted, 2 closed
+      refused: 94 at the base doorway / 1524 out of the 10-42 m band / 115 too steep / 24 circuit too short / 0 no wall / 26 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 16 m, enclosure 204 m, circuit 271 m (bar is 90)
+    graph: alpha 4, mean degree 2.11, 2 closure(s) — p2->p0@202, p3->p0@270  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 44 nodes, 15 corners (34%), 1 by the escape hatch;  mean hold 0.582  mean rockGen 0.607  mean overburden 26.1 m  |  44.6 m of trunk per corner
+grove-02 k=-2  3 passages  724 m (211 branch)  turn 299/206 deg/100m  17 corners  tallest 30.0 m  widest 40.8 m  102 m over 15 m tall, 41 m over 25  112192 tris  overlap 0 stacked 0
+    junctions: wanted 10, tried 10, built 1  (10% of tried, 10% of wanted)  refused: 0 no wall / 6 too few nodes / 3 buried  |  subs: wanted 1 tried 1 built 1 (0/0/0)  |  loops: wanted 3, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 10 lead(s) offered, 3559 rings scanned, 69 shortlisted, 1 closed
+      refused: 235 at the base doorway / 3060 out of the 10-42 m band / 138 too steep / 33 circuit too short / 0 no wall / 24 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 5 clashed
+      best available: nearest passage 15 m, enclosure 55 m, circuit 143 m (bar is 90)
+    graph: alpha 0, mean degree 1.67, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 38 nodes, 16 corners (42%), 2 by the escape hatch;  mean hold 0.608  mean rockGen 0.535  mean overburden 15.3 m  |  32.0 m of trunk per corner
+grove-03 k= 0  5 passages  636 m (215 branch)  turn 307/220 deg/100m  19 corners  tallest 51.3 m  widest 40.3 m  94 m over 15 m tall, 47 m over 25  97474 tris  overlap 0 stacked 50
+    junctions: wanted 8, tried 8, built 3  (38% of tried, 38% of wanted)  refused: 0 no wall / 3 too few nodes / 2 buried  |  subs: wanted 1 tried 1 built 1 (0/0/0)  |  loops: wanted 2, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 8 lead(s) offered, 2939 rings scanned, 24 shortlisted, 1 closed
+      refused: 230 at the base doorway / 2473 out of the 10-42 m band / 183 too steep / 12 circuit too short / 17 no wall / 0 arriving side-on
+      paid:    5 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 29 m, enclosure 245 m, circuit 364 m (bar is 90)
+    graph: alpha 0, mean degree 1.80, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 37 nodes, 17 corners (46%), 1 by the escape hatch;  mean hold 0.608  mean rockGen 0.496  mean overburden 21.7 m  |  24.7 m of trunk per corner
+grove-03 k= 1  6 passages  1082 m (399 branch)  turn 312/209 deg/100m  27 corners  tallest 93.1 m  widest 73.7 m  200 m over 15 m tall, 121 m over 25  163654 tris  overlap 0 stacked 155
+    junctions: wanted 10, tried 10, built 4  (40% of tried, 40% of wanted)  refused: 1 no wall / 3 too few nodes / 2 buried  |  subs: wanted 2 tried 2 built 1 (0/0/1)  |  loops: wanted 1, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 11 lead(s) offered, 6720 rings scanned, 17 shortlisted, 2 closed
+      refused: 327 at the base doorway / 6156 out of the 10-42 m band / 139 too steep / 19 circuit too short / 0 no wall / 62 arriving side-on
+      paid:    1 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 11 m, enclosure 170 m, circuit 253 m (bar is 90)
+    graph: alpha 0, mean degree 1.83, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 46 nodes, 22 corners (48%), 0 by the escape hatch;  mean hold 0.586  mean rockGen 0.570  mean overburden 38.7 m  |  31.0 m of trunk per corner
+grove-03 k=-1  2 passages  240 m (114 branch)  turn 862/287 deg/100m  11 corners  tallest 20.5 m  widest 28.8 m  26 m over 15 m tall, 0 m over 25  36340 tris  overlap 0 stacked 74
+    junctions: wanted 2, tried 2, built 1  (50% of tried, 50% of wanted)  refused: 0 no wall / 1 too few nodes / 0 buried  |  subs: wanted 1 tried 1 built 0 (0/0/1)  |  loops: wanted 1, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 2 lead(s) offered, 290 rings scanned, 0 shortlisted, 0 closed
+      refused: 47 at the base doorway / 243 out of the 10-42 m band / 0 too steep / 0 circuit too short / 0 no wall / 0 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 54 m, enclosure 0 m, circuit 0 m (bar is 90)
+    graph: alpha 0, mean degree 1.50, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 48 nodes, 31 corners (65%), 2 by the escape hatch;  mean hold 0.598  mean rockGen 0.534  mean overburden 33.1 m  |  4.1 m of trunk per corner
+grove-04 k= 0  4 passages  665 m (339 branch)  turn 398/353 deg/100m  14 corners  tallest 27.1 m  widest 38.6 m  54 m over 15 m tall, 14 m over 25  99712 tris  overlap 0 stacked 12
+    junctions: wanted 6, tried 6, built 2  (33% of tried, 33% of wanted)  refused: 0 no wall / 4 too few nodes / 0 buried  |  subs: wanted 2 tried 2 built 1 (0/1/0)  |  loops: wanted 1, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 7 lead(s) offered, 1535 rings scanned, 30 shortlisted, 0 closed
+      refused: 141 at the base doorway / 1132 out of the 10-42 m band / 126 too steep / 23 circuit too short / 0 no wall / 83 arriving side-on
+      paid:    0 bore too small / 5 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 12 m, enclosure 121 m, circuit 230 m (bar is 90)
+    graph: alpha 0, mean degree 1.75, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 21 nodes, 11 corners (52%), 1 by the escape hatch;  mean hold 0.598  mean rockGen 0.552  mean overburden 19.6 m  |  29.6 m of trunk per corner
+grove-04 k=-1  13 passages  1887 m (1121 branch)  turn 220/259 deg/100m  22 corners  tallest 58.4 m  widest 47.9 m  372 m over 15 m tall, 231 m over 25  292646 tris  overlap 0 stacked 115
+    junctions: wanted 10, tried 10, built 8  (80% of tried, 80% of wanted)  refused: 0 no wall / 1 too few nodes / 1 buried  |  subs: wanted 8 tried 8 built 4 (0/3/1)  |  loops: wanted 3, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 17 lead(s) offered, 14467 rings scanned, 58 shortlisted, 0 closed
+      refused: 603 at the base doorway / 13474 out of the 10-42 m band / 95 too steep / 125 circuit too short / 17 no wall / 95 arriving side-on
+      paid:    4 bore too small / 0 connector length / 0 no rock over the connector / 10 clashed
+      best available: nearest passage 16 m, enclosure 109 m, circuit 208 m (bar is 90)
+    graph: alpha 0, mean degree 1.92, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 50 nodes, 18 corners (36%), 1 by the escape hatch;  mean hold 0.619  mean rockGen 0.466  mean overburden 24.8 m  |  42.6 m of trunk per corner
+grove-04 k= 1  8 passages  1332 m (680 branch)  turn 282/243 deg/100m  27 corners  tallest 41.9 m  widest 32.5 m  132 m over 15 m tall, 25 m over 25  201272 tris  overlap 0 stacked 230
+    junctions: wanted 10, tried 10, built 5  (50% of tried, 50% of wanted)  refused: 0 no wall / 4 too few nodes / 1 buried  |  subs: wanted 4 tried 4 built 2 (0/1/1)  |  loops: wanted 2, closed 1 (0 off the trunk, 1 off a lead)
+    loop search: 13 lead(s) offered, 8474 rings scanned, 73 shortlisted, 2 closed
+      refused: 423 at the base doorway / 7539 out of the 10-42 m band / 292 too steep / 77 circuit too short / 0 no wall / 70 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 5 clashed
+      best available: nearest passage 14 m, enclosure 102 m, circuit 195 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p6->p0@626  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 52 nodes, 25 corners (48%), 0 by the escape hatch;  mean hold 0.592  mean rockGen 0.566  mean overburden 25.1 m  |  26.1 m of trunk per corner
+grove-05 k= 0  10 passages  1273 m (926 branch)  turn 258/238 deg/100m  13 corners  tallest 54.1 m  widest 46.8 m  253 m over 15 m tall, 105 m over 25  197080 tris  overlap 0 stacked 0
+    junctions: wanted 6, tried 6, built 5  (83% of tried, 83% of wanted)  refused: 0 no wall / 1 too few nodes / 0 buried  |  subs: wanted 6 tried 6 built 4 (0/2/0)  |  loops: wanted 1, closed 1 (0 off the trunk, 1 off a lead)
+    loop search: 7 lead(s) offered, 2423 rings scanned, 33 shortlisted, 1 closed
+      refused: 232 at the base doorway / 1945 out of the 10-42 m band / 120 too steep / 18 circuit too short / 0 no wall / 75 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 2 clashed
+      best available: nearest passage 20 m, enclosure 163 m, circuit 266 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p6->p0@113  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 30 nodes, 16 corners (53%), 0 by the escape hatch;  mean hold 0.575  mean rockGen 0.620  mean overburden 16.4 m  |  21.7 m of trunk per corner
+grove-05 k=-1  1 passages  205 m (0 branch)  turn 654/0 deg/100m  15 corners  tallest 18.3 m  widest 24.3 m  32 m over 15 m tall, 0 m over 25  31146 tris  overlap 0 stacked 0
+    junctions: wanted 4, tried 4, built 0  (0% of tried, 0% of wanted)  refused: 0 no wall / 4 too few nodes / 0 buried  |  subs: wanted 0 tried 0 built 0 (0/0/0)  |  loops: wanted 2, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 3 lead(s) offered, 0 rings scanned, 0 shortlisted, 0 closed
+      refused: 0 at the base doorway / 0 out of the 10-42 m band / 0 too steep / 0 circuit too short / 0 no wall / 0 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage — m, enclosure 0 m, circuit 0 m (bar is 90)
+    graph: alpha 0, mean degree 1.00, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 17 nodes, 13 corners (76%), 1 by the escape hatch;  mean hold 0.594  mean rockGen 0.555  mean overburden 11.7 m  |  15.8 m of trunk per corner
+grove-05 k= 1  8 passages  985 m (767 branch)  turn 192/184 deg/100m  6 corners  tallest 43.9 m  widest 39.8 m  132 m over 15 m tall, 31 m over 25  145462 tris  overlap 0 stacked 0
+    junctions: wanted 5, tried 5, built 3  (60% of tried, 60% of wanted)  refused: 0 no wall / 0 too few nodes / 2 buried  |  subs: wanted 5 tried 5 built 4 (0/0/1)  |  loops: wanted 1, closed 1 (0 off the trunk, 1 off a lead)
+    loop search: 5 lead(s) offered, 1515 rings scanned, 65 shortlisted, 2 closed
+      refused: 233 at the base doorway / 1096 out of the 10-42 m band / 17 too steep / 68 circuit too short / 0 no wall / 36 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 5 clashed
+      best available: nearest passage 23 m, enclosure 62 m, circuit 143 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p4->p0@111  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 32 nodes, 14 corners (44%), 0 by the escape hatch;  mean hold 0.611  mean rockGen 0.497  mean overburden 23.8 m  |  15.6 m of trunk per corner
+grove-06 k= 0  9 passages  1262 m (643 branch)  turn 123/209 deg/100m  11 corners  tallest 87.6 m  widest 69.4 m  199 m over 15 m tall, 95 m over 25  196180 tris  overlap 0 stacked 0
+    junctions: wanted 10, tried 9, built 7  (78% of tried, 70% of wanted)  refused: 0 no wall / 1 too few nodes / 1 buried  |  subs: wanted 4 tried 4 built 1 (0/1/2)  |  loops: wanted 2, closed 1 (1 off the trunk, 0 off a lead)
+    loop search: 12 lead(s) offered, 8880 rings scanned, 24 shortlisted, 1 closed
+      refused: 469 at the base doorway / 8331 out of the 10-42 m band / 20 too steep / 25 circuit too short / 0 no wall / 11 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 5 clashed
+      best available: nearest passage 32 m, enclosure 107 m, circuit 211 m (bar is 90)
+    graph: alpha 2, mean degree 2.00, 1 closure(s) — p5->p0@435  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 38 nodes, 9 corners (24%), 0 by the escape hatch;  mean hold 0.615  mean rockGen 0.473  mean overburden 48.5 m  |  68.7 m of trunk per corner
+grove-06 k= 1  2 passages  223 m (66 branch)  turn 331/227 deg/100m  5 corners  tallest 21.4 m  widest 29.3 m  19 m over 15 m tall, 0 m over 25  33826 tris  overlap 0 stacked 0
+    junctions: wanted 4, tried 3, built 1  (33% of tried, 25% of wanted)  refused: 0 no wall / 2 too few nodes / 0 buried  |  subs: wanted 0 tried 0 built 0 (0/0/0)  |  loops: wanted 2, closed 0 (0 off the trunk, 0 off a lead)
+    loop search: 2 lead(s) offered, 0 rings scanned, 0 shortlisted, 0 closed
+      refused: 0 at the base doorway / 0 out of the 10-42 m band / 0 too steep / 0 circuit too short / 0 no wall / 0 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage — m, enclosure 0 m, circuit 0 m (bar is 90)
+    graph: alpha 0, mean degree 1.50, 0 closure(s)  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 10 nodes, 4 corners (40%), 0 by the escape hatch;  mean hold 0.625  mean rockGen 0.449  mean overburden 12.1 m  |  39.2 m of trunk per corner
+grove-06 k=-1  14 passages  1627 m (1088 branch)  turn 144/244 deg/100m  12 corners  tallest 25.0 m  widest 39.2 m  145 m over 15 m tall, 0 m over 25  247926 tris  overlap 0 stacked 0
+    junctions: wanted 10, tried 10, built 9  (90% of tried, 90% of wanted)  refused: 0 no wall / 0 too few nodes / 1 buried  |  subs: wanted 7 tried 7 built 4 (1/0/2)  |  loops: wanted 3, closed 3 (3 off the trunk, 0 off a lead)
+    loop search: 5 lead(s) offered, 3625 rings scanned, 86 shortlisted, 3 closed
+      refused: 235 at the base doorway / 3170 out of the 10-42 m band / 60 too steep / 57 circuit too short / 0 no wall / 17 arriving side-on
+      paid:    0 bore too small / 0 connector length / 0 no rock over the connector / 0 clashed
+      best available: nearest passage 20 m, enclosure 67 m, circuit 171 m (bar is 90)
+    graph: alpha 6, mean degree 2.14, 3 closure(s) — p2->p0@142, p3->p0@314, p5->p0@366  (real systems: alpha just over 0, degree 1.8-2.6)
+    walk: 47 nodes, 11 corners (23%), 1 by the escape hatch;  mean hold 0.609  mean rockGen 0.510  mean overburden 32.6 m  |  49.0 m of trunk per corner
+
+18 caves:  6.4 passages  896 m  turn 345 trunk / 236 branch deg/100m  15.3 corners  tallest 43.5 m (max 93.1)  127 m over 15 m tall  49 m over 25  overlap 0.1  stacked 55.4
+branch yield:  69 built of 129 tried of 131 wanted  = 53% of the design  |  refused 1 no wall, 41 too few nodes, 18 buried, 2 never reached (passage ran out)  |  subs 28/51/51
+walk:  33.3 nodes/cave, 45% of them corners, realised mean hold 0.600 (the constant is 0.62; under 0.58 means chambers are being spent), 27.6 m of trunk per corner
+tall metres pooled: 2292 m over 15 m, 890 m over 25 m — NEITHER OF THESE MAY FALL
+topology pooled: 14 closure(s) over 18 caves (0.78 a cave, want 1-3), mean alpha 1.56 (want just over 0), mean degree 1.85 (want 1.8-2.6, near 2) — MORE IS NOT BETTER HERE; past 2.6 is a maze

@@ -101,7 +101,30 @@ import { glowSprite } from './textures.js';
  *
  *   A NEAR-FIELD TERM, small, so the floor at your feet is not black. Framed
  *   honestly in the shader as dark adaptation rather than as a torch nobody is
- *   carrying.
+ *   carrying — and SMALLER NOW THAN IT WAS, because dark adaptation is real:
+ *   `pipeline.setCaveAdaptation` opens the frame's exposure to 2.1x over four
+ *   seconds and shuts it in three quarters of a second, driven from `caveMix` in
+ *   main.js. That is the whole eye rather than a glow on the rock two metres in
+ *   front of it, so the fudge could be cut by a third.
+ *
+ *   AND THE OPENINGS THE BEAMS COME THROUGH, which for the whole life of this
+ *   file were never drawn. `_buildShafts` puts a small irregular disc under the
+ *   ceiling at each cone's apex and `_avenShade` darkens a ring of roof around
+ *   it. It is not a hole in the mesh and could not be; it is the far end of an
+ *   aven seen from the bottom, which is what you actually see.
+ *
+ *
+ * AND SOMETHING LIVES IN IT.
+ *
+ * Everything above describes geology, and for a long time that was all there
+ * was: a perfectly observed, completely dead room in which nothing moved except
+ * water and spores and nothing reacted to a person walking through. One or two
+ * chambers per cave now carry a roost of ninety to two hundred and twenty bats —
+ * one merged quad mesh, one draw, zero per-frame CPU, the whole of the hanging,
+ * the peel and the flight evaluated in the vertex shader from (`uTime`, seed,
+ * `uFlush`). See the block over `placeBats`. `CaveField.update` writes `uFlush`
+ * from one squared-distance test per roost and calls `onFlush` so the audio can
+ * make the noise.
  *
  *
  * COST WHEN YOU ARE NOT IN ONE.
@@ -659,6 +682,178 @@ const HOOD_FLARE = 1.2;
 const HOOD_BROW = 0.9;
 
 /**
+ * How far the brow's thickest point leans off vertical, as a fraction.
+ *
+ * The brow above is a lobe centred exactly on the top of the arch, which makes
+ * the one feature the mouth has that is not a circle perfectly bilaterally
+ * symmetric — and bilateral symmetry about a vertical axis is the single most
+ * reliable way to say "this was made" there is. A real entrance overhangs more
+ * on one side than the other because one side is up-dip and the other is not.
+ *
+ * Signed per cave off the bedding bearing (`lean`, set with `bedX` in
+ * `_prepare`), so it costs no random numbers and two caves in the same ridge
+ * lean opposite ways.
+ */
+const HOOD_LEAN = 0.55;
+
+/* -------------------------------------------------------------------------- *
+ *  THE OUTLINE — WHY THE CRAG WAS AN EGG
+ * -------------------------------------------------------------------------- *
+ *
+ * Everything above buys MASS at the doorway. It bought it, and from sixteen
+ * metres out the mouth still read as one smooth convex dome with a hole in it.
+ * No brow, no broken rim, nothing that says the rock fell apart and left a way
+ * in. Where that came from is worth writing down, because two plausible answers
+ * are both wrong and the measurement that settles it takes five minutes.
+ *
+ * THE FIRST WRONG ANSWER is that the shell is not rough enough. It is: `amp` is
+ * multiplied by up to 4.2 on the hood precisely so the crag is rougher than the
+ * passage, which at the mouth's own radius is about +/-0.85 m of relief. The
+ * trouble is that all of it comes from `rock`, whose loudest octave is at 0.21
+ * cycles per metre — a five-metre wavelength — so +/-0.85 m arrives as a gentle
+ * bulge across a twelve-metre doorway. It is relief with no EDGE in it, and an
+ * outline is made of edges.
+ *
+ * THE SECOND WRONG ANSWER, and the one that cost the first attempt at this, is
+ * that the outline is the burial clamp's line, `surf + proud`, which is smooth
+ * because the height field is smooth and `proud` is that same five-metre noise.
+ * That reasoning is sound and the conclusion is false, because AT THE CROWN THE
+ * CLAMP NEVER FIRES. Its guard is `surf > inner`: the shell is only pulled down
+ * where the hillside already stands over the cavity, and over the doorway it
+ * does not — that is what a doorway is. Measured on grove-01 k=0, hood ring 0's
+ * highest vertex sits 12.9 m ABOVE the terrain under it. Half of every hood ring
+ * is buried and clamped and it is the half nobody can see; the visible half is
+ * the raw shell.
+ *
+ * So the silhouette is `cavity ellipse + HOOD_THICK * (1 + brow)`, which is an
+ * ellipse offset by a near-constant, which is an egg. Ledges hung on `proud`
+ * change the buried shoulders and nothing else, which is exactly what the
+ * pictures showed the first time.
+ *
+ * BEDDING COURSES, BECAUSE THE ALTERNATIVE IS FUZZ. High-frequency random offset
+ * gives a bumpy dome, which is an egg with acne. What a crag over a real
+ * entrance does is stand in COURSES: the rock is bedded, each bed weathers back
+ * its own distance, and each course therefore ends in a different place, with an
+ * overhanging lip on its underside where the bed above has not retreated as far.
+ * That is a stack of horizontal steps; it is ORIENTED, and the eye reads
+ * orientation as geology long before it reads amplitude as detail. It also gives
+ * the arch two things it had neither of: a hard horizontal edge over the doorway
+ * where a course caps it, and a pair of ragged shoulders where the courses cut
+ * the arc at different depths.
+ *
+ * Same 2.40 m spacing and same per-cave dip the MATERIAL's bedding already uses
+ * (see the `bed` block in the fragment shader), so a step in the geometry lands
+ * on a band in the texture instead of cutting across three of them — one rock,
+ * rather than two opinions about it.
+ *
+ * WHERE IT IS SIGNED AND WHERE IT IS NOT. On the free shell the courses go both
+ * ways: standing out is a ledge and cut back is a recess, and you need both or
+ * the mass only ever grows. On the CLAMP LINE only the positive half is used,
+ * and that is a safety property rather than a taste — `proud` is the allowance
+ * the clamp is given over the ground, and a negative one sinks the shell below
+ * the hillside, far enough below that it can pass `inner` and come out inside
+ * the tube it is shelling. Rock added over a doorway can never open one; rock
+ * taken away can, and cave-mouth's BREACH count has no tolerable value but zero.
+ */
+/**
+ * How far a block may stand out of the face, in metres, at the rim.
+ *
+ * Signed, so 2.4 is a range of nearly five metres against a shell that is 6.5 m
+ * thick over the doorway — which sounds violent and is the point. At 1.7 the
+ * measured outline moved by about a metre across the whole visible arc and the
+ * pictures were indistinguishable from the ones before it: on a twelve-metre
+ * doorway seen from sixteen metres, a metre of relief spread over a third of the
+ * arc is a curve, not an edge.
+ */
+const HOOD_LEDGE = 2.5;
+/** The hill's own bedding spacing. Change this and the material disagrees. */
+const HOOD_BED = 2.4;
+/**
+ * …and the joint spacing across it, which has no counterpart in the material.
+ *
+ * Bedding alone was not enough and the measurement says why. The crown of the
+ * arch is where the outline is nearly horizontal, so the bedding coordinate
+ * barely changes along it — grove-01 k=0's whole visible arc spans about two and
+ * a half beds, which is two steps. A rock face does not weather back in
+ * horizontal strips; it comes away in BLOCKS, where the bedding planes meet a
+ * near-vertical joint set, and it is the joints that put an edge in the part of
+ * the outline the bedding cannot reach.
+ *
+ * Wider than the beds are tall, because that is the aspect a jointed limestone
+ * actually breaks at, and because a block squarer than its bed reads as masonry.
+ */
+const HOOD_JOINT = 3.4;
+/**
+ * How much of the shell's thickness a course is never allowed to eat.
+ *
+ * The shell is single-sided with the cavity inside it, so thinning it toward
+ * zero does not make a thin lip — it makes the two surfaces cross, and a crossed
+ * shell at the rim is a view of the inside of the mouth from outside it. At the
+ * crown `thick * (1 + brow)` is 6.5 m and the courses are worth 1.7, so this
+ * floor is slack by a factor of three in the place it matters; it exists so that
+ * raising HOOD_LEDGE later cannot quietly turn into a hole.
+ */
+const HOOD_MIN_THICK = 0.35;
+
+/**
+ * The blocks, as a signed offset in units of HOOD_LEDGE.
+ *
+ * Two coordinates, each quantised. `u` is the bedding-plane coordinate — the
+ * same dipped, 2.40 m-spaced plane the fragment shader bands the rock with — and
+ * `v` runs along the strike, perpendicular to the dip azimuth in plan, at the
+ * joint spacing. Their integer parts name a block; the block's own reach is a
+ * hash of the pair, so the face is a wall of rectangles each of which has come
+ * away by its own amount.
+ *
+ * The blend happens over the last fifth of a block in each axis, and the
+ * narrowness of that band is the whole effect. Four fifths of a block is FLAT
+ * and then the surface steps. Interpolating across the whole block gives two
+ * crossed sine waves, which is a lumpy dome — the thing being fixed. A fifth of
+ * 2.4 m is 0.48 m, which is about one vertex at this mesh density, so the step
+ * lands as an edge and not as a ramp.
+ *
+ * `lipF` juts the bottom fifth of every bed a little further out still: the
+ * overhang under each course, and the one detail that stops a stack of steps
+ * reading as stairs.
+ *
+ * Bilinear over the four corners rather than nearest, because a nearest-block
+ * lookup tears at both boundaries at once and the corner where four blocks meet
+ * then has four different heights in one quad.
+ */
+function blockLayer(u, v, kk, o, riser) {
+  const i = Math.floor(u);
+  const j = Math.floor(v);
+  /** One block's reach. Integer arguments, so this is a hash and not a lerp. */
+  const at = (bi, bj) => noise2(bi * 4.7 + bj * 1.31 + kk + o, bj * 3.9 - bi * 2.3 + o);
+  const m = smoothstep(clamp01((u - i - (1 - riser)) / riser));
+  const q = smoothstep(clamp01((v - j - (1 - riser)) / riser));
+  const a = at(i, j) + (at(i + 1, j) - at(i, j)) * m;
+  const b = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * m;
+  return a + (b - a) * q;
+}
+function blockFace(x, y, z, bx, by, bz, sx, sz, k) {
+  const u = (x * bx + y * by + z * bz) / HOOD_BED;
+  const v = (x * sx + z * sz) / HOOD_JOINT;
+  const kk = k * 11.3;
+  /**
+   * TWO SCALES, because one leaves the faces BETWEEN the blocks flat.
+   *
+   * At a single scale the outline broke properly and the mass then read as a cut
+   * gem: half a dozen large plane facets meeting at clean edges. A half-scale
+   * set at 38% is what a jointed rock actually has — big blocks that are
+   * themselves broken — and it is the difference between a faceted solid and a
+   * quarried one.
+   *
+   * Its riser is wider, 0.35 of a block against 0.2, and that is a sampling
+   * limit rather than a taste: a 1.2 m block with a 0.24 m step is a step
+   * narrower than the vertex spacing, so where the edge lands is decided by
+   * which vertex happens to be nearest to it.
+   */
+  const lipF = (1 - smoothstep(clamp01((u - Math.floor(u)) / 0.2))) * 0.35;
+  return blockLayer(u, v, kk, 0, 0.2) + blockLayer(u * 2, v * 2, kk, 37.1, 0.35) * 0.38 + lipF;
+}
+
+/**
  * Hooded rings: the minimum, and how many past where the hillside takes over.
  *
  * `exposedRings` finds the first ring the hill already covers, which is what the
@@ -727,9 +922,30 @@ function drain(gen) {
 }
 
 /**
+ * THE HOLD PROBABILITIES, AS A RANGE RATHER THAN A NUMBER.
+ *
+ * The reasoning is at the `holdP` line inside `buildNodes` and it is the most
+ * load-bearing paragraph in the walk. In short: a corner costs metres, metres
+ * are depth and depth is the chambers, so the file has always been right to
+ * refuse to lower the hold — and it was only ever right because the hold was
+ * FLAT. Keyed to the rock, the same corners land where they are free.
+ *
+ * HOLD_BASE is what the first node or two use, before there is a rock reading
+ * to compare against, and is the number the flat rule shipped with.
+ *
+ * The two ends are symmetric about 0.61 rather than about 0.62, and that
+ * hundredth is not a rounding error — it is a deliberate hair of net turning
+ * that costs about a metre of passage in three hundred. Widen the gap before you
+ * move the centre: the gap is free and the centre is not.
+ */
+const HOLD_BASE = 0.62;
+const HOLD_THIN = 0.76;
+const HOLD_RICH = 0.46;
+
+/**
  * A cave's centre line.
  *
- * Nodes first — a coarse walk of 8-14 m steps with the heading and pitch drawn
+ * Nodes first — a coarse walk of 7-21 m steps with the heading and pitch drawn
  * per step — then resampled by Catmull-Rom into rings. Doing it in two stages is
  * what makes the shape controllable: the constraints (stay under the mountain,
  * do not cross yourself, do not climb) are checked once per node against real
@@ -737,8 +953,11 @@ function drain(gen) {
  * whatever the constraints did to it.
  *
  * Sliced per node — see the generator note above. A node is one reach plus the
- * corner that ends it, six attempts at worst, and it is the unit the walk's cost
- * scales in: 28-41 of them at 0.05-0.15 ms each.
+ * corner that ends it, twelve attempts at worst, and it is the unit the walk's
+ * cost scales in: 36-53 of them at 0.05-0.15 ms each. That range and the
+ * attempt count are both quoted from the code below rather than remembered —
+ * this line has said "28-41 of them, six attempts at worst" through two changes
+ * to each, which is the same drift `count` and `step` were carrying.
  */
 function* buildNodes(c, salt = 0) {
   const rng = makeRng(`${getWorldSeed()}:cave-path:${c.k}${salt ? `:${salt}` : ''}`);
@@ -840,6 +1059,29 @@ function* buildNodes(c, salt = 0) {
    * distance each is a passage of about the same length with half again as many
    * corners in it, which is the trade that was wanted.
    *
+   * …AND FOR A YEAR THIS COMMENT WAS THE ONLY PLACE EITHER HALF OF THAT EXISTED.
+   *
+   * The line below computed 32-46, not 36-53, and the reaches below it computed
+   * 13-24 and 8-13, not the 11-21 and 7-11 their own block claimed. Both halves
+   * of the trade were written down, argued for, and never landed — so the walk
+   * that shipped was the LONG-REACH, FEW-NODE one, which is measurably straighter
+   * than the file believed it was. Measured on the shipped build: one corner over
+   * 45 degrees per 41 m, and grove-02 k=-1 turning 117 deg/100 m with four
+   * corners in 275 m. That is the room's "it looks like one continuous tunnel",
+   * in this file's own units, and the fix was to make the code say what the
+   * comment already said.
+   *
+   * THE PAIR IS LENGTH-NEUTRAL BY CONSTRUCTION, WHICH IS WHY IT IS SAFE AND
+   * LOWERING THE HOLD IS NOT. Mean step at a 0.62 hold was 0.62x18.5 + 0.38x10.5
+   * = 15.5 m; at the shorter reaches it is 0.62x16 + 0.38x9 = 13.3 m, down 13.7%.
+   * Mean count goes 39 -> 44.5, up 14.1%. The product — which is the passage's
+   * length, and therefore its descent, and therefore `deep`, and therefore the
+   * chambers — moves by 1.4%. What DOES move is corners per metre, up about a
+   * sixth, because the joint decisions per node are unchanged and there are more
+   * nodes in the same distance. Shortening a reach does not make the walk agree
+   * to turn more often; it makes each straight run shorter. That is a different
+   * lever from the hold probability and it does not have the hold's price.
+   *
    * AND IT IS WHERE THE MAIN WALK'S TURNING STOPS BEING TUNED, WHICH IS A
    * FINDING RATHER THAN A DEFAULT. Asked for more twists, the obvious levers are
    * here: hold the joint less often, take shorter reaches, add nodes to pay for
@@ -857,11 +1099,19 @@ function* buildNodes(c, salt = 0) {
    * being available. Fewer passages is the same fault twice over, because a
    * shorter main line carries fewer junctions.
    *
-   * Nobody has ever described a cave by how much it turned. The turning went
-   * into the BRANCHES instead, where there is no depth envelope to spend and no
+   * READ THAT A/B AGAIN AND IT IS NOT ABOUT TURNING, IT IS ABOUT LENGTH. Both
+   * arms ran the same `count`, so dropping the hold to 0.52 cut mean step by 5%
+   * by arithmetic and the measured length fell 12% — the other 7% is refusals,
+   * because a twistier line meets its own beads more often. The chambers went
+   * with the length, not with the degrees. That is why this file may buy turning
+   * with nodes and may not buy it with the hold, and it is why the hold rule
+   * below is now REDISTRIBUTED rather than lowered.
+   *
+   * Nobody has ever described a cave by how much it turned. The turning also
+   * went into the BRANCHES, where there is no depth envelope to spend and no
    * chamber to lose — see the heading block in `buildBranch`.
    */
-  const count = 32 + Math.floor(rng() * 15);
+  const count = 36 + Math.floor(rng() * 18);
 
   /**
    * THE JOINT SET, WHICH IS WHY A CAVE MAP LOOKS LIKE A STREET GRID.
@@ -917,6 +1167,103 @@ function* buildNodes(c, salt = 0) {
 
   /** Set when the walk has run out of mountain. See the dive limit below. */
   let cliffed = false;
+
+  /* ------------------------------------------------------------------------ *
+   *  HOW MUCH ROCK THERE IS HERE, CARRIED FROM ONE NODE TO THE NEXT
+   * ------------------------------------------------------------------------ *
+   *
+   * The hold rule below spends its corners where the mountain is thickening and
+   * drives straight where it is thinning, and this is the state that lets it.
+   *
+   * IT COSTS NOTHING TO MEASURE, WHICH IS THE ONLY REASON IT IS AFFORDABLE. The
+   * ravine veto already runs `roofScan` on the candidate it accepts — seventeen
+   * `heightAt` samples, the single most expensive thing in the walk — and then
+   * throws the reading away after asking it one yes/no question. `rockOver` is
+   * the same reading asked a second question, in arithmetic: the metres of
+   * mountain over the axis, at the tightest of the axis sample and the inner
+   * rosette ring. The outer ring is deliberately left out; it stands 1.15
+   * half-widths off the axis, so on a chamber it is thirty-five metres down the
+   * flank, and the block over `roofScan` is about exactly that mistake — out
+   * there the reading is a fact about the footprint's size rather than about the
+   * rock.
+   *
+   * AND IT IS COMPARED AGAINST ITSELF, NOT AGAINST A CONSTANT, WHICH IS THE
+   * WHOLE ROBUSTNESS ARGUMENT. Absolute metres of overburden are not comparable
+   * between two caves or between two ends of one cave: the walk descends up to
+   * eighty metres below its mouth while the hillside climbs over it, so a
+   * threshold that reads "generous" near the entrance reads "thin" three hundred
+   * metres in, and a threshold tuned on one seed's ridge is meaningless on a
+   * seed whose ridge is half as high. A fast running mean and mean-deviation —
+   * about three to four nodes of memory — turn the reading into "is there more
+   * rock here than a few reaches back", which is scale-free, seed-free and
+   * depth-free.
+   *
+   * AND IT IS DETRENDED, WHICH IS NOT A REFINEMENT — IT IS THE DIFFERENCE
+   * BETWEEN THIS RULE AND THE ONE THE FILE ALREADY REFUSED.
+   *
+   * A single running mean LAGS a trend, and a cave walk's overburden is nothing
+   * but trend: the walk dives while the hillside climbs, so `scanOver` grows
+   * more or less monotonically from the mouth to the deepest node. Against a
+   * lagging mean, every node in a monotone climb reads "more rock than lately"
+   * — so `rockGen` saturates at 1 for the whole passage and the rule degenerates
+   * into a flat hold of HOLD_RICH. Simulated over the plausible shapes of the
+   * signal (flat, noisy, trending either way, random walk, a ridge crossed at
+   * two wavelengths, a step), the single-mean form came out at a mean hold of
+   * 0.530 on the trending case: which is 0.52, which is the arm of the A/B over
+   * `count` that cost a QUARTER of the tall chambers. The rule would have
+   * reproduced the exact failure it was written to avoid, on the one signal
+   * shape a real cave actually has.
+   *
+   * So the deviation is measured against the running deviation — a second mean,
+   * which removes a linear trend the way the first removes a level. Over the
+   * same set of signal shapes the realised mean hold then stays inside
+   * 0.593-0.647 against a 0.62 constant, and the excursions are on the SAFE
+   * side (more holding, which costs turning and not chambers). `rockGen` is
+   * centred on 0.5 by construction, and that is what makes the hold rule below a
+   * redistribution rather than a reduction.
+   *
+   * What it now says, in words: turn where the rock is thicker THAN THE TREND
+   * PREDICTS, drive on where it is thinner than that. Steadily deepening is not
+   * an invitation to corner; a pocket of mountain is.
+   */
+  /** Metres of mountain over the last accepted node. Null until one is placed. */
+  let rockAvg = null;
+  /** …and the running change in it, which is the trend that gets subtracted. */
+  let rockDev = 0;
+  /** Running mean absolute detrended deviation, in metres. Seeded at a plausible
+   *  spread so the first few nodes are not all saturated at one end. */
+  let rockSpread = 6;
+  /** How fast all three track. 0.3 is three to four nodes of memory: long enough
+   *  that the comparison means something spatially, short enough to follow a
+   *  ridge. Simulated at 0.3 and 0.45; both hold the mean, 0.3 keeps its worst
+   *  excursion on the safe side. */
+  const ROCK_RATE = 0.3;
+  /** 0 = thinner than the trend predicts, 1 = thicker. Null before the first. */
+  let rockGen = null;
+
+  /**
+   * WHAT THE WALK DID, FOR THE BUILD TO REPORT AND A GATE TO READ.
+   *
+   * Nothing in this file has ever counted its own corners, so every statement
+   * about how twisty the walk is has come from a script that re-derived it from
+   * the drawn rings — which is a different quantity (the resample smooths the
+   * joints) and which nobody runs when they change a constant here. These are
+   * the walk's own numbers, in the walk's own units, and `holdSum / holdN` in
+   * particular is the one that has to be checked after any change to the rule
+   * below: it is the realised mean hold probability, and if it has moved down
+   * from 0.62 then the chambers are being spent whether or not that was
+   * intended.
+   */
+  const stats = {
+    nodes: 0,
+    corners: 0,
+    escapes: 0,
+    holdSum: 0,
+    holdN: 0,
+    rockSum: 0,
+    rockN: 0,
+    genSum: 0,
+  };
 
   /**
    * EVERYWHERE THE PASSAGE ALREADY IS, at a resolution the clash test can use.
@@ -1046,7 +1393,53 @@ function* buildNodes(c, salt = 0) {
        * main line turns, and every tenth taken off it comes out of the length,
        * the chamber heights and the junction count together.
        */
-      const hold = attempt === 0 ? rng() < 0.62 : attempt % 3 === 0;
+      /**
+       * …AND IT IS NO LONGER ONE NUMBER, BECAUSE A FLAT COIN IS WHY TURNING HAD
+       * A PRICE AT ALL.
+       *
+       * Read the A/B over `count` again with the mechanism in hand. Turning costs
+       * chambers because turning costs LENGTH — a corner is taken in a short step
+       * — and length is descent and descent is `deep` and `deep` is what lets
+       * `pickType` reach a hall. Nothing in that chain says a corner is bad. It
+       * says a corner spends metres, and the question the flat coin never asked
+       * is what those metres BUY.
+       *
+       * A corner spent where the mountain is thinning buys nothing twice over.
+       * There is no chamber to be had there whatever the walk does — `chamberFit`
+       * hands back a corridor — and the ravine veto is about to refuse half the
+       * candidates anyway, so the corner arrives by the escape hatch and lands
+       * somewhere the burial will narrow. What the walk needs in thin rock is to
+       * get OUT of it, and the way out is a long reach on the joint it is already
+       * on.
+       *
+       * A corner spent where the mountain is thickening is nearly free. The rock
+       * over the axis is what sizes a chamber, and it does not care which
+       * direction the axis arrived from; the reach is short, but a short reach
+       * under thick rock still descends (the pitch envelope is per-node, not per
+       * metre) and still earns `deep`. And it is the corner the player is paid
+       * for, because a corner is only worth taking where there is something on
+       * the other side of it big enough to be worth hiding.
+       *
+       * So the SAME NUMBER OF CORNERS, MOVED. 0.76 where the rock is thinning,
+       * 0.46 where it is thickening, and `rockGen` is centred on 0.5 by
+       * construction (see the block over `rockAvg`), so the realised mean is
+       * 0.61 — a hundredth off the number the A/B blessed, and within the noise
+       * of it. This is deliberately not the place to also LOWER the mean: the
+       * length that buys the extra turning comes from `count`, where it is paid
+       * for in nodes, and not from here, where it is paid for in chambers.
+       *
+       * `stats.holdSum` exists so that "the realised mean is 0.61" is a number a
+       * gate can read rather than a claim in a comment. If it comes out under
+       * 0.58 on any seed, the spread below is too wide for that seed's rock and
+       * the chambers are being spent.
+       */
+      const holdP =
+        rockGen === null ? HOLD_BASE : HOLD_THIN + (HOLD_RICH - HOLD_THIN) * rockGen;
+      if (attempt === 0) {
+        stats.holdSum += holdP;
+        stats.holdN++;
+      }
+      const hold = attempt === 0 ? rng() < holdP : attempt % 3 === 0;
       let jn = joint;
       if (!hold) {
         for (let tries = 0; tries < 6; tries++) {
@@ -1105,8 +1498,31 @@ function* buildNodes(c, salt = 0) {
        * about where the fog closes, so the sight line that reads as distance
        * survives on the tail of the distribution; the mean is down by a fifth and
        * the typical stretch stops being a corridor.
+       *
+       * AND THAT PARAGRAPH DESCRIBED A BUILD NOBODY EVER PLAYED. The line below
+       * computed 13-24 and 8-13 — the PREVIOUS, LONGER era — for as long as the
+       * paragraph over it has claimed otherwise, exactly as `count` above kept
+       * 32-46 while claiming 36-53. The two were designed as one trade and
+       * neither half landed, so what shipped was the long-reach few-node walk:
+       * a geometric run of 2.63 nodes at a mean 15.5 m each is 40.8 m of straight
+       * passage between corners, and the measured build gave one corner over 45
+       * degrees per 41 m. The arithmetic and the instrument agree to a tenth of a
+       * metre, which is how it was found.
+       *
+       * At 11-21 and 7-11 the same geometric run is 35.1 m, and with the node
+       * count raised to match, the passage is the same length with a sixth more
+       * corners in it. Nothing else about the walk changes — the joint set is the
+       * same, the decision at each node is the same, the pitch envelope is the
+       * same. Only the scale of a straight run.
+       *
+       * THE SIGHT LINE IS THE THING BEING SPENT, AND IT IS SPENT ON PURPOSE. The
+       * 21 m tail is unchanged: the longest straight runs are the same length
+       * they have always been, and they are what the composition argument was
+       * ever about. What is gone is the 22-24 m band, which was three metres past
+       * where the cave fog closes and therefore three metres of wall nobody could
+       * see the end of anyway.
        */
-      const step = hold ? rngRange(rng, 13, 24) : rngRange(rng, 8, 13);
+      const step = hold ? rngRange(rng, 11, 21) : rngRange(rng, 7, 11);
       const h = joints[jn] + rngRange(rng, -0.13, 0.13);
       /**
        * A canyon is a stream that is cutting DOWN and a room is a floor that is
@@ -1345,10 +1761,28 @@ function* buildNodes(c, salt = 0) {
        * 26 m chamber — which on three of eight seeds was the difference between
        * a chamber and no chamber at all.
        */
+      /**
+       * …AND THE READING IS KEPT, WHICH IS THE OTHER HALF OF THE HOLD RULE.
+       *
+       * `roofScan` is seventeen `heightAt` samples and the single most expensive
+       * thing in this loop, and every previous version of it asked one yes/no
+       * question of the result and dropped it. `scanOver` is the same reading
+       * asked for a NUMBER — metres of mountain over the axis — at no cost
+       * beyond two subtractions. See the block over `rockAvg` for what it is
+       * compared against and why it is not compared against a constant.
+       *
+       * Null on the twelfth attempt, which skips the scan by design: the escape
+       * hatch honours no veto, so there is nothing to read. The previous node's
+       * reading is then carried forward unchanged, which is the right default —
+       * an escape-hatch node is one the rock refused, and a walk that has just
+       * been refused should not conclude the rock got better.
+       */
+      let scanOver = null;
       if (attempt < 11) {
         const tl = Math.hypot(nx - x, nz - z) || 1;
         const s = roofScan(nx, nz, (nx - x) / tl, (nz - z) / tl, r * sh.w);
         if (roofDrop(s, ny, sh, r) > -ROOF_ROCK * 0.3) continue;
+        scanOver = Math.min(s[0], s[1]) - ny - ROOF_ROCK;
       }
 
       /**
@@ -1519,6 +1953,39 @@ function* buildNodes(c, salt = 0) {
       x = nx;
       y = ny;
       z = nz;
+      /**
+       * The rock reading, folded into the running comparison the next node's
+       * hold rule reads. Only on acceptance: a refused candidate is a place the
+       * passage is not, and its overburden is not this passage's rock.
+       *
+       * The deviation is taken against the mean BEFORE this sample is folded in,
+       * so a node cannot be compared against a mean that already contains it —
+       * with a fast rate that alone would halve the spread and push `rockGen`
+       * toward 0.5 everywhere, which is the flat coin again by accident.
+       */
+      if (scanOver !== null) {
+        if (rockAvg === null) {
+          rockAvg = scanOver;
+          rockGen = 0.5;
+        } else {
+          const dev = scanOver - rockAvg;
+          // Detrended: `rockDev` is how fast the overburden has been changing,
+          // so `rel` is how much of this node's change is NOT the trend. See
+          // the block over `rockAvg` for why leaving the trend in reproduces
+          // the 0.52 hold and its quarter of the tall chambers.
+          const rel = dev - rockDev;
+          rockGen = clamp01(0.5 + rel / (2 * Math.max(rockSpread, 3)));
+          rockSpread += ROCK_RATE * (Math.abs(rel) - rockSpread);
+          rockDev += ROCK_RATE * (dev - rockDev);
+          rockAvg += ROCK_RATE * dev;
+        }
+        stats.rockSum += scanOver;
+        stats.rockN++;
+        stats.genSum += rockGen;
+      }
+      stats.nodes++;
+      if (!hold) stats.corners++;
+      if (attempt === 11) stats.escapes++;
       const nd = shaped(x, y, z, r, sh, rng);
       nd.type = kind;
       bead(nodes[nodes.length - 1], nd);
@@ -1604,7 +2071,7 @@ function* buildNodes(c, salt = 0) {
     z = nodes[nodes.length - 1].z;
   }
   nodes.push(closingNode(nodes[nodes.length - 1], endHead));
-  return { nodes, joints };
+  return { nodes, joints, stats };
 }
 
 /* -------------------------------------------------------------------------- *
@@ -2215,6 +2682,19 @@ function pickType(rng, from, turned, deep = 0) {
 const BRANCH_MIN_RING = Math.round(26 / RING_STEP);
 
 /**
+ * The nominal half-width, in metres, at which a ring stops being passage and
+ * starts being a chamber. See `chamberRun` and `snapToChamber` in `prepare`.
+ *
+ * Read off the table above rather than chosen. Ordinary passage is 1.4 to 4.9 m
+ * of `r * w` across the four small sections at any radius they may be drawn at;
+ * `room` is 10 to 21 and `hall` is 12 to 35. Eight is a factor of 1.6 clear of
+ * both, so nothing near the boundary can be misclassified by a die roll — which
+ * matters, because this is a distance and it is being asked of a ring whose
+ * radius came out of a Catmull-Rom overshoot as often as out of a node.
+ */
+const CHAMBER_HALF = 8;
+
+/**
  * NO SKYLIGHTS: the RINGS are checked against the hillside, not the nodes.
  *
  * `buildNodes` clamps every node to ROOF_ROCK under `heightAt`, and that has
@@ -2499,8 +2979,25 @@ function chamberFit(x, z, tx, tz, y, sh, want) {
   return r;
 }
 
-function* burySkylights(path, from) {
+/**
+ * `until` IS `from` AT THE OTHER END, AND IT EXISTS FOR THE SAME REASON.
+ *
+ * `from` protects the rings that are welded to something the burial is not
+ * entitled to move — the hood at a mouth, ring zero at a junction. A looping
+ * branch has a SECOND weld, in the wall of another passage, and every word of
+ * that argument applies to it unchanged: those rings sit inside a bore that has
+ * already been buried, so the hillside test over them is both meaningless (the
+ * rock above them is the target passage's business) and destructive (moving
+ * them by a centimetre unpicks the seam the whole junction rests on).
+ *
+ * Rings at or past `until` therefore keep their `y` and their `r`, the cut
+ * search stops there — a pinch INSIDE the target's bore is not a pinch — and
+ * `flatten` is told the same bound. Default Infinity, so every existing caller
+ * is unchanged to the bit.
+ */
+function* burySkylights(path, from, until = Infinity) {
   const n = path.x.length;
+  const last = Math.min(n, until);
   const want = Float64Array.from(path.y);
   /**
    * THE ROSETTE READING ITSELF, KEPT, RATHER THAN AN ANSWER DERIVED FROM IT.
@@ -2562,6 +3059,21 @@ function* burySkylights(path, from) {
     const drop = roofDrop(s, path.y[i], shr, r);
     if (drop > 0) want[i] = path.y[i] - drop;
   }
+  /**
+   * THE PROTECTED RINGS WANT WHERE THEY ALREADY ARE, and this line is the whole
+   * difference between `until` working and `until` putting a step in the weld.
+   *
+   * The two envelope passes below are running minima over the WHOLE array, so a
+   * drop demanded at a ring that will never be written still propagates
+   * backwards into the rings that will be. A weld ring is inside another
+   * passage's bore, so `roofDrop` there is asking the hillside about rock that
+   * is somebody else's business and routinely gets a large answer — and the
+   * ring in front of the weld would then be lowered to reach a drop that never
+   * happens. That is a step at exactly the seam this parameter exists to keep
+   * flat. `from` needs no equivalent: it seeds `ceilingOf` from the last fixed
+   * ring, which is the same statement made forwards.
+   */
+  for (let i = last; i < n; i++) want[i] = path.y[i];
 
   /**
    * APPLIED AS A SLOPE-LIMITED ENVELOPE, NOT RING BY RING.
@@ -2626,7 +3138,11 @@ function* burySkylights(path, from) {
    */
   const rock = new Float64Array(n);
   for (let i = 0; i < n; i++) rock[i] = path.r[i];
-  for (let i = first; i < n; i++) {
+  // …and to `last` for the same reason the height envelope stops there: a weld
+  // ring's `roofCap` is asked of a hillside that is roofing the TARGET passage,
+  // and the taper passes below would carry its answer back into rings that are
+  // real. See the block over `until`.
+  for (let i = first; i < last; i++) {
     shr.w = path.w[i];
     shr.t = path.t[i];
     shr.rough = path.rough[i];
@@ -2660,19 +3176,20 @@ function* burySkylights(path, from) {
    * you are already in it.
    */
   let cut = n;
-  for (let i = first; i < n; i++) {
+  for (let i = first; i < last; i++) {
     if (rock[i] * (path.t[i] + path.f[i]) < MIN_HEAD + 0.5) {
       cut = i;
       break;
     }
   }
   // Ring 0 of a branch is welded to the main tube and must not move; the mouth
-  // rings are the hood and must not either.
-  for (let i = first; i < cut; i++) {
+  // rings are the hood and must not either; nor does a loop's far weld. See
+  // `until`.
+  for (let i = first; i < Math.min(cut, last); i++) {
     path.y[i] = want[i];
     path.r[i] = rock[i];
   }
-  if (cut < n) truncate(path, cut);
+  if (cut < last) truncate(path, cut);
 
   /**
    * …AND THEN LEVEL THE FLOOR AGAIN, BECAUSE THIS PASS HAS JUST INVALIDATED IT.
@@ -2704,9 +3221,10 @@ function* burySkylights(path, from) {
    * `flatten` only ever writes `f`. The roof is `y + r * (t + rough)` and the
    * containment is `r * w`; neither reads `f`, so nothing this pass just
    * guaranteed about staying under the hillside can be undone by it. `first`
-   * keeps it off the mouth and off a branch's welded ring zero.
+   * keeps it off the mouth and off a branch's welded ring zero, and `last`
+   * keeps it off a loop's far weld for the same reason.
    */
-  flatten(path, first);
+  flatten(path, first, last);
 }
 
 /**
@@ -2772,33 +3290,594 @@ function truncate(path, cut) {
  * that junction there is no cue as to which way is the way on, because there is
  * no way on — there are two ways on, and the cave stops being a route.
  *
- * It is deliberately not a loop back to anywhere. The collision model is a set
- * of independent swept tubes; two of them rejoining is not a bigger version of
- * this problem, it is a different one.
+ * IT USED TO SAY "It is deliberately not a loop back to anywhere. The collision
+ * model is a set of independent swept tubes; two of them rejoining is not a
+ * bigger version of this problem, it is a different one." That was true when it
+ * was written and it is no longer: `caveSample` learned to separate which
+ * section governs the body from how much you are in a cave, which is precisely
+ * and only what two tubes rejoining requires. See the LOOP CLOSURE block below,
+ * and `wantLoop` on this function.
  */
-function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
+/**
+ * WHY THE LAST BRANCH DID NOT HAPPEN.
+ *
+ * `buildBranch` returns null at three completely different places for three
+ * completely different reasons, and until this variable existed it returned the
+ * same null at all of them — so `prepare` knew only that a junction it had
+ * planned was not there, and nobody knew how often that was, let alone which
+ * gate was firing.
+ *
+ * That blindness is the whole reason the room's second complaint went unnoticed
+ * for as long as it did. Measured once the counters existed: 54% of planned
+ * top-level branches were being built. Twenty-six junctions of forty-eight
+ * across the world, against a design that says one every fifty metres — so
+ * grove-01's k=-1 got three junctions in six hundred and thirty-two metres, and
+ * "it lacks cave-like subsystems" is that number and not an opinion.
+ *
+ *   'wall'    :2833 — no ring in the 34-ring window has a wall a body could get
+ *                     through. The junction would be a hole above head height.
+ *   'short'   :3263 — under three nodes placed. Every candidate clashed or the
+ *                     hillside refused it, which for a minor branch used to mean
+ *                     the FIRST candidate did; see `tries`.
+ *   'buried'  :3343 — built, then `burySkylights` took it back to under twelve
+ *                     metres. There is genuinely no mountain there.
+ *
+ * A module-level variable rather than a return value because the return is
+ * `null` at three sites deep inside a generator and threading a reason out of
+ * every one of them would be four signature changes for a counter. The build is
+ * one sequential generator chain — `prepareSlice` advances exactly one cave per
+ * frame — so there is no interleaving to get wrong. It is written on entry and
+ * read immediately after the call returns, and nowhere else.
+ */
+let _branchWhy = null;
+
+/**
+ * HOW MUCH WALL THERE IS WHERE A BODY IS, at one ring of one passage.
+ *
+ * Hoisted out of `buildBranch`, which had it as a closure over the passage it
+ * was leaving, because a loop closure has to ask the same question of a passage
+ * it is ARRIVING at. Same two heights `caveSample` solves the wall push at, and
+ * for the same reason: a section is an ellipse, so the half-width at the axis —
+ * the number every part of this file used to reach for — is the one height that
+ * is guaranteed to be the maximum, and in a keyhole or a canyon the body moves
+ * several metres below it in a slot a fraction as wide.
+ */
+const _wallSh = { w: 1, t: 1, f: 0.5, key: 0 };
+function wallHalfAt(p, i) {
+  _wallSh.w = p.w[i];
+  _wallSh.t = p.t[i];
+  _wallSh.f = p.f[i];
+  _wallSh.key = p.key[i];
+  const r = p.r[i];
+  const fl = floorAt(0, _wallSh);
+  return r * Math.min(halfWidthAt(fl + 1.1 / r, _wallSh), halfWidthAt(fl + 1.8 / r, _wallSh));
+}
+
+/* -------------------------------------------------------------------------- *
+ *  LOOP CLOSURE — THE SECOND WELD
+ * -------------------------------------------------------------------------- *
+ *
+ * WHAT WAS HERE, WORD FOR WORD, WAS "It is deliberately not a loop back to
+ * anywhere. The collision model is a set of independent swept tubes; two of them
+ * rejoining is not a bigger version of this problem, it is a different one."
+ *
+ * That was true when it was written and it stopped being true the day
+ * `caveSample` learned to separate WHICH SECTION GOVERNS THE BODY (`bestScore`,
+ * a fit test) from HOW MUCH ARE YOU IN A CAVE (`inside`, a max over every path
+ * that claims the point). Read the block at the top of `caveSample`: that split
+ * was written for junctions and it is exactly, and only, what two passages
+ * legitimately claiming one point requires. It cost this project the documented
+ * failure where 40% of every cave was unreachable, and while every path had
+ * exactly one weld its value was half collected.
+ *
+ * THE COMPLAINT IT ANSWERS. "It looks like one continuous tunnel rather than
+ * having cave-like subsystems and explorability." Measured, the cyclomatic
+ * number of every cave in this world was exactly zero: every branch and every
+ * lead off a branch dead-ended, so the graph was a tree, and in a tree every
+ * side passage is a decision you undo by turning round. You cannot get lost in a
+ * tree and you cannot come back a different way, which are the two things that
+ * make a cave system a system.
+ *
+ * SO A PATH MAY NOW END ON ANOTHER PATH'S WALL. `buildBranch` already welds ring
+ * zero to a parent's wall, and in doing so has already solved floor height,
+ * lateral offset, the hole ellipse, the collar double-winding and the flare that
+ * seals it. The whole of this feature is the mirror of that weld at the other
+ * end, plus the burial learning not to move it (`until`), plus `blindAlong`
+ * learning to be asked from either end.
+ *
+ * IT IS CHEAPER THAN A DEAD END. A closure skips `terminusFit`, which the file
+ * describes as the fattest single computation in the whole build — twelve
+ * attempts each dominated by a `roofScan`. What it spends instead is one sweep
+ * of the candidate paths' ring arrays (a squared distance each, no hypot) and at
+ * most four `roofRoom` calls on the shortlist.
+ *
+ * HOW MUCH LOOPING IS RIGHT, AND IT IS MUCH LESS THAN FEELS RIGHT.
+ *
+ * Collon et al. 2017 survey 34 real cave systems as graphs and Jouves et al.
+ * 2017 do 26 more over 621 km of passage; both put the average vertex degree
+ * between 1.8 and 2.6, and both find junctions of degree four or more genuinely
+ * scarce. Paris et al. 2021 report that their synthetic mazes come out ABOVE
+ * real systems' degree — i.e. the naive thing, adding edges until the map looks
+ * interesting, overshoots nature rather than approaching it. The dial the
+ * roguelike literature settled on is the same one: build the spanning tree, then
+ * add back a small percentage of the rejected edges (TinyKeep used 15%, later
+ * reworks found 8-10% better).
+ *
+ * So the budget is ONE to THREE closures in a whole cave, never a fraction of
+ * the branches. On a system with eight junctions and a dozen dead ends that puts
+ * the cyclomatic number at 1-2 and the mean degree just either side of 2, which
+ * is the middle of the surveyed range. More is not a better cave; it is a maze,
+ * and the maze objection in `prepare` — "what makes a maze is not the count, it
+ * is two holes within sight of each other" — is untouched by any of this.
+ */
+/**
+ * How near and how far a weld may be from the end of the walk, in metres.
+ *
+ * The floor is not a taste: the weld sits `lat` off the target's axis and the
+ * approach node stands LOOP_PRE beyond that, so a target much under sixteen
+ * metres leaves no connector at all and is refused by `reach` a hundred lines
+ * down having cost a `roofRoom` to find out. Ten rather than thirteen so that
+ * refusal happens on a squared distance instead.
+ *
+ * The ceiling is rock. Every metre of connector is a metre of passage nobody
+ * asked the hillside about until the roof check, and the roof check is the
+ * expensive one. Forty-two is three of the walk's own steps, so a connector is
+ * never longer than a stretch of ordinary passage — and it is split into
+ * segments under fourteen metres before the rock is asked, so the sampling is
+ * the walk's too.
+ */
+const LOOP_NEAR = 10;
+const LOOP_FAR = 42;
+/**
+ * HOW MUCH PASSAGE THE LOOP HAS TO ENCLOSE, in metres of distance-from-daylight
+ * between its two welds.
+ *
+ * A loop that rejoins the parent thirty metres further along is not a loop, it
+ * is an alcove with two doors, and it costs the player nothing to walk either
+ * side of it. What makes a closure worth building is that the two ways round are
+ * different enough journeys that choosing one is a decision — which is the same
+ * argument BRANCH_GAP makes about junctions, at the scale of a circuit rather
+ * than of a doorway. Seventy metres is two junction spacings.
+ *
+ * Measured through the TREE, as `|depth(target) - depth(base)|`, because that is
+ * the number both welds already carry and it needs no graph walk. Where the two
+ * welds are on different passages this understates the real route — it is the
+ * difference of two depths rather than the path between them — so the test is
+ * conservative in the direction of refusing loops, which is the right direction.
+ *
+ * IT WAS SEVENTY AND IT WAS THE WHOLE OF THE OTHER WAY ROUND, WHICH IS HALF THE
+ * CIRCUIT. See the block in `loopCandidates`: seventy metres of enclosure plus a
+ * thirty-five metre reach asks for a hairpin, and six caves over three seeds
+ * closed nothing at all. Twenty-five is now only the statement that a closure is
+ * not a bubble beside a doorway; LOOP_CIRCUIT is the statement that the two ways
+ * round are different journeys, and it is the bar that binds.
+ */
+const LOOP_SPAN = 25;
+/**
+ * …AND THE WHOLE WAY ROUND, which is the number the player experiences.
+ *
+ * The other way round, plus this passage's own length, plus the connector. At
+ * ninety metres the shorter way round is at least forty-five, which is a minute
+ * of walking — long enough that meeting the far junction is a surprise and
+ * taking it is a decision, which is the entire brief. It is deliberately in the
+ * same range as BRANCH_GAP's argument about junction spacing: what makes a
+ * system legible is that its features are a walk apart.
+ */
+const LOOP_CIRCUIT = 90;
+/** How far out from the target's wall the approach node stands, in metres. */
+const LOOP_PRE = 7.5;
+/**
+ * ARRIVE THROUGH THE WALL, NOT ALONG THE PASSAGE.
+ *
+ * The base weld gets this for free: a branch leaves on the wall normal, so the
+ * hole is a hole in a wall and the corner behind it is at least sixty degrees.
+ * Nothing gives it to the far end for free — the walk arrives on whatever
+ * heading it happened to be on — and a glancing arrival is two faults at once.
+ * Geometrically the hole machinery cuts an ellipse in (ring, phi) that assumes
+ * the bore crosses the wall roughly square, and a bore sliding along the wall
+ * cuts a window far longer than the tube behind it, which is a leak. And the
+ * whole forest-occlusion argument at the top of `occludeWorld` rests on that
+ * corner: a weld you can see straight down is a weld you can see daylight
+ * through.
+ *
+ * 0.62 is 52 degrees off the target's axis at worst.
+ */
+const LOOP_SKEW = 0.62;
+/**
+ * HOW BLIND THE TARGET HAS TO BE BEFORE A CLOSURE IS FREE OF THE FOREST.
+ *
+ * `occludeWorld` deletes the wood when the body is deeper than the governing
+ * path's `blind`, and a looping path is credited its depth through the TREE —
+ * i.e. from its base weld — so near its far weld it is credited a large depth
+ * and the wood is hidden. What the player can see there is through the second
+ * hole into the target passage, and then however far down the target the hole
+ * lets them look. If the target can see daylight at that ring, so can they, and
+ * the entire forest winks out in front of somebody looking at trees.
+ *
+ * The pad is for the metres of target passage visible either side of the hole:
+ * standing in the loop you see a cone of the target, not just its one ring.
+ * Twenty metres is far more than a hole two or three metres across subtends at
+ * any useful angle.
+ *
+ * WHERE THE TARGET IS NOT THAT BLIND THE LOOP IS STILL ALLOWED, and pays for it
+ * with `blindTail` instead — see where it is set. Rejecting outright would have
+ * banned every closure on a cave whose main line runs straight, which is the
+ * seed that most needs one.
+ */
+const LOOP_BLIND_PAD = 20;
+/**
+ * The rings at the far end that are welded and may not be moved or wound once.
+ *
+ * Three is the collar `_link` doubles and `buildBranch` flares at the base, and
+ * this is that mirrored, plus two so the burial's own backward slope limiter
+ * cannot reach into the collar from the ring in front of it.
+ */
+const LOOP_COLLAR = 5;
+/**
+ * How many shortlisted candidates are paid for before the lead gives up.
+ *
+ * A candidate costs one `roofRoom` per connector node — seventeen `heightAt`
+ * samples each, at most three nodes — plus a bounded sweep of the target ring
+ * arrays behind a bounding-sphere reject. There is a `yield` per candidate, so
+ * five of them is five slices and not one, which is what keeps this inside the
+ * 1.8 ms per-slice budget rather than merely under it on average.
+ *
+ * Five and not four because the shortlist is now ordered by SHORTEST CONNECTOR
+ * — see the score in `loopCandidates` — so the marginal candidate is a real one
+ * rather than the longest reach in the cave. Against `terminusFit`'s twelve
+ * `roofScan`-driven attempts, which a closure skips entirely, five is still a
+ * saving.
+ */
+/**
+ * NINE, AND IT IS A SAFETY NET RATHER THAN A LOSTNESS FEATURE.
+ *
+ * The block above argues the CEILING on closures from the surveyed degree range
+ * and that argument is untouched: one to three a cave, never a fraction of the
+ * branches. What moved is why the floor matters. A closure does not make a
+ * player lost — nothing in the caving literature blames loops for
+ * disorientation, and an oxbow rejoining its own passage is the commonest form
+ * of one — it makes a player who IS lost come out somewhere. It is redundancy,
+ * so the cost of closing too few is not a duller cave, it is a player walking a
+ * lead to its end and having exactly one way back.
+ *
+ * FIVE WAS NOT THE CEILING BINDING, IT WAS THE SHORTLIST GOING UNSPENT.
+ * Measured on grove-04 k=-1: 58 candidates survived every distance and angle
+ * test and 14 were ever paid for, of which 4 failed on bore and 10 on a clash —
+ * i.e. the search stopped with three quarters of its own shortlist unexamined.
+ * Nine tries against a twelve-deep shortlist is the same search finishing.
+ *
+ * The cost is a yield per candidate and the yield is the point: a candidate is
+ * up to three `roofRoom` calls plus a bounded sweep, and each one lands in its
+ * OWN slice against the 1.8 ms budget rather than nine of them in one.
+ */
+const LOOP_TRIES = 9;
+/** How deep the shortlist is kept. See LOOP_TRIES, which spends it. */
+const LOOP_SHORTLIST = 12;
+
+/**
+ * Find a ring of another passage this walk could end on.
+ *
+ * `head` is where the node walk stopped. `targets` are the passages this branch
+ * is allowed to rejoin — its parent, plus whatever it was told to avoid, which
+ * between them are every passage it knows about. Returns the chosen ring, or
+ * null, and does no `heightAt` work: the shortlist is scored on distances alone
+ * and the caller pays for the rock check only on the candidates it tries.
+ */
+/**
+ * WHY THE LAST CLOSURE DID NOT HAPPEN, and it is the same instrument
+ * `_branchWhy` is, for the same reason.
+ *
+ * The first version of this search shipped with a budget, a plan and no way at
+ * all to see which of seven constraints was refusing it. It closed zero loops
+ * over six caves and the honest answer to "which one is binding" was a guess.
+ * That is the exact blindness the block over `_branchWhy` describes costing this
+ * project its second complaint, committed again one function along.
+ *
+ * `scan` is rings examined; the named counters are rings refused, in the order
+ * the tests run, so they partition `scan` exactly:
+ *
+ *   scan = base + far + dive + span + wall + skew + pass
+ *
+ * and `pass` is the shortlist, of which at most LOOP_TRIES are paid for with
+ * `roofRoom` and the clash sweep — `bore`, `reach`, `roof` and `clash` count
+ * those, and `ok` is the closure.
+ *
+ * THE TWO NUMBERS THAT ARE NOT COUNTERS ARE THE ONES THAT SAY WHAT TO DO.
+ * `nearest` is the closest any target ring ever came to the walk's head,
+ * whatever else was wrong with it: if that is forty metres then no relaxation of
+ * any bar helps and the answer is that these branches do not reach. `bestSpan`
+ * and `bestCirc` are the largest enclosure and circuit available at a legal
+ * distance, so they say directly whether the circuit bar is reachable rather
+ * than merely unmet.
+ *
+ * A module-level object rather than a return value, for the reason `_branchWhy`
+ * gives: the build is one sequential generator chain, `prepareSlice` advances
+ * exactly one cave per frame, and threading a ledger out of a search that
+ * refuses in seven places would be seven signature changes for a counter.
+ */
+const _loopWhy = {
+  scan: 0,
+  base: 0,
+  far: 0,
+  dive: 0,
+  span: 0,
+  wall: 0,
+  skew: 0,
+  pass: 0,
+  bore: 0,
+  reach: 0,
+  roof: 0,
+  clash: 0,
+  ok: 0,
+  nearest: Infinity,
+  bestSpan: 0,
+  bestCirc: 0,
+};
+
+function resetLoopWhy() {
+  for (const k of Object.keys(_loopWhy)) _loopWhy[k] = 0;
+  _loopWhy.nearest = Infinity;
+}
+
+/**
+ * Fold one lead's search into the cave's ledger, immediately after the call.
+ *
+ * `nearest` pools as a MINIMUM and the two bests as MAXIMA, because they are
+ * facts about the cave rather than tallies: "the closest any lead in this system
+ * ever got to another passage" is the number that says whether the mountain
+ * contains a legal pair at all, and summing it would say nothing. Everything
+ * else is a count and adds.
+ *
+ * Called whether or not the lead was built and whether or not it was offered a
+ * budget — `offers` carries the denominator — so a cave whose closures all
+ * failed inside `buildBranch`'s own three refusals is distinguishable from one
+ * whose search was never run.
+ */
+function loopLedger(bs, offered) {
+  const w = bs.loopWhy;
+  if (!offered) return;
+  w.offers++;
+  for (const k of Object.keys(_loopWhy)) {
+    if (k === 'nearest') w.nearest = Math.min(w.nearest, _loopWhy.nearest);
+    else if (k === 'bestSpan' || k === 'bestCirc') w[k] = Math.max(w[k], _loopWhy[k]);
+    else w[k] += _loopWhy[k];
+  }
+}
+
+function loopCandidates(head, targets, baseAlong, avoidRing, walked) {
+  const out = [];
+  const w = _loopWhy;
+  for (let ti = 0; ti < targets.length; ti++) {
+    const p = targets[ti];
+    if (!p.along) continue;
+    const pn = p.x.length;
+    const hi = Math.min(pn - 1, p.endRing ?? pn - 1) - 6;
+    const pBase = p.baseAlong ?? 0;
+    for (let j = 8; j <= hi; j++) {
+      w.scan++;
+      const dx = p.x[j] - head.x;
+      const dy = p.y[j] - head.y;
+      const dz = p.z[j] - head.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      // The nearest thing this walk ever got to, whether or not it was legal.
+      // If this is large, no relaxation of any other constraint can help.
+      if (d2 < w.nearest * w.nearest) w.nearest = Math.sqrt(d2);
+      // Never into the doorway this branch already left through, nor into the
+      // rings either side of it: that is the base weld and it is already a hole.
+      if (avoidRing[ti] >= 0 && Math.abs(j - avoidRing[ti]) < 24) {
+        w.base++;
+        continue;
+      }
+      if (d2 < LOOP_NEAR * LOOP_NEAR || d2 > LOOP_FAR * LOOP_FAR) {
+        w.far++;
+        continue;
+      }
+      // The reach dives at the same gradient the walk does and no faster.
+      if (Math.abs(dy) * Math.abs(dy) > d2 * 0.42 * 0.42) {
+        w.dive++;
+        continue;
+      }
+      /**
+       * THE ENCLOSURE AND THE CIRCUIT ARE DIFFERENT NUMBERS AND ONLY ONE OF
+       * THEM IS THE POINT.
+       *
+       * What was here was `enclosed >= 70`, where `enclosed` is the difference
+       * in distance-from-daylight between the two welds — i.e. the length of the
+       * OTHER way round, and only that. It ignored the loop passage's own
+       * length, which is the way round the player will actually have walked, and
+       * which is routinely forty to ninety metres. So a branch that walks eighty
+       * metres and rejoins the trunk forty metres further along was refused,
+       * although the circuit it closes is a hundred and twenty.
+       *
+       * Measured: zero closures over six caves on three seeds, with the budget
+       * offered every time. Trunks are 447-1325 m but the branches in a cave
+       * total 201-656 m between all of them, so an individual branch is short —
+       * and requiring seventy metres of enclosure while also landing within
+       * thirty-five metres in space asked for a hairpin that most of these
+       * mountains do not contain.
+       *
+       * So the bar is the CIRCUIT, which is what makes the two ways round
+       * different journeys: the other way round, plus this passage, plus the
+       * connector. Ninety metres is a minute and a half of walking either way.
+       * `LOOP_SPAN` survives at a much smaller value as a separate statement —
+       * a closure that rejoins twenty metres from where it left is a bubble
+       * beside a doorway however long the bubble is.
+       */
+      const enclosed = Math.abs(pBase + p.along[j] - baseAlong);
+      const d = Math.sqrt(d2);
+      const circuit = enclosed + walked + d;
+      if (enclosed > w.bestSpan) w.bestSpan = enclosed;
+      if (circuit > w.bestCirc) w.bestCirc = circuit;
+      if (enclosed < LOOP_SPAN || circuit < LOOP_CIRCUIT) {
+        w.span++;
+        continue;
+      }
+      // A hole a body cannot get through is not a way on. Same bar the base
+      // weld uses, and the same measurement.
+      if (wallHalfAt(p, j) < 1.9 * 0.82) {
+        w.wall++;
+        continue;
+      }
+      const a = Math.max(0, j - 1);
+      const b = Math.min(pn - 1, j + 1);
+      let tx = p.x[b] - p.x[a];
+      let tz = p.z[b] - p.z[a];
+      const tl = Math.hypot(tx, tz) || 1;
+      tx /= tl;
+      tz /= tl;
+      const hl = Math.hypot(dx, dz) || 1;
+      if (Math.abs((-dx / hl) * tx + (-dz / hl) * tz) > LOOP_SKEW) {
+        w.skew++;
+        continue;
+      }
+      /**
+       * SHORTEST CONNECTOR FIRST, BIGGEST CIRCUIT SECOND, AND THAT ORDER IS THE
+       * OPPOSITE OF THE FIRST VERSION'S.
+       *
+       * It scored `enclosed - 0.9 * d`, which puts the longest reaches at the
+       * top of a shortlist that is only four deep — and a long reach is the
+       * candidate most likely to fail the roof check, so the four tries were
+       * spent on the four candidates least likely to work. Every candidate that
+       * reaches this line has already passed the circuit bar, so the circuit is
+       * satisfied rather than maximised, and what is left to prefer is the
+       * connector that has the best chance of finding rock.
+       */
+      const score = -d + 0.12 * Math.min(circuit, 300);
+      w.pass++;
+      if (out.length < LOOP_SHORTLIST || score > out[out.length - 1].score) {
+        out.push({ ti, j, score });
+        out.sort((u, v) => v.score - u.score);
+        if (out.length > LOOP_SHORTLIST) out.length = LOOP_SHORTLIST;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * HOW FAR BACK FROM A LOOP'S SECOND WELD THE FOREST MAY NOT BE HIDDEN.
+ *
+ * THIS IS THE BIGGEST PERFORMANCE RISK IN THE WHOLE FEATURE and it is worth
+ * being slow about. `occludeWorld` stops submitting the wood — 6.57 ms against
+ * 0.59, the single largest win in the project — when the body is deeper than the
+ * governing path's `blind`. A path is credited its depth through the TREE, from
+ * its base weld, so everywhere in a looping branch is credited a large depth and
+ * the wood is hidden. That is correct at the base end, where the ten-metre rule
+ * is argued from the sixty-degree corner a branch leaves through. At the FAR end
+ * it is an assertion about a passage this function has never looked at.
+ *
+ * What a player standing in the loop's tail can see is: through the second hole,
+ * into the target passage, and then as far down the target as the hole lets them
+ * look. So there are two ways for hiding to be safe there, and either will do.
+ *
+ *   THE TARGET IS ALREADY BLIND. If the weld ring's own distance from daylight
+ *   is past its passage's `blind` by LOOP_BLIND_PAD, there is no daylight on the
+ *   other side of the hole to see and the tail costs nothing. This is the normal
+ *   case: branches start past BRANCH_MIN_RING and a closure has to enclose
+ *   LOOP_SPAN of passage, so the target is usually deep.
+ *
+ *   OR YOU CANNOT SEE THE HOLE. `blindAlong`, asked from the last ring walking
+ *   backwards, measures exactly where the weld goes out of sight along the
+ *   loop's own line. Inside that distance the answer is Infinity and the wood
+ *   stays submitted; past it there is no line to the hole, let alone through it.
+ *
+ * A dead-straight loop passage measures Infinity — no bend, nothing ever out of
+ * sight — and then the whole passage refuses to hide, which is the same safe
+ * answer `blindAlong` has always given the main line and is the reason it
+ * returns Infinity rather than a length.
+ */
+function loopBlindTail(path) {
+  if (!path.loopEnd || !path.along) return 0;
+  const p = path.loopTo;
+  const tgt = (p.baseAlong ?? 0) + (p.along ? p.along[path.loopRing] : 0);
+  if (tgt > (p.blind ?? Infinity) + LOOP_BLIND_PAD) return 0;
+  const n = path.x.length;
+  const t = blindAlong(path, path.along, n - 1, -1);
+  return Number.isFinite(t) ? t : path.along[n - 1] + 1;
+}
+
+/* -------------------------------------------------------------------------- *
+ *  THE ACUTE JUNCTION — A DOORWAY THAT IS A DIFFERENT OBJECT FROM EACH SIDE
+ * -------------------------------------------------------------------------- *
+ *
+ * A branch has always left on the wall NORMAL, which makes the hole a hole and
+ * is argued at length below. It also makes the junction perfectly SYMMETRIC in
+ * time: the mouth subtends the same aperture, at the same angle, whether you are
+ * walking into the mountain or back out of it. A symmetric junction is a
+ * landmark you recognise from either side, and recognising junctions from the
+ * other side is exactly how a player retraces a cave.
+ *
+ * REAL BRANCHWORK IS DENDRITIC AND DENDRITIC JUNCTIONS ARE ACUTE. Surveyed
+ * junction angles come out at 45-72 deg (Seybold et al. 2017) and 49.5-75 deg
+ * (Hooshyar et al. 2017), tightening to 15-45 in low relief — a tributary joins
+ * its trunk pointing the way the water went, which is to say it opens BACK
+ * toward the entrance. That single fact is the whole feature:
+ *
+ *   GOING IN, the mouth arrives from behind your shoulder at 180 - theta. You
+ *   see a lip and a shadow, and you walk past it.
+ *
+ *   COMING BACK, the same node is a FORK whose two arms are only theta apart
+ *   and which therefore look alike. This is the failure NSS accident data ranks
+ *   first: 54% of 877 incidents 1980-2008 were "unable to exit", and the
+ *   universal caving advice to turn round and memorise every junction exists
+ *   precisely because a junction seen from the other side is a different object.
+ *
+ * The half of it that costs nothing and buys most is neither of those. It is
+ * that COMING OUT of a lead now points you DEEPER into the cave rather than back
+ * toward daylight, because the lead's own mouth is angled that way. Every side
+ * passage you choose to walk costs you your bearing when you leave it.
+ *
+ * WHY 0.42 AND NOT THE SURVEYED 25-55 DEG. The bound is not taste, it is the
+ * hole machinery: `_link` cuts its window in (ring, phi) assuming the bore
+ * crosses the wall roughly square, and a bore sliding ALONG the wall cuts a
+ * window longer than the tube behind it — a leak, which underground is a hole
+ * you can see the sky through and is what `cave-junction`'s ray sweep exists to
+ * find. LOOP_SKEW screens the far end of a closure at 0.62 of axial component,
+ * which is 52 deg off the target's axis and therefore 38 deg off its normal;
+ * that is the same geometry through the same code, so it is the ceiling here
+ * too. 0.42 rad is 24 deg off the normal — theta of 66 deg with the trunk, the
+ * open end of the surveyed range — and it is inside the ceiling with a third of
+ * it to spare.
+ *
+ * THE REST OF THE ANGLE IS BOUGHT A NODE LATER, WHERE IT IS FREE. `firstJoint`
+ * biases node TWO toward the joints that continue to lean back up the passage,
+ * so the acute fork is fully formed six to nine metres in — which is where a
+ * sight line resolves it anyway, and which costs the mesh nothing because by
+ * then the branch is ordinary passage under the ordinary clash test.
+ *
+ * Node ZERO does not move. The mouth is still centred on the wall normal, so the
+ * hole is still where the wall is thinnest, the two floors still meet by
+ * construction, and everything the block over `MOUTH_INSET` says is untouched.
+ * Only the heading node one is placed on is rotated.
+ */
+const MOUTH_LEAN = 0.42;
+/**
+ * The lean a retry at the mouth uses, as a multiple of MOUTH_LEAN. See the block
+ * at `MOUTH_LEAN_TRY`'s only use, inside `buildBranch`.
+ */
+const MOUTH_LEAN_TRY = [1, 0.45, 1.35, 0];
+
+function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = [], wantLoop = false, opts = null) {
+  _branchWhy = null;
+  /**
+   * ON ENTRY, NOT AT THE SEARCH. This function returns null at three places
+   * before the closure search is reached — see `_branchWhy` — and the ledger is
+   * folded in by the caller either way, so a reset that lived beside the search
+   * would fold the PREVIOUS lead's counters in a second time for every lead that
+   * never got that far. Which, given the refusal rates this pass exists to fix,
+   * is most of them.
+   */
+  resetLoopWhy();
   const rng = makeRng(`${getWorldSeed()}:cave-branch:${c.k}:${tag}`);
   const n = main.x.length;
 
   /**
    * HOW MUCH WALL THERE IS WHERE A BODY IS, which is the only measure of a ring
-   * that says whether it can carry a junction.
-   *
-   * The same two heights `caveSample` solves the wall push at, and for the same
-   * reason: a section is an ellipse, so the half-width at the axis — the number
-   * every part of this file used to reach for — is the one height that is
-   * guaranteed to be the maximum, and in a keyhole or a canyon the body moves
-   * several metres below it in a slot a fraction as wide.
+   * that says whether it can carry a junction. See `wallHalfAt`, which is this
+   * function hoisted so the far end of a loop can ask it of a passage it is
+   * arriving at rather than leaving.
    */
-  const walkHalf = (i) => {
-    const sh = { w: main.w[i], t: main.t[i], f: main.f[i], key: main.key[i] };
-    const r = main.r[i];
-    const fl = floorAt(0, sh);
-    return (
-      r *
-      Math.min(halfWidthAt(fl + 1.1 / r, sh), halfWidthAt(fl + 1.8 / r, sh))
-    );
-  };
+  const walkHalf = (i) => wallHalfAt(main, i);
 
   /**
    * MOVE THE JUNCTION TO A RING THAT CAN CARRY ONE.
@@ -2830,7 +3909,10 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
   }
   // Nowhere near here has a wall a body could walk through. A junction that
   // cannot be entered is worth less than no junction at all.
-  if (bestHalf < MOUTH_MIN * 0.82) return null;
+  if (bestHalf < MOUTH_MIN * 0.82) {
+    _branchWhy = 'wall';
+    return null;
+  }
 
   const r0 = main.r[bi];
   const w0 = main.w[bi];
@@ -2843,7 +3925,105 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
   const tl = Math.hypot(tx, tz) || 1;
   tx /= tl;
   tz /= tl;
-  const side = rng() < 0.5 ? 1 : -1;
+  /**
+   * WHICH WAY IT LEAVES, AND FOR A LEAD OFF A LEAD THAT IS NOT A COIN TOSS.
+   *
+   * The draw happens either way so the rng stream stays aligned, and on a branch
+   * off the trunk — where `avoid` is empty — it is still exactly a coin toss,
+   * which is right: both sides of the trunk are the same kind of rock.
+   *
+   * A SUB-BRANCH HAS A WHOLE MAIN LINE TO MISS AND ONLY ONE CHANCE TO CHOOSE.
+   * Its parent is allowed to run within its own clash radius of the trunk — ten
+   * to fourteen metres — and the clash test against `avoid` has no exemption at
+   * all, correctly, because a sub is not supposed to touch the trunk. So a sub
+   * that draws the trunk-facing side is dead on its first node, every time, and
+   * there is no retry that can save it: the heading of node one is the wall
+   * normal and does not change between attempts. Five of thirteen sub-branches
+   * were being built, with three caves getting none of the two they planned.
+   *
+   * SIX METRES OF DIFFERENCE BEFORE THE DRAW IS OVERRIDDEN. Where the two sides
+   * are much the same — the sub is nowhere near the trunk, which is the common
+   * case — the coin toss stands and the variety is kept. Where one side is
+   * genuinely into the trunk and the other is genuinely away from it, the choice
+   * is not a matter of taste.
+   *
+   * Strided by two: rings are 0.72 m apart and the answer is being compared
+   * against a six-metre bar, so every second ring is nine times the resolution
+   * the decision has.
+   */
+  let side = rng() < 0.5 ? 1 : -1;
+  if (avoid.length) {
+    const clearOf = (s) => {
+      const px = main.x[bi] + -tz * s * 9;
+      const pz = main.z[bi] + tx * s * 9;
+      let worst = Infinity;
+      for (const ap of avoid) {
+        for (let j = 0; j < ap.x.length; j += 2) {
+          const d =
+            Math.hypot(ap.x[j] - px, ap.y[j] - main.y[bi], ap.z[j] - pz) -
+            ap.r[j] * ap.w[j];
+          if (d < worst) worst = d;
+        }
+      }
+      return worst;
+    };
+    const cPlus = clearOf(1);
+    const cMinus = clearOf(-1);
+    if (Math.abs(cPlus - cMinus) > 6) side = cPlus > cMinus ? 1 : -1;
+  }
+  /**
+   * …AND A CHAMBER'S EXTRA EXITS ARE TOLD WHICH SIDE, because a coin toss is
+   * how you get two doorways in the same wall.
+   *
+   * The draw above still happens, unconditionally, so the rng stream is aligned
+   * whether or not the caller cares — the same discipline the `avoid` override
+   * keeps one block up. See the chamber-exit loop in `prepare`.
+   *
+   * A FORCED SIDE IS THE ONLY SIDE IN THIS WORLD NOTHING ASKED THE MOUNTAIN
+   * ABOUT, AND THAT IS WHERE THE LEAK CAME FROM.
+   *
+   * Every other junction takes the side the dice gave it or, with an `avoid`
+   * list, the side with more room — and a branch that then finds no rock simply
+   * ends, because the walk's own roof clamp and `roofScan` veto stop it. These
+   * cannot end: the side does not change between attempts, so all four attempts
+   * probe the same bare hillside, and the escape hatch at `attempt < tries - 1`
+   * placed node zero anyway. The result is a `_link` window cut through a wall
+   * the hillside has fallen away behind — and the tube is single-sided with
+   * inward normals, so that is not a dark patch, it is a window straight out of
+   * the mountain. `cave-junction` measured it as rays escaping within twenty
+   * metres at two junctions on grove-01 k=0.
+   *
+   * So the forced side is a PREFERENCE that the rock may overrule. `roofRoom` is
+   * asked how much mountain stands over a point just outside the parent's wall
+   * on each side — the same rosette measure `burySkylights` and the walk both
+   * use, so this cannot disagree with them — and the answer is compared against
+   * the ceiling at the junction. Where the wanted side is bare and the other is
+   * not, the exit takes the other and the chamber still gets its extra way on,
+   * two doorways still face different directions, and nothing is cut through
+   * daylight. Where BOTH are bare there is no honest doorway here at all and the
+   * exit is refused, blamed on the mountain, which is what `buried` means.
+   *
+   * `bestHalf + 8` is where the doorway actually is: `bestHalf` is the wall a
+   * body is held at — the same number `lat` is solved against below — and eight
+   * metres past it is node one's own step. Probing at a fixed distance would ask
+   * about the wrong place on a chamber, where the wall is fifteen metres out.
+   */
+  if (opts && opts.side) {
+    side = opts.side;
+    const ceilHere = main.y[bi] + r0 * (main.t[bi] + main.rough[bi]);
+    const reach = bestHalf + 8;
+    const rockOn = (s) =>
+      roofRoom(main.x[bi] + -tz * s * reach, main.z[bi] + tx * s * reach, tx, tz, 4) - ceilHere;
+    const wanted = rockOn(side);
+    if (wanted < ROOF_ROCK) {
+      const other = rockOn(-side);
+      if (other > wanted + 2) side = -side;
+      else if (other < ROOF_ROCK) {
+        _branchWhy = 'buried';
+        return null;
+      }
+    }
+  }
   const rx = (-tz) * side;
   const rz = tx * side;
 
@@ -2990,7 +4170,56 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
   first.z = main.z[bi] + rz * lat;
 
   const nodes = [first];
-  let heading = Math.atan2(rz, rx);
+  /**
+   * THE ACUTE LEAN, and the sign of it is the whole point. See MOUTH_LEAN.
+   *
+   * `(rx, rz)` is the outward wall normal and `(tx, tz)` points DOWN the parent,
+   * i.e. deeper. Differentiating `d(theta) . t` at the normal gives `-side`, so
+   * `+side * MOUTH_LEAN` rotates the bore back UP the passage, toward daylight.
+   * Get the sign wrong and the junction is still asymmetric and asymmetric the
+   * wrong way round: obvious on the way in, invisible on the way back, which
+   * makes the cave easier to leave rather than harder.
+   *
+   * A closure's far weld is deliberately NOT given this. It arrives on whatever
+   * heading the walk was on, screened by LOOP_SKEW, and the whole argument above
+   * is about a mouth a player meets while walking a passage — a weld is met from
+   * inside the loop, where there is no "back the way you came" to point at.
+   */
+  const mouthNormal = Math.atan2(rz, rx);
+  /**
+   * HOW MUCH LEAN THIS PARTICULAR BORE CAN CARRY, AND IT IS THE BORE'S OWN
+   * ASPECT RATIO THAT SAYS.
+   *
+   * The block over MOUTH_LEAN bounds the angle at 38 degrees from the geometry
+   * `_link` assumes, and that bound is about the bore crossing the wall squarely.
+   * It is not the whole story, and `cave-junction` found the rest of it: at a
+   * flat lean of 0.42 rad, eight junctions on grove-01 k=0 were sealed over 576
+   * rays each and one leaked ten of them, one escaping the mountain within
+   * twenty metres. The one that leaked was a BEDDING PLANE — 19.2 m wide and a
+   * fifth of that tall — and the other eight were tubes, keyholes and rooms
+   * three to nine metres across.
+   *
+   * WHY WIDTH IS THE VARIABLE. `_link` cuts the window as an ellipse in (ring,
+   * phi). Its phi span comes from the bore's half-WIDTH and its ring span from
+   * the bore's vertical half-extent, which is the SMALLER of `t` and `f` — see
+   * the block at `path.base`. Leaning by theta slides the bore's footprint along
+   * the RING axis by about sin(theta) times its half-width, and that shift has to
+   * stay inside a ring span set by its height. On a tube those two are within a
+   * factor of two of each other and 0.42 rad is nothing; on a bedding plane the
+   * width is six times the height and the same angle walks the bore clean out of
+   * its own window. That is the "bore sliding ALONG the wall cuts a window longer
+   * than the tube behind it" failure, arriving through the aspect ratio rather
+   * than through the angle.
+   *
+   * So the allowance is min(t, f) / w, which is that ratio exactly, times 2.2 for
+   * the margin the eight sealed junctions demonstrate, clamped at one. A keyhole,
+   * a canyon and a room keep the full design angle, a tube keeps 0.37 of a
+   * radian, and a bedding plane — the only section wide enough to leak — takes
+   * 0.14 and is very nearly square again.
+   */
+  const leanFit = clamp01((2.2 * Math.min(sh0.t, sh0.f)) / Math.max(sh0.w, 0.2));
+  const mouthLean = MOUTH_LEAN * leanFit;
+  let heading = mouthNormal + side * mouthLean;
   let pitch = rngRange(rng, -0.16, 0.05);
   let x = first.x;
   let y = first.y;
@@ -3041,7 +4270,19 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
   };
   beads.push({ x: first.x, y: first.y, z: first.z, half: first.r * first.w * 1.15, at: 0 });
 
-  const count = major ? 10 + Math.floor(rng() * 7) : 3 + Math.floor(rng() * 4);
+  /**
+   * FOUR TO EIGHT NODES RATHER THAN THREE TO SIX, and the argument is the yield
+   * ledger rather than the shape.
+   *
+   * `nodes.length < 3` is the bar below, so a minor lead that loses two of its
+   * candidates is not a short lead, it is a refusal — 41 of 131 planned junctions
+   * across eighteen caves died there. Starting one node higher moves the whole
+   * distribution off the bar without changing what a lead IS, and the extra node
+   * is also what pays for the shorter steps `spacing` now takes on a narrow
+   * section: a canyon lead cornering every eight metres needs more of them to be
+   * a passage rather than a bend.
+   */
+  const count = major ? 11 + Math.floor(rng() * 8) : 4 + Math.floor(rng() * 5);
   let type = type0;
   for (let i = 0; i < count; i++) {
     // Per node, as the main walk is. A branch node is dearer than a main one —
@@ -3057,19 +4298,114 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
      * has already spent the walk to it. Five attempts, exactly as the main walk
      * gets, and for the same reason.
      */
-    const tries = major ? 5 : 1;
+    /**
+     * …AND "WHAT IT IS GIVEN" WAS ONE CANDIDATE, WHICH IS NOT THE SAME ARGUMENT.
+     *
+     * The paragraph above is about how a lead ENDS and it is right about that: a
+     * lead that pinches out on its fourth node is a lead, and a lead that runs to
+     * its full six is a lead, and neither is a failure. But `tries = 1` does not
+     * only decide where a lead ends. It decides whether there is a lead AT ALL,
+     * because the same loop places node one — and a minor branch that loses its
+     * first candidate has two nodes, which is under the `nodes.length < 3` bar
+     * below, which is not a short lead, it is a hole in the wall with nothing
+     * behind it and a `_link` window cut for a passage that was never built.
+     *
+     * That is one of the three reasons 46% of planned junctions were vanishing.
+     * With the counters over `_branchWhy` in place it is the one that can be
+     * bought back cheapest: 'short' is the rejection that a second candidate
+     * fixes, where 'wall' is a fact about the parent's section and 'buried' is a
+     * fact about the mountain.
+     *
+     * THREE AND NOT FIVE, AND THE BUDGET IS WHY. An attempt costs a `roofScan`
+     * — seventeen `heightAt` samples — plus a sweep of every ring of the parent,
+     * of the avoid list and of this branch's own beads, and the `yield` is
+     * outside this loop, so all of a node's attempts land inside ONE slice
+     * against a 1.8 ms per-slice budget. A major branch already runs five in a
+     * slice and the worst slice ever measured is 1.10 ms, so three is strictly
+     * inside a case that already ships. Five would be too, on that reasoning;
+     * three is where the return stops, because a lead whose first three
+     * candidates all clash is in rock that has nothing to offer it.
+     */
+    /**
+     * FOUR FOR A MINOR LEAD, BECAUSE THE FOURTH TRY IS NOW A DIFFERENT BORE.
+     *
+     * The paragraph above closes at three on the grounds that "a lead whose
+     * first three candidates all clash is in rock that has nothing to offer it",
+     * and that was sound while every attempt at node one placed the node in the
+     * same place. MOUTH_LEAN_TRY has four rungs and the fourth is the square bore
+     * this function built for its whole life, so stopping at three would refuse
+     * the mouth the old code would have accepted. The cost is one more `roofScan`
+     * on the leads that were going to be refused anyway.
+     */
+    const tries = major ? 5 : 4;
     let placed = false;
     for (let attempt = 0; attempt < tries && !placed; attempt++) {
-      // Node one keeps the wall normal so the mouth is a hole; after that the
-      // branch joins the joint set like everything else.
+      // Node one keeps the leaned wall normal so the mouth is still a hole in a
+      // wall; after that the branch joins the joint set like everything else.
       let h = heading;
+      /** Whether this node is a dog-leg. Hoisted: `spacing` below reads it. */
+      let turn = false;
+      /**
+       * A RETRY AT THE MOUTH NOW MEANS SOMETHING, WHICH IS WHY `tries` COULD
+       * NEVER BUY THE 'short' REFUSALS BACK.
+       *
+       * The block below this one records the finding and does not act on it:
+       * "node one's heading is the wall normal and is NOT re-drawn on a retry,
+       * so all three attempts place the node in essentially the same place and
+       * clash identically. A count of tries cannot fix a constraint that is the
+       * same on every try." That was exactly right, and it stayed true after the
+       * exemption fix — 41 of 129 tried junctions across eighteen caves still
+       * died on `nodes.length < 3`, and every one of them is a subsystem the room
+       * asked for and did not get.
+       *
+       * MOUTH_LEAN is what makes a retry a different question. The lean is a free
+       * parameter inside the ceiling the hole machinery sets, so the ladder walks
+       * it: the design angle first, then nearly square, then wide (0.57 rad, 32.5
+       * deg off the normal, still inside the 38 the block over MOUTH_LEAN
+       * derives), then square. Four genuinely different bores through the same
+       * wall, all of them acceptable geometry, and the first one that finds rock
+       * wins. Nothing else about the mouth changes — the snout, the floor weld
+       * and the `_link` window are all built off node zero, which does not move.
+       */
+      if (i === 0 && attempt > 0) {
+        h = mouthNormal + side * mouthLean * MOUTH_LEAN_TRY[attempt % MOUTH_LEAN_TRY.length];
+      }
       if (i > 0) {
         let bestD = Infinity;
         let bestH = heading;
         const near = [];
+        /**
+         * A DOG-LEG IS A CHANGE OF BEARING, NOT A REVERSAL, AND THE DIFFERENCE
+         * COST TWO METRICS AT ONCE.
+         *
+         * `near` is everything within 1.9 rad — 109 degrees — and it is the
+         * right pool for a RETRY, where the question is "is there anywhere at
+         * all this lead can go". It is the wrong pool to turn onto by choice.
+         * With the step now scaled to the bore, a canyon taking a 109-degree
+         * joint over 0.62 of an eight-metre spacing is a five-metre hairpin, and
+         * a hairpin is not a corner: it is a passage lying alongside itself.
+         *
+         * Measured, and this is why the pool is split rather than the rate
+         * lowered. Over grove-04's three caves, section overlaps — two rings
+         * sharing volume, which from inside is a hole with the back of another
+         * wall behind it — went from 0.0 a cave to 2.7, the worst of them two
+         * stretches of the same lead 33 m apart along the line and 4.5 m apart in
+         * space. The same hairpins took the closure rate down with them, from
+         * 0.78 a cave to 0.33: a connector leaving a head that has doubled back
+         * has this branch's own line lying across it, and 18 of 22 paid
+         * candidates on grove-04 k=-1 were refused for exactly that.
+         *
+         * 1.45 rad is 83 degrees, which is also where the surveyed joint sets
+         * are — two bearings 60 to 90 degrees apart, with the second set the one
+         * a dog-leg turns onto. So the pool that produces the corner the player
+         * wants and the pool that produces geometry that cannot cross itself are
+         * the same pool, and neither of them is 109 degrees.
+         */
+        const dog = [];
         for (const j of joints) {
           const d = Math.abs(((j - heading + Math.PI) % TAU + TAU) % TAU - Math.PI);
           if (d < 1.9) near.push(j);
+          if (d < 1.45 && d > 0.35) dog.push(j);
           if (d < bestD && d < 1.5) {
             bestD = d;
             bestH = j;
@@ -3096,11 +4432,60 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
          * 1.9 rad, which excludes the reversal into the passage just cut and
          * nothing else.
          */
-        const turn = i > 1 && near.length > 1 && rng() < 0.45;
+        /**
+         * …AND IT IS NOW A LITTLE OVER HALF, WHICH IS THE DOG-LEG RATE AND NOT A
+         * TWISTINESS DIAL.
+         *
+         * What makes a passage hide its own end is not deg/100m, it is a BROKEN
+         * SIGHT LINE, and a broken sight line is a corner taken over a short
+         * enough run that the spline cannot fillet it. Both halves of that are
+         * now here: this decides how often the lead changes bearing, and
+         * `spacing` below shortens the step it changes bearing over, so a
+         * dog-leg is 0.62 of an already width-scaled step rather than a
+         * fourteen-metre arc. A 40-degree bend with a ten-metre radius is
+         * turning you can measure and cannot perceive.
+         */
+        turn = i > 1 && dog.length > 0 && rng() < 0.58;
+        /**
+         * NODE TWO LEANS BACK UP THE PASSAGE, which is the other half of
+         * MOUTH_LEAN and the half that is free.
+         *
+         * The lean at the mouth is capped at 24 degrees off the normal by the
+         * hole machinery. The surveyed junction angle wants more than that, and
+         * a node the branch has already walked to is under nothing but the
+         * ordinary clash test — so the rest of the angle is taken here, by
+         * preferring whichever joint in `near` continues to point back toward
+         * the parent's upstream. By node two the fork is fully formed, which is
+         * also the first place a sight line could have resolved it.
+         *
+         * A preference and not a rule: where no joint leans back, `bestH`
+         * stands and the lead runs on the joint set like any other passage.
+         */
+        if (i === 1 && !turn && near.length) {
+          let bestBack = -Infinity;
+          for (const j of near) {
+            const back = -(Math.cos(j) * tx + Math.sin(j) * tz);
+            if (back > bestBack) {
+              bestBack = back;
+              bestH = j;
+            }
+          }
+        }
+        /**
+         * A CHOSEN CORNER COMES OUT OF `dog`; A RETRY STILL COMES OUT OF `near`.
+         *
+         * The two draws are kept separate and BOTH consume the rng whichever
+         * fires, so the stream stays aligned — the same discipline the `side`
+         * override keeps. A retry is the lead asking whether it can go anywhere
+         * at all and is entitled to the full 109 degrees; a dog-leg is the lead
+         * choosing, and choosing badly is what put a passage alongside itself.
+         */
         h =
-          (attempt === 0 && !turn) || !near.length
-            ? bestH + rngRange(rng, -0.2, 0.2)
-            : near[Math.floor(rng() * near.length)] + rngRange(rng, -0.2, 0.2);
+          turn && dog.length
+            ? dog[Math.floor(rng() * dog.length)] + rngRange(rng, -0.2, 0.2)
+            : attempt === 0 || !near.length
+              ? bestH + rngRange(rng, -0.2, 0.2)
+              : near[Math.floor(rng() * near.length)] + rngRange(rng, -0.2, 0.2);
       }
       /**
        * Sections from node one, for a major branch only, and never a `hall`.
@@ -3115,7 +4500,60 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
        */
       const kind = major && i > 0 ? pickType(rng, type, false, 0) : type0;
       const sh = SHAPES[kind];
-      const step = i === 0 ? rngRange(rng, 6, 9) : rngRange(rng, 9, 16);
+      /**
+       * HOW FAR A LEAD RUNS BEFORE IT MAY BEND, AND IT IS A MULTIPLE OF ITS OWN
+       * WIDTH RATHER THAN A CONSTANT.
+       *
+       * This was a flat 9-16 m for every section in the table, and a constant is
+       * the one thing corner spacing is not. Meander wavelength scales with
+       * channel width in every surface stream that has ever been measured, and a
+       * vadose canyon is a stream; the same 14 m of straight that reads as a
+       * gentle bend in a passage eight metres across is a dead straight corridor
+       * in one three metres across. So the room's "more twists and turns" is not
+       * one number to raise — a flat spacing is simultaneously too twisty for the
+       * wide sections and far too straight for the narrow ones, which is the
+       * shape of complaint you get when a distribution is collapsed to its mean.
+       *
+       * `bore` is this section's typical full width, taken from the TABLE rather
+       * than from the radius drawn below, for two reasons: the draw has not
+       * happened yet at this line, and taking it from the table keeps the spacing
+       * a property of the KIND of passage rather than of one node's dice. A
+       * canyon comes out at 8 m and a bedding plane or a room at 20.
+       *
+       * The clamp is what stops it being silly at either end. Below eight metres
+       * a "corner" is inside the spline's own control spacing and the resample
+       * eats it; above twenty the lead is a corridor again whatever its width.
+       *
+       * AND A DOG-LEG IS TAKEN SHORT. The turn radius the player sees is
+       * essentially the step the bearing changes over, so a corner taken at 0.62
+       * of the spacing is a corner you cannot see round — which is the whole
+       * difference between turning that moves `deg/100m` and turning that hides
+       * the end of a passage. Node one is exempt: it is the mouth, and its length
+       * is set by how far the snout has to stand out of the parent's wall.
+       */
+      /**
+       * 1.8 AND A CEILING OF 16, MEASURED RATHER THAN DERIVED.
+       *
+       * Surface-meander scaling puts the wavelength at ten to fourteen channel
+       * widths, and the first cut of this took that literally at 2.2 x bore with
+       * a ceiling of 20. It was two-scale and it was NET NEUTRAL: measured over
+       * grove-01's three caves the branch turning went 298 -> 296 deg/100m,
+       * because it made the narrow sections twistier and the wide ones straighter
+       * by almost exactly the same amount. Correct physics, wrong operating point
+       * — the room asked for more turning and got a redistribution of it.
+       *
+       * So the ceiling comes down to sixteen, which is the top of the flat 9-16
+       * this replaced rather than half again on it, and the slope with it. The
+       * SHAPE of the rule is what was wanted and is kept: a canyon still corners
+       * at eight metres and a room still does not get chopped into bends. What
+       * changed is that a bedding plane no longer runs twenty metres straight.
+       */
+      const bore = (sh.lo + sh.hi) * sh.w;
+      const spacing = clamp(1.8 * bore, 8, 16);
+      const step =
+        i === 0
+          ? rngRange(rng, 6, 9)
+          : rngRange(rng, spacing * 0.74, spacing * 1.16) * (turn ? 0.62 : 1);
       /**
        * A major branch leans downhill like the main walk does, so taking the
        * fork is also going deeper rather than sideways.
@@ -3150,7 +4588,35 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
        * passage leading to the chamber, which is where a real one is anyway.
        */
       const pWant = clamp(pitch + rngRange(rng, -0.16, 0.12) + (major ? -0.05 : 0), -0.4, 0.12);
-      const pn = SHAPES[kind].vast ? clamp(pitch * 0.12 + rngRange(rng, -0.07, 0.03), -0.11, 0.06) : pWant;
+      /**
+       * …AND THE SNOUT LEAVES AT GRADE, WHICH IT DID NOT HAVE TO BEFORE THE LEAN.
+       *
+       * Node one used to go straight out through the wall on the normal, so
+       * whatever it did vertically it did OUTSIDE the parent's bore and could not
+       * undercut it. MOUTH_LEAN points it back up the passage instead, and a
+       * first step of 6-9 m at the -0.4 this loop permits then puts three metres
+       * of branch floor three metres UPSTREAM of the junction and three metres
+       * below it — under the parent, whose own floor is climbing that way.
+       *
+       * The drawn floor at a point is the LOWEST of every section that reaches
+       * it and `caveSample` answers from one ring, so that is a body standing on
+       * the parent's floor with the branch's floor visible under its feet.
+       * Measured on grove-01 by `cave-floor`: a 2.72 m hover against a 1.00 m
+       * bar, which is the gate's own definition of flight, at a keyhole ring
+       * beside a junction — and the lean is what put it there.
+       *
+       * Level for one step and no further. It is also what a tributary does: an
+       * inlet joins its trunk at grade, and the drop is in the passage BEHIND the
+       * junction rather than in the doorway. Every argument the block over `pn`
+       * makes about a chamber's axis being level is the same argument, at the one
+       * other place in this function where the floor has to agree with something
+       * that is not itself.
+       */
+      const pn = SHAPES[kind].vast
+        ? clamp(pitch * 0.12 + rngRange(rng, -0.07, 0.03), -0.11, 0.06)
+        : i === 0
+          ? clamp(pWant, -0.05, 0.05)
+          : pWant;
       const nx = x + Math.cos(h) * step * Math.cos(pn);
       const nz = z + Math.sin(h) * step * Math.cos(pn);
       let r = rngRange(rng, sh.lo, sh.hi) * (i > count - 2 ? 0.8 : 1);
@@ -3162,7 +4628,64 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
       // from the wish. Without this a room in a branch is drawn at 9 m, pinched
       // by the burial to under head height, and takes the rest of the branch
       // with it — a truncation, which in a branch nothing re-walks.
-      if (sh.vast) r = Math.max(SHAPES.tube.lo, chamberFit(nx, nz, ux, uz, ny, sh, r));
+      /**
+       * A CHAMBER IN A LEAD IS CAPPED AND THE MAIN LINE'S IS NOT, AND THE FIRST
+       * TIME THIS WAS MEASURED IT LOOKED WORTHLESS.
+       *
+       * The mechanism is `flatten`'s, quoted at its own `win`: `caveSample`
+       * answers the floor from ONE ring while the drawn floor at a point is the
+       * lowest of every section that reaches it, and the gap between those two
+       * grows with the half-width. The block over `pn` above records eight of the
+       * ten worst floor disagreements in a cave being inside one sixteen-metre
+       * `room` on a branch. So a cap here should move `cave-floor` and cost some
+       * tall metres, and the first A/B said it moved the worst hover by exactly
+       * 0.00 m — 1.40 m before and after, the same probe.
+       *
+       * THAT NULL RESULT WAS AN ARTEFACT OF THE ARM IT WAS RUN ON. At that point
+       * node one propagated its LEVEL pitch forward, so every lead in the world
+       * ran shallow, so `chamberFit` had little rock to answer with and no branch
+       * chamber was anywhere near the cap. Nothing was being capped, which is why
+       * capping changed nothing. Putting the descent back — see `pitch` at the
+       * bottom of this loop — took the worst hover to 2.40 m and the pooled tall
+       * metres to 899, and the cap then binds on the objects it was written for.
+       *
+       * Twelve metres is still half again the widest ordinary passage in the
+       * table and is a space you notice walking into; it is the runaway 16-26 m
+       * case that is refused, and refused only in a lead, where nothing the tall
+       * metres are budgeted for depends on it.
+       */
+      if (sh.vast) {
+        r = Math.max(SHAPES.tube.lo, Math.min(12, chamberFit(nx, nz, ux, uz, ny, sh, r)));
+      }
+      /**
+       * THE FIRST STEP KEEPS THE FLOOR, NOT THE AXIS, AND THE DIFFERENCE IS A
+       * STEP IN THE DOORWAY.
+       *
+       * Ring zero is welded so that its floor lands exactly on the parent's —
+       * that is the whole of the `mouthFloor` block above, and it is right. Node
+       * ONE then inherited ring zero's AXIS height and added `sin(pitch) * step`,
+       * which is a different quantity: ring zero's `f` was solved to make the
+       * weld work and is clamped to [0.2, 1.1], while node one's is whatever its
+       * section's table says. A canyon at 3.4 m of radius carries its floor 2.5 m
+       * under its axis; a weld ring clamped to f = 0.2 at the same radius carries
+       * it 0.7 m under. Same axis, 1.8 m of floor step, six to nine metres from a
+       * junction — which is inside the parent's own section, so `caveSample`
+       * answers one ring's floor while the drawn floor is the lower of two.
+       *
+       * That is a hover, and it is the fault `cave-floor` gates: measured on
+       * grove-01 at 1.41 m against a 1.00 m bar, with the body standing on the
+       * parent's floor and the branch's floor drawn under its feet. MOUTH_LEAN
+       * made it visible rather than caused it — leaning the first step back up
+       * the passage puts that step under the parent instead of out in the rock,
+       * where it had been harmlessly wrong for as long as branches have existed.
+       *
+       * So the first step is solved from the FLOOR: whatever radius and section
+       * node one drew, its axis goes wherever puts its floor on the parent's. The
+       * passage is level and continuous through the doorway and starts descending
+       * at node two, which is also what a real inlet does — see the block at `pn`
+       * one screen up, which is the same argument about the same first step.
+       */
+      if (i === 0) ny = mouthFloor + r * sh.f;
       ny = Math.min(ny, heightAt(nx, nz) - r * sh.t - ROOF_ROCK);
 
       /**
@@ -3170,7 +4693,26 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
        * above cannot see. Retries only, so a branch with nowhere good to go
        * still goes somewhere rather than stopping at the junction.
        */
-      if (attempt < tries - 1) {
+      /**
+       * …EXCEPT AT NODE ZERO, WHERE THE ESCAPE HATCH IS THE LEAK.
+       *
+       * "A branch with nowhere good to go still goes somewhere rather than
+       * stopping at the junction" is the right rule for the BODY of a lead: a
+       * passage that runs out of mountain on its fifth node is a passage that
+       * ends, which is what leads do, and refusing it would only trade a short
+       * lead for no lead. It is the wrong rule for the DOORWAY. Node zero is not
+       * a place the passage goes, it is the hole in the wall — and a hole in a
+       * wall with no rock over it is not a short lead, it is a window out of the
+       * hillside, which `cave-junction` gates and this file treats as
+       * unshippable.
+       *
+       * The asymmetry is the whole point: everything past node zero may fail
+       * softly, node zero may not fail at all. A branch refused here returns
+       * `buried` from the block under the attempt loop rather than falling
+       * through to `short`, because the mountain is what refused it and the
+       * ledger should say so.
+       */
+      if (attempt < tries - 1 || i === 0) {
         // Nominal, not jittered — see the block on the main walk's own veto.
         const s = roofScan(nx, nz, ux, uz, r * sh.w);
         if (roofDrop(s, ny, sh, r) > -ROOF_ROCK * 0.3) continue;
@@ -3186,13 +4728,47 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
        * tubes sharing a volume, which from inside is a hole in the floor with the
        * ceiling of somewhere else visible through it.
        */
+      /**
+       * THE EXEMPTION IS A DISTANCE AND WAS BEING WRITTEN AS A RING COUNT, AND
+       * IT WAS SMALLER THAN THE OVERLAP IT EXISTED TO EXEMPT.
+       *
+       * Twelve rings is 8.64 m at the current step. `min` below — the distance
+       * at which two sections are judged to be sharing a volume — is `main.r *
+       * main.w + r * sh.w + 3`, which on an ordinary passage off an ordinary
+       * passage is ten to fourteen metres. So the exemption was two to six
+       * metres NARROWER than the clash radius, and node one of every branch,
+       * placed six to nine metres out on the wall normal, sits inside `min` of
+       * the parent rings just past the window's edge. It is rejected by the wall
+       * it is leaving through — which is the exact failure the paragraph above
+       * says the exemption exists to prevent, committed by the exemption itself.
+       *
+       * This is what `nodes.length < 3` was counting. Measured: 20 of 24 branch
+       * refusals across three seeds were 'short', and raising `tries` from one to
+       * three did not move it — because node one's heading is the wall normal and
+       * is NOT re-drawn on a retry, so all three attempts place the node in
+       * essentially the same place and clash identically. A count of tries cannot
+       * fix a constraint that is the same on every try.
+       *
+       * TWO CONDITIONS, AND THE SECOND IS WHAT KEEPS IT HONEST. A ring is exempt
+       * only while it is within `min` metres ALONG the line of the junction AND
+       * the node being placed is still within `min + 4` of the junction itself.
+       * The first says "this is the stretch of parent the branch is merging
+       * with"; the second says "and the branch has not walked away yet". Once it
+       * has, every ring of the parent is tested with no licence at all, so a
+       * branch that curls back forty metres on is caught exactly as before —
+       * which is the failure mode the whole test is for.
+       *
+       * `Math.abs(j - bi) * RING_STEP` is exact rather than approximate: rings
+       * are evenly spaced by construction, which is what `resample` is for.
+       */
+      const near0 = Math.hypot(nx - main.x[bi], ny - main.y[bi], nz - main.z[bi]);
       let clash = false;
       for (let j = 0; j < n && !clash; j++) {
-        if (Math.abs(j - bi) < 12) continue;
         const dx = main.x[j] - nx;
         const dy = main.y[j] - ny;
         const dz = main.z[j] - nz;
         const min = main.r[j] * main.w[j] + r * sh.w + 3;
+        if (Math.abs(j - bi) * RING_STEP < min && near0 < min + 4) continue;
         if (dx * dx + dy * dy + dz * dz < min * min) clash = true;
       }
       /**
@@ -3247,7 +4823,26 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
       bead(nodes[nodes.length - 1], nd);
       nodes.push(nd);
       heading = h;
-      pitch = pn;
+      /**
+       * THE DOORWAY IS LEVEL AND THE LEAD IS NOT, AND THE SECOND HALF OF THAT
+       * COST 15% OF THE DEEP CHAMBERS BEFORE IT WAS PUT BACK.
+       *
+       * `pn` above holds node one level so the floor is continuous through the
+       * junction. Carrying that level pitch FORWARD as well made the whole lead
+       * run shallow — `chamberFit` grants a radius out of the rock overhead, so a
+       * branch that starts its descent one node late is a branch under less
+       * mountain for its whole length. Measured over the eighteen caves: pooled
+       * metres over 25 m tall went from 978 to 824, against a floor of 890 that
+       * may not fall.
+       *
+       * So the WISH is what propagates. Node one is placed level; node two starts
+       * from the gradient node one would have taken, and the descent is a node
+       * late rather than a node short. Pooled metres over 25 m: 824 with the
+       * level pitch propagating, 899 with the wish propagating, against the 890
+       * that may not fall — and the doorway is level either way, so none of it
+       * comes back out of `cave-floor`.
+       */
+      pitch = i === 0 ? pWant : pn;
       type = kind;
       x = nx;
       y = ny;
@@ -3256,11 +4851,295 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
     }
     // Every attempt refused: this is where the lead ends, and a lead that ends
     // is the normal case rather than a failure.
-    if (!placed) break;
+    // …unless it is node ZERO, which is the doorway rather than the lead. See
+    // the roof veto above: there is no such thing as a junction that half
+    // happened, so this is a refusal and the mountain is what refused it.
+    if (!placed) {
+      if (i === 0) {
+        _branchWhy = 'buried';
+        return null;
+      }
+      break;
+    }
   }
 
   // Too short to be a lead — it would read as a dent, not a way on.
-  if (nodes.length < 3) return null;
+  if (nodes.length < 3) {
+    _branchWhy = 'short';
+    return null;
+  }
+
+  /**
+   * …OR IT DOES NOT END AT ALL. See the LOOP CLOSURE block above `buildBranch`.
+   *
+   * Tried BEFORE the terminus, and that ordering is the whole cost argument: a
+   * closure replaces `terminusFit` rather than running alongside it, so a cave
+   * that loops does strictly less roof work than one that does not.
+   *
+   * The candidate list is scored on distances alone; the rock over the connector
+   * is only asked about for candidates that survive everything else, and at most
+   * four of them. `roofRoom` is seventeen `heightAt` samples, so the worst case
+   * here is twelve — three probes on four candidates — against the twelve full
+   * `roofScan`-driven attempts `terminusFit` runs.
+   */
+  let loop = null;
+  if (wantLoop) {
+    yield 'branch-loop';
+    const head = nodes[nodes.length - 1];
+    const targets = [main, ...avoid];
+    // Which ring of each target is this branch's own base, so the search can
+    // stay away from a doorway that already exists. -1 for a passage the branch
+    // did not leave through.
+    const avoidRing = targets.map((p) => (p === main ? bi : -1));
+    const baseDepth = (main.baseAlong ?? 0) + (main.along ? main.along[bi] : 0);
+    const cands = loopCandidates(head, targets, baseDepth, avoidRing, walked);
+    for (let ci = 0; ci < cands.length && ci < LOOP_TRIES && !loop; ci++) {
+      /**
+       * PER CANDIDATE, and it is the same argument the walk's `tries` block
+       * makes. A candidate costs up to two `roofRoom` calls — 34 `heightAt`
+       * samples — plus a bounded sweep of the target ring arrays. Four of them
+       * inside one slice is the shape of hitch the ring budget exists to stop,
+       * and the whole build is cut to this granularity anyway.
+       */
+      yield 'branch-loop';
+      const p = targets[cands[ci].ti];
+      const j = cands[ci].j;
+      const pn = p.x.length;
+      const ja = Math.max(0, j - 1);
+      const jb = Math.min(pn - 1, j + 1);
+      let ttx = p.x[jb] - p.x[ja];
+      let ttz = p.z[jb] - p.z[ja];
+      const ttl = Math.hypot(ttx, ttz) || 1;
+      ttx /= ttl;
+      ttz /= ttl;
+      /**
+       * THE WELD IS THE BASE WELD, MIRRORED, AND IT IS THE SAME TWELVE LINES.
+       *
+       * Its own section, kept, so a passage arriving looks like a passage and
+       * not like a slice of the one it joins; its axis at whatever height puts
+       * its floor exactly on the target's floor; the lateral offset then read
+       * off the target's outline AT THAT HEIGHT and pulled in to the wall a
+       * walking body is actually held at. Every one of those three decisions is
+       * argued at length over the base weld and none of the arguments change for
+       * being at the other end of the tube.
+       */
+      const side2 = (head.x - p.x[j]) * -ttz + (head.z - p.z[j]) * ttx >= 0 ? 1 : -1;
+      const rx2 = -ttz * side2;
+      const rz2 = ttx * side2;
+      const pr = p.r[j];
+      const tSh = { w: p.w[j], t: p.t[j], f: p.f[j], key: p.key[j] };
+      const tHalf = wallHalfAt(p, j);
+      /**
+       * NEVER A CHAMBER AT THE WELD, whatever the walk happened to be in.
+       *
+       * The last node of a lead can be a `room`, and a room welded into a wall
+       * is a room whose far half is inside another passage — the two surfaces
+       * then argue about which is in front for the whole width of it. The same
+       * argument the base weld makes about a branch never being wider than the
+       * passage it leaves, in the one case `rE`'s three-way minimum cannot catch:
+       * `vast` sections are wide in `w` rather than in `r`.
+       */
+      const kindE = SHAPES[type].vast ? 'tube' : type;
+      const shE = SHAPES[kindE];
+      const rE = Math.min(
+        head.r,
+        pr * 0.85,
+        (tHalf * 1.6) / Math.max(shE.w, 0.4)
+      );
+      /**
+       * A CLOSURE YOU CANNOT WALK THROUGH IS A DEAD END YOU CAN SEE THROUGH,
+       * and the radius bar alone does not say whether you can.
+       *
+       * `SHAPES.tube.lo * 0.7` is 1.82 m of RADIUS and it is the base weld's
+       * bar, where the section is whatever the branch chose. Here the section is
+       * inherited from the walk's last node, and the four small sections put
+       * wildly different amounts of that radius into height: a canyon is 2.36
+       * radii tall and a bedding plane 0.74. So the same 1.9 m radius is a 4.5 m
+       * doorway or a 1.4 m slot depending only on what the lead happened to be
+       * walking, and the radius test cannot tell them apart.
+       *
+       * `cave-branch` gates the far aperture at 1.7 m and found a 1.20 m one, at
+       * a weld whose radius passed this line comfortably. So the height is tested
+       * as a height. MIN_HEAD is what `resample` inflates every ordinary ring to
+       * and is the file's own statement of what a body fits through; 1.25 of it
+       * is the margin for what `burySkylights` may still take off a weld ring
+       * afterwards, which is the difference between the number solved here and
+       * the number the gate measures.
+       */
+      if (rE < SHAPES.tube.lo * 0.7 || rE * (shE.t + shE.f) < MIN_HEAD * 1.9) {
+        _loopWhy.bore++;
+        continue;
+      }
+      const weld = shaped(0, 0, 0, rE, shE);
+      weld.type = kindE;
+      weld.f = clamp(weld.f, 0.2, 1.1);
+      weld.y = p.y[j] + pr * floorAt(0, tSh) + rE * weld.f;
+      const wN = clamp((weld.y - p.y[j]) / pr, -tSh.f + 1e-3, tSh.t - 1e-3);
+      const bodyWall2 = tHalf - pr * p.rough[j] * WALL_BITE - (BODY_HALF + 0.12);
+      const lat2 = Math.max(
+        0.5,
+        Math.min(Math.min(pr * halfWidthAt(wN, tSh), tHalf) - 0.4, bodyWall2 + 0.35)
+      );
+      weld.x = p.x[j] + rx2 * lat2;
+      weld.z = p.z[j] + rz2 * lat2;
+
+      /**
+       * The approach node stands out on the wall normal, exactly as node one of
+       * a branch does at the base. It is what makes the last stretch square to
+       * the wall — the arrival angle LOOP_SKEW screens for is the walk's, and
+       * this is what turns "roughly square" into "square".
+       */
+      const pre = shaped(
+        weld.x + rx2 * LOOP_PRE,
+        weld.y,
+        weld.z + rz2 * LOOP_PRE,
+        Math.min(head.r, rE * 1.15),
+        shE
+      );
+      pre.type = kindE;
+      const reach = Math.hypot(pre.x - x, pre.y - y, pre.z - z);
+      if (reach < 6 || reach > LOOP_FAR) {
+        _loopWhy.reach++;
+        continue;
+      }
+      const link = [];
+      /**
+       * FOURTEEN, BECAUSE THAT IS THE WALK'S OWN SAMPLING AND THE ROOF CHECK
+       * BELOW ONLY HAPPENS AT NODES.
+       *
+       * The walk steps 9 to 16 m and asks `roofScan` once per step, so a
+       * connector sampled at a coarser spacing than that is checked against the
+       * hillside less carefully than every other metre of passage in the world.
+       * Splitting anything over fourteen metres puts the connector's own spacing
+       * inside the walk's.
+       */
+      const segs = Math.max(1, Math.ceil(reach / 14));
+      for (let g = 1; g < segs; g++) {
+        const f = g / segs;
+        const nd = shaped(
+          x + (pre.x - x) * f,
+          y + (pre.y - y) * f,
+          z + (pre.z - z) * f,
+          Math.min(head.r, rE * 1.2),
+          shE
+        );
+        nd.type = kindE;
+        link.push(nd);
+      }
+      link.push(pre, weld);
+
+      /**
+       * THE CONNECTOR IS ROCK LIKE ANY OTHER PASSAGE, and nothing else in this
+       * function would have checked it: the walk's own roof clamp ran on the
+       * nodes it placed, and these nodes were placed by arithmetic against the
+       * target rather than by the walk. A connector that breaks surface is a
+       * wedge of daylight in the middle of a mountain.
+       *
+       * Not the weld ring itself, which is inside the target's bore and has
+       * therefore already been buried as part of the target — the same exemption
+       * `until` makes in `burySkylights`, for the same reason.
+       */
+      let roofed = true;
+      for (let s = 0; s < link.length - 1 && roofed; s++) {
+        const nd = link[s];
+        const ux2 = (link[s + 1].x - nd.x) || 1e-3;
+        const uz2 = link[s + 1].z - nd.z;
+        const ul2 = Math.hypot(ux2, uz2) || 1;
+        const room = roofRoom(nd.x, nd.z, ux2 / ul2, uz2 / ul2, nd.r * nd.w);
+        if (room - ROOF_ROCK - (nd.y + nd.r * (nd.t + nd.rough)) < 0) roofed = false;
+      }
+      if (!roofed) {
+        _loopWhy.roof++;
+        continue;
+      }
+
+      /**
+       * …AND IT MUST NOT PASS THROUGH ANYTHING ON THE WAY.
+       *
+       * Same rule and same beads as the walk's own clash test, with the SECOND
+       * exemption this file has ever needed: a window around the target ring,
+       * mirroring the distance window the walk keeps around the source. The
+       * connector is supposed to touch the target — that is the junction — and
+       * without the window it would be rejected by the wall it is arriving
+       * through, which is the exact failure the source window was written for.
+       */
+      const half = rE * shE.w;
+      /**
+       * A BOUNDING SPHERE ROUND THE CONNECTOR FIRST, because this runs inside
+       * ONE slice against a 1.8 ms budget.
+       *
+       * Five sample points against every ring of every target is nine thousand
+       * distance tests per candidate and four candidates in a row with no
+       * `yield` between them — which is exactly the shape of the hitch the block
+       * over `tries` warns about. The connector is a segment; a ring that cannot
+       * reach its bounding sphere cannot reach any point on it, so one squared
+       * distance per ring throws away all but the handful nearby and the five
+       * tests only run on those. It is the same reject `caveSample` gained as
+       * `_bpad`, at a smaller scale.
+       */
+      const mx = (x + weld.x) * 0.5;
+      const my = (y + weld.y) * 0.5;
+      const mz = (z + weld.z) * 0.5;
+      const hl = Math.hypot(weld.x - x, weld.y - y, weld.z - z) * 0.5;
+      // The five sample points, solved once. Five triples on the stack rather
+      // than an allocation inside a loop that runs inside a build slice.
+      const pts = new Float64Array(15);
+      for (let s = 1; s <= 5; s++) {
+        const f = s / 6;
+        pts[(s - 1) * 3] = x + (weld.x - x) * f;
+        pts[(s - 1) * 3 + 1] = y + (weld.y - y) * f;
+        pts[(s - 1) * 3 + 2] = z + (weld.z - z) * f;
+      }
+      let hit = false;
+      for (let ti = 0; ti < targets.length && !hit; ti++) {
+        const q = targets[ti];
+        const qn = q.x.length;
+        for (let k = 0; k < qn && !hit; k++) {
+          if (q === p && Math.abs(k - j) < 16) continue;
+          if (avoidRing[ti] >= 0 && Math.abs(k - avoidRing[ti]) < 12) continue;
+          const min = q.r[k] * q.w[k] + half + 3;
+          const gx = q.x[k] - mx;
+          const gy = q.y[k] - my;
+          const gz = q.z[k] - mz;
+          const gate = hl + min;
+          if (gx * gx + gy * gy + gz * gz > gate * gate) continue;
+          for (let s = 0; s < 5 && !hit; s++) {
+            const dx = q.x[k] - pts[s * 3];
+            const dy = q.y[k] - pts[s * 3 + 1];
+            const dz = q.z[k] - pts[s * 3 + 2];
+            if (dx * dx + dy * dy + dz * dz < min * min) hit = true;
+          }
+        }
+      }
+      // …and against the branch's own line, on the beads. Same rule and the same
+      // eight-metre along-the-line exemption the walk's own test uses.
+      for (let k = 0; k < beads.length && !hit; k++) {
+        const bd = beads[k];
+        const min = bd.half + half * 1.15 + 3.5;
+        if (walked - bd.at < min + 8) continue;
+        const gx = bd.x - mx;
+        const gy = bd.y - my;
+        const gz = bd.z - mz;
+        const gate = hl + min;
+        if (gx * gx + gy * gy + gz * gz > gate * gate) continue;
+        for (let s = 0; s < 5 && !hit; s++) {
+          const dx = bd.x - pts[s * 3];
+          const dy = bd.y - pts[s * 3 + 1];
+          const dz = bd.z - pts[s * 3 + 2];
+          if (dx * dx + dy * dy + dz * dz < min * min) hit = true;
+        }
+      }
+      if (hit) {
+        _loopWhy.clash++;
+        continue;
+      }
+
+      for (const nd of link) nodes.push(nd);
+      _loopWhy.ok++;
+      loop = { path: p, ring: j, side: side2, tSh, pr, lat: lat2, tHalf };
+    }
+    yield 'branch-loop';
+  }
 
   /**
    * A BLIND LEAD SHOULD STILL BE SOMEWHERE.
@@ -3286,36 +5165,94 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
    * terminal chamber excavated into the passage it left is the one collision
    * here that matters, and the branch's own line is behind it by construction.
    */
+  /**
+   * …AND NONE OF IT RUNS ON A PASSAGE THAT ENDS SOMEWHERE, which is the whole
+   * of the closure's cost saving. `terminusFit` is described in this file as the
+   * fattest single computation in the build; a loop skips it, and skips the
+   * `closingNode` whose shut section is what makes `truncate` fire.
+   */
   const last = nodes[nodes.length - 1];
-  const mainNodes = [];
-  for (let i = 0; i < n; i++) {
-    mainNodes.push({ x: main.x[i], y: main.y[i], z: main.z[i], r: main.r[i], w: main.w[i] });
-  }
-  // …and the passages this branch is not allowed to touch at all. A terminal
-  // chamber is the biggest thing a lead builds and the likeliest to reach one.
-  for (const ap of avoid) {
-    for (let i = 0; i < ap.x.length; i++) {
-      mainNodes.push({ x: ap.x[i], y: ap.y[i], z: ap.z[i], r: ap.r[i], w: ap.w[i] });
+  if (!loop) {
+    const mainNodes = [];
+    for (let i = 0; i < n; i++) {
+      mainNodes.push({ x: main.x[i], y: main.y[i], z: main.z[i], r: main.r[i], w: main.w[i] });
     }
+    // …and the passages this branch is not allowed to touch at all. A terminal
+    // chamber is the biggest thing a lead builds and the likeliest to reach one.
+    for (const ap of avoid) {
+      for (let i = 0; i < ap.x.length; i++) {
+        mainNodes.push({ x: ap.x[i], y: ap.y[i], z: ap.z[i], r: ap.r[i], w: ap.w[i] });
+      }
+    }
+    // No depth floor: a branch has never had one, and the dive is bounded anyway
+    // by the same MAX_DIVE gradient over the step that the main walk uses.
+    yield 'branch';
+    const term = yield* terminusFit(rng, x, y, z, heading, joints, mainNodes, -Infinity, last.r * 1.25, beads, walked);
+    yield 'branch-terminus';
+    if (term) {
+      const sh = SHAPES[term.kind];
+      const nd = shaped(term.x, term.y, term.z, term.r, sh);
+      nd.type = term.kind;
+      nodes.push(nd);
+      heading = term.heading;
+    }
+    nodes.push(closingNode(nodes[nodes.length - 1], heading));
   }
-  // No depth floor: a branch has never had one, and the dive is bounded anyway
-  // by the same MAX_DIVE gradient over the step that the main walk uses.
-  yield 'branch';
-  const term = yield* terminusFit(rng, x, y, z, heading, joints, mainNodes, -Infinity, last.r * 1.25, beads, walked);
-  yield 'branch-terminus';
-  if (term) {
-    const sh = SHAPES[term.kind];
-    const nd = shaped(term.x, term.y, term.z, term.r, sh);
-    nd.type = term.kind;
-    nodes.push(nd);
-    heading = term.heading;
-  }
-  nodes.push(closingNode(nodes[nodes.length - 1], heading));
 
   const path = resample(nodes);
   yield 'branch-resample';
-  // From ring 1: ring 0 is welded to the main tube's wall and must not move.
-  yield* burySkylights(path, 1);
+  /**
+   * From ring 1: ring 0 is welded to the main tube's wall and must not move.
+   *
+   * …AND, ON A LOOP, TO THE LAST LOOP_COLLAR RINGS FOR THE SAME REASON. If the
+   * burial then closed the passage anyway — the hillside is entitled to the
+   * whole thing, see below — `truncate` has already domed it and the closure is
+   * off. That check is `endRing`: `closeEnd` is the only thing that writes it,
+   * so its presence on a path built without a `closingNode` means and can only
+   * mean that the rock refused the connector.
+   */
+  const bn0 = path.x.length;
+  yield* burySkylights(path, 1, loop ? Math.max(2, bn0 - LOOP_COLLAR) : Infinity);
+  /**
+   * A CLOSURE THE ROCK REFUSED IS NOT A DEAD END, IT IS A COLLISION, and this is
+   * the one place that difference is dangerous.
+   *
+   * When the burial cuts a looping passage short, `truncate` keeps `cut +
+   * CAP_RINGS` rings and domes them — and `cut` is the first ring a BODY could
+   * not pass, which on a connector heading into a bore is routinely within a
+   * dome's length of the weld. So the passage can survive almost to the target,
+   * be capped there, and have no hole cut in front of it: two tubes sharing a
+   * volume, which from inside is a hole in the wall with the back of another
+   * wall behind it. It is the exact failure the clash test exists to prevent,
+   * arrived at from a direction the clash test deliberately exempted.
+   *
+   * So the end is walked back until it is clear of the target the way any other
+   * passage would have to be, and the dome rebuilt there. Sixteen rings either
+   * side of the weld is the same window the connector's own clash test exempted;
+   * everything outside it was already tested and is already clear.
+   */
+  if (loop && path.endRing !== undefined) {
+    const tp = loop.path;
+    const j = loop.ring;
+    const lo = Math.max(0, j - 16);
+    const hi = Math.min(tp.x.length - 1, j + 16);
+    let keep = path.x.length;
+    while (keep > CAP_RINGS + 6) {
+      const i = keep - 1;
+      let clear = true;
+      for (let k = lo; k <= hi && clear; k++) {
+        const dx = tp.x[k] - path.x[i];
+        const dy = tp.y[k] - path.y[i];
+        const dz = tp.z[k] - path.z[i];
+        const min = tp.r[k] * tp.w[k] + path.r[i] * path.w[i] + 3;
+        if (dx * dx + dy * dy + dz * dz < min * min) clear = false;
+      }
+      if (clear) break;
+      keep--;
+    }
+    if (keep < path.x.length) truncate(path, Math.max(1, keep - CAP_RINGS));
+    loop = null;
+  }
   /**
    * …AND IF THE BURIAL TOOK IT, THERE IS NO BRANCH — NOT A TWO-METRE ONE.
    *
@@ -3340,7 +5277,10 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
     }
     // Twelve metres is `cave-branch`'s own bar for having entered one: shorter
     // than that and there is nothing on the other side of the doorway.
-    if (len < 12) return null;
+    if (len < 12) {
+      _branchWhy = 'buried';
+      return null;
+    }
   }
   path.base = bi;
   path.side = side;
@@ -3486,6 +5426,71 @@ function* buildBranch(c, main, joints, bi0, tag, major = false, avoid = []) {
     const k = 1 + FLARE * (1 - i / 3);
     path.w[i] *= k;
     path.t[i] *= k;
+  }
+
+  /**
+   * AND THE SECOND WELD, WHICH IS THE FIRST ONE READ BACKWARDS.
+   *
+   * Every line below has a counterpart forty lines up: the ring that spans the
+   * target's wall is counted back from the END rather than forward from ring
+   * zero, the window's phi is solved on the target's outline at the weld ring's
+   * own axis height, and the collar is flared over the LAST three rings rather
+   * than the first. `_link` winds those same three both ways, `_emitRing`
+   * flattens the target's displacement around the opening from `_holesBy`, and
+   * neither of them has to know which end of which passage it is looking at.
+   *
+   * `endRing` is set by hand and NOT by `closeEnd`: there is no dome, the last
+   * ring is a full-size section standing inside the target's bore, and it is the
+   * last place a body may be — which is what `endRing` means. `loopEnd` then
+   * tells `caveSample` not to apply its axial end stop there, because there is
+   * no end to stop at; walking on takes you into the target passage, which wins
+   * the fit the moment you are inside its section.
+   */
+  if (loop) {
+    const bn = path.x.length;
+    path.endRing = bn - 1;
+    path.loopEnd = true;
+    path.loopRing = loop.ring;
+    path.loopTo = loop.path;
+    path.loopSide = loop.side;
+    const wallRun2 = Math.max(0, loop.tHalf - loop.lat);
+    const hr2 = bn - 1 - Math.min(3, bn - 1, Math.round(wallRun2 / RING_STEP));
+    const rw2 = path.r[hr2];
+    const halfV2 = rw2 * Math.min(path.t[hr2], path.f[hr2]) * BORE;
+    const halfH2 = rw2 * path.w[hr2] * BORE;
+    const pY = loop.path.y[loop.ring];
+    const mPhi = phiAtHeight((path.y[hr2] - pY) / loop.pr, loop.tSh);
+    const uPhi = phiAtHeight((path.y[hr2] + halfV2 - pY) / loop.pr, loop.tSh);
+    const dPhi = phiAtHeight((path.y[hr2] - halfV2 - pY) / loop.pr, loop.tSh);
+    path.loopPhi = loop.side > 0 ? mPhi : Math.PI - mPhi;
+    path.loopSpan = clamp(Math.min(uPhi - mPhi, mPhi - dPhi), 0.1, 0.85);
+    path.loopRings = Math.max(0.8, halfH2 / RING_STEP);
+    /**
+     * AND THE FLOOR IS RE-SOLVED LAST, BECAUSE TWO PASSES HAVE BEEN OVER IT.
+     *
+     * `weld.f` was solved as a NODE so that the weld's floor lands exactly on
+     * the target's, and then `resample` ran `flatten` over the whole path with
+     * no `from` at all — which rewrites `f` wherever the half-width is over
+     * 4.5 m, and a weld bore is routinely 5. So the guarantee the node made was
+     * quietly unmade before this line, exactly as the block over `flatten`
+     * describes happening to the burial.
+     *
+     * `f` is the only channel that moves the floor without moving the axis, so
+     * re-solving it here costs nothing else: the ceiling is `y + r * (t +
+     * rough)` and the containment is `r * w`, and neither reads `f`. Over the
+     * collar rings only — a step at a threshold is what makes a doorway read as
+     * a wall, and the collar is where the two floors have to agree.
+     */
+    const tFloor =
+      loop.path.y[loop.ring] - loop.path.r[loop.ring] * loop.path.f[loop.ring];
+    for (let i = Math.max(0, bn - 3); i < bn; i++) {
+      path.f[i] = clamp((path.y[i] - tFloor) / path.r[i], 0.08, path.t[i] * 0.95);
+    }
+    for (let i = 0; i < Math.min(3, bn); i++) {
+      const k = 1 + FLARE * (1 - i / 3);
+      path.w[bn - 1 - i] *= k;
+      path.t[bn - 1 - i] *= k;
+    }
   }
   return path;
 }
@@ -3729,7 +5734,7 @@ function resample(nodes) {
  * weight is zero); a chamber comes out with one level floor you can cross,
  * which is what the floor of a collapse is.
  */
-function flatten(path, from = 0) {
+function flatten(path, from = 0, to = Infinity) {
   const n = path.x.length;
   const floor = new Float64Array(n);
   for (let i = 0; i < n; i++) floor[i] = path.y[i] - path.r[i] * path.f[i];
@@ -3793,8 +5798,13 @@ function flatten(path, from = 0) {
    * junction, and a re-level after the burial must not touch the mouth, whose
    * floor is the gully's carved floor and is the one seam in this file that is
    * not allowed to move by a centimetre.
+   *
+   * `to` is the same protection at the far end, for a loop's second weld, whose
+   * `f` was solved so its floor IS the target passage's floor. See `until` in
+   * `burySkylights`.
    */
-  for (let i = from; i < n; i++) {
+  const stop = Math.min(n, to);
+  for (let i = from; i < stop; i++) {
     // 0 under four and a half metres of half-width, 1 over nine. Below that a
     // passage is a passage and its floor should follow it.
     const big = clamp01((path.r[i] * path.w[i] - 4.5) / 4.5);
@@ -3845,19 +5855,36 @@ function exposedRings(path) {
  * against the outside of a bend buys back a few metres of sight line. The
  * consequence of getting this wrong is the whole forest popping out of
  * existence in front of somebody, so it is deliberately pessimistic.
+ *
+ * FROM ANY RING, IN EITHER DIRECTION, BECAUSE A PASSAGE NOW HAS TWO ENDS.
+ *
+ * This was written when the only opening in the world was the main tube's ring
+ * zero, so "the entrance" and "index 0, walking up" were the same statement and
+ * the function said the second one. A looping branch (see LOOP CLOSURE) is
+ * welded into another passage's wall at BOTH ends, and the question its far end
+ * asks is the same question in the other direction: how far back from that weld
+ * can you still see it. Same algorithm, same 0.62, same 14 m of margin — the
+ * only change is that the ring being walked away from and the sense of the walk
+ * are arguments rather than constants.
+ *
+ * The return is metres of `along` FROM `from`, so it is a distance travelled
+ * rather than a position, and it means the same thing at either end.
  */
-function blindAlong(path, along) {
+function blindAlong(path, along, from = 0, dir = 1) {
   const n = path.x.length;
-  const x0 = path.x[0];
-  const y0 = path.y[0];
-  const z0 = path.z[0];
-  for (let i = 3; i < n; i++) {
+  const x0 = path.x[from];
+  const y0 = path.y[from];
+  const z0 = path.z[from];
+  for (let s = 3; s < n; s++) {
+    const i = from + dir * s;
+    if (i < 0 || i >= n) break;
     const dx = path.x[i] - x0;
     const dy = path.y[i] - y0;
     const dz = path.z[i] - z0;
     const len2 = dx * dx + dy * dy + dz * dz;
     if (len2 < 1e-6) continue;
-    for (let j = 1; j < i; j++) {
+    for (let k = 1; k < s; k++) {
+      const j = from + dir * k;
       const px = path.x[j] - x0;
       const py = path.y[j] - y0;
       const pz = path.z[j] - z0;
@@ -3870,7 +5897,9 @@ function blindAlong(path, along) {
       // line of sight through its wall. Being pessimistic here is free; being
       // optimistic pops the whole forest out of existence in front of somebody.
       const fit = path.r[j] * Math.min(path.w[j], path.t[j]) * 0.62;
-      if (ox * ox + oy * oy + oz * oz > fit * fit) return along[i] + 14;
+      if (ox * ox + oy * oy + oz * oz > fit * fit) {
+        return Math.abs(along[i] - along[from]) + 14;
+      }
     }
   }
   // A passage with no bend in it at all. Nothing is ever out of sight, so
@@ -4632,15 +6661,41 @@ function placeFungi(c, path, tag = 'main', from = 0) {
     const pz = path.z[i] + rz * tmp.x * r * 0.94;
     const py = path.y[i] + tmp.y * r * 0.94;
 
-    const pick = rng();
+    /**
+     * DEPTH FINALLY BUYS SOMETHING. See CHANNELS: `deep` is 0 at the mouth and 1
+     * at DEEP_FULL below it, and until this it was splined and clamped and read
+     * by nothing at all.
+     *
+     * THE DEEP END IS MORE LIT AND MORE COLOURED, NOT LESS, which is the
+     * opposite of the instinct. The instinct says darkness should increase with
+     * depth; a real cave says the opposite, because everything that lives down
+     * here lives where the water and the air come from, and because a
+     * player who is rewarded with LESS as they go further in stops going further
+     * in. The darkness that matters is the darkness BETWEEN clusters, and that
+     * is bought back below by the spacing rather than by dimming the sources.
+     *
+     * Note that this deliberately shifts the ROSTER too, not just the amount:
+     * FUNGUS_ODD (the rare one) doubles its share by the terminus, so the deep
+     * end is a different palette rather than more of the same one.
+     */
+    const deep = path.deep ? path.deep[i] : 0;
+    const pick = rng() * (1 - deep * 0.22);
     const colour = (pick < 0.6 ? FUNGUS_COLD : pick < 0.86 ? FUNGUS_DEEP : FUNGUS_ODD).clone();
     out.push({
       x: px,
       y: py,
       z: pz,
       colour,
-      power: rngRange(rng, 0.55, 1.25),
-      count: 4 + Math.floor(rng() * 9),
+      power: rngRange(rng, 0.55, 1.25) * (0.92 + deep * 0.3),
+      /**
+       * Up to five more heads on a cluster at the terminus, against a base mean
+       * of eight. Heads are POINTS in the shared sprite cloud — one vertex, no
+       * triangle, no draw — so this side of the trade is very nearly free; what
+       * is not free is the number of CLUSTERS, because every one of them is an
+       * entry in the light list that `_shade` walks per vertex. That is why the
+       * count goes up and the spacing goes up with it. See below.
+       */
+      count: 4 + Math.floor(rng() * 9) + Math.floor(deep * 5),
       seed: rng(),
     });
     /**
@@ -4653,7 +6708,27 @@ function placeFungi(c, path, tag = 'main', from = 0) {
      * one place the tour is unreadable is the long stretch between two clusters
      * where the near-field term has run out and nothing else has started.
      */
-    i += 10 + Math.floor(rng() * 12);
+    /**
+     * …AND THE SPACING IS WHERE THE DEPTH IS PAID FOR, SO THE BUILD DOES NOT
+     * GET MORE EXPENSIVE.
+     *
+     * A cluster is an entry in `this.lights`, and `_shade` walks that list once
+     * per vertex over 30-120 000 vertices: cluster count is the single biggest
+     * term in the build cost of a cave. So the extra heads above are paid for by
+     * spreading the clusters out — 1.45x the stride at the mouth falling to
+     * 0.85x at the terminus. At the mean depth of an ordinary walk the factor is
+     * about 1.15, i.e. thirteen per cent FEWER clusters than before, against
+     * heads per cluster up by about a quarter. Net: a cave that is somewhat
+     * cheaper to build than it was, with the same number of glowing points in
+     * it, arranged so the shallow galleries are sparse and the deep ones are
+     * crowded.
+     *
+     * The stretch of dark between clusters that the block above worries about is
+     * therefore LONGER near the mouth — which is right, because near the mouth
+     * the daylight term is the light in the room and the fungi are not supposed
+     * to have started yet.
+     */
+    i += Math.round((10 + Math.floor(rng() * 12)) * (1.45 - 0.6 * deep));
   }
   return out;
 }
@@ -5430,6 +7505,84 @@ const CRYSTAL_KINDS = [
 ];
 
 /**
+ * WHAT AN EMITTER LOOKS LIKE AND WHAT ITS LIGHT LOOKS LIKE ARE NOT THE SAME
+ * COLOUR, AND CONFLATING THEM IS MOST OF WHY THIS CAVE WAS A LAVA LAMP.
+ *
+ * MEASURED, over the 136 148 vertices of grove-01 k=0 with the bake dumped
+ * straight out of the buffer: aLit is (0.063, 0.065, 0.122) mean and reaches
+ * (1.74, 1.21, 2.40). It is the largest term in the material by a factor of
+ * three in most of the frame — the near-field term is dead past three metres
+ * and the ambient is 0.008 — and it is a SATURATED BLUE. Rendering one term at
+ * a time to the framebuffer at the mouth station showed it as the violet cloud
+ * the whole verdict was about: ACES pushes a saturated blue toward magenta, so
+ * a light that is measurably blue arrives on screen as purple, and there is
+ * nothing in the rock's own shading that can survive being multiplied by it.
+ *
+ * The mean over the roster is worse than any single entry. FUNGUS_COLD is
+ * (0.061, 0.607, 0.871) linear, FUNGUS_DEEP (0.325, 0.125, 0.807): both are
+ * near the edge of the gamut, so what a cave is lit BY is a colour no rock
+ * could ever be seen under.
+ *
+ * The fix is not to change the palette. The heads, the crystal facets and the
+ * spores are EMITTERS — you are looking at the source, and a source may be as
+ * saturated as it likes; the reference photographs everybody remembers are
+ * exactly that, a vivid point in a room of grey stone. What must not be
+ * saturated is the IRRADIANCE, because irradiance is multiplied by an albedo
+ * and a fully saturated multiplier deletes two of the rock's three channels.
+ *
+ * So the colour is split at the one place every baked source funnels through.
+ * Luminance is preserved EXACTLY — dot with the Rec. 709 weights, then lerp the
+ * colour toward that grey — so this changes no exposure anywhere, does not
+ * touch the soft clamp in _shade, and cannot make the cave brighter or darker.
+ * It is one lerp per light at build time and nothing per frame.
+ *
+ * LINEAR, NOT sRGB, and that is not a detail. THREE.Color holds linear once
+ * ColorManagement is on, so a ratio taken here is a ratio of light; the same
+ * lerp written on sRGB components renders as washed grey, which is the trap the
+ * plumage multipliers were caught by.
+ *
+ * A crystal keeps more of its hue than a fungus does. A seam is the one thing
+ * down here that exists to be a destination, and the argument at CRYSTAL_REACH
+ * is that what it sells is CONTRAST — against dark rock, and now also against
+ * rock lit a different colour.
+ */
+/**
+ * HOW FAR, AND 0.58 WAS NOT FAR ENOUGH — MEASURED TWICE.
+ *
+ * At 0.58 the fungus light lands as (0.323, 0.554, 0.663) and the deep violet
+ * as (0.261, 0.178, 0.464). Both are still cool enough to be a COLOUR, and with
+ * 230 sources in a 346 m cave — one every metre and a half — every square metre
+ * of wall is inside somebody's reach, so a cave lit by a coloured light is a
+ * cave that is entirely that colour. The tour at 70 m still came back as a
+ * uniform lavender tube with the rock invisible underneath it.
+ *
+ * The lighting design says the darkness between clusters is what makes a
+ * cluster land, and that is not what the roster actually produces; but the
+ * placement is another agent's and reseeding it moves nine gates. Desaturating
+ * is the half of the same fix that is mine, and it is the stronger half anyway:
+ * vLit is irradiance TIMES ALBEDO (see _shade), so as the light approaches
+ * white, vLit approaches the rock's own colour multiplied by a brightness.
+ * At 0.8 the passage is lit by something near daylight and what you see is
+ * stone — which is the entire brief.
+ *
+ * The heads, the spore motes and the crystal facets are untouched and still
+ * draw at full saturation, so the cave has exactly as much colour in it as
+ * before. It is now IN THE SOURCES, where colour reads, instead of smeared over
+ * every surface, where it only tints.
+ */
+const LIT_DESAT_FUNGUS = 0.8;
+const LIT_DESAT_CRYSTAL = 0.55;
+
+function litColour(c, amount) {
+  const lum = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+  return new THREE.Color(
+    lerp(c.r, lum, amount),
+    lerp(c.g, lum, amount),
+    lerp(c.b, lum, amount)
+  );
+}
+
+/**
  * Where a seam is, and which way its spikes point.
  *
  * Along a joint, like the speleothems and for the same reason — calcite and
@@ -5541,9 +7694,34 @@ function placeCrystals(c, path, tag, from) {
          * of light.
          */
         const room = r * path.w[j];
+        /**
+         * …AND BY DEPTH, WHICH IS WHAT MAKES THE LAST SEAM THE ONE YOU REMEMBER.
+         *
+         * `deep` (see CHANNELS) is 0 at the mouth and 1 at DEEP_FULL below it.
+         * Before this every seam in a cave was drawn from the same size
+         * distribution, so the one twenty metres in and the one at the terminus
+         * a hundred and eighty metres down were the same object twice — and a
+         * feature you have already seen at full size is not a reward for going
+         * further.
+         *
+         * ON THE LENGTH AND NOT ON THE COUNT, DELIBERATELY. A spike is a fixed
+         * number of facets whatever its size, so scaling `len` moves not one
+         * triangle: the deep seams get bigger and the shallow ones get smaller
+         * and the cave's geometry budget does not move at all. `many` is left
+         * exactly as it was for the same reason.
+         *
+         * 0.55 at the mouth to 1.35 at the terminus. The floor is high enough
+         * that a shallow seam still catches the eye down a passage — it is a
+         * hint, not an absence — and the ceiling is bounded by the same
+         * `clamp(room * 0.3, ...)` that has always stopped a seam meeting itself
+         * across a narrow passage, so this cannot re-open the "wall made of
+         * light" failure the block below records.
+         */
+        const deep = path.deep ? path.deep[j] : 0;
         const len =
           (big ? rngRange(rng, 1.4, 3.0) : rngRange(rng, 0.3, 1.0)) *
-          clamp(room * 0.3, 0.4, 1.5);
+          clamp(room * 0.3, 0.4, 1.5) *
+          (0.55 + 0.8 * deep);
         const rad = len * rngRange(rng, 0.11, 0.24);
         // The drawn wall, then far enough behind it that the (now capped) base
         // is inside the rock. See CRYSTAL_BED. `len` and the direction are
@@ -5573,6 +7751,196 @@ function placeCrystals(c, path, tag, from) {
     i += runLen + 34 + Math.floor(rng() * 62);
   }
   return out;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  the roost                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * SOMETHING LIVES DOWN HERE.
+ *
+ * Everything above this line is geology, and the audit that read it said so: a
+ * swept tube with six real cross-sections, chambers sized from the rock, welded
+ * branches, genuine loop closures, a drip process, a draught that rises as the
+ * passage tightens, a reverb that knows how big the room is. And a perfectly
+ * observed, completely dead room. Nothing in it moved except water and spores;
+ * nothing in it reacted to a person walking through.
+ *
+ * The intended moment is one moment and the whole thing is built backwards from
+ * it: you round a corner into a chamber, the ceiling is speckled with small dark
+ * lumps you take for stalactites — because the ceiling of every chamber in this
+ * cave is already speckled with small dark lumps — and then one of them MOVES,
+ * and then the whole ceiling comes off at once and goes past your head with a
+ * sound like paper.
+ *
+ *
+ * WHY THERE IS NO PER-FRAME CPU IN ANY OF IT.
+ *
+ * Two hundred animals with positions is two hundred objects to integrate, and
+ * this project's whole fauna layer is host-authoritative for exactly that reason
+ * — see `one-client-simulates-the-animals`. None of that applies here, because a
+ * bat's trajectory does not have to be SIMULATED: hanging is a fixed point, and
+ * flight is a closed-form orbit about a fixed centre. Both are pure functions of
+ * (uTime, seed, uFlush), so the vertex shader can evaluate them and the CPU
+ * never touches a bat after the build. That also makes them free over the
+ * network, which is the same argument the trip's fields make and the same reason
+ * `worldClock` exists: two people standing in one chamber see the same bat in
+ * the same place with zero bytes travelling, because both derive it.
+ *
+ * The one thing that is not derivable is WHEN somebody disturbed the roost. That
+ * is a single float uniform per roost, written by one squared-distance test per
+ * frame in `CaveField.update` — see `Cave.checkFlush`. Everything else, all two
+ * hundred of them, comes out of it.
+ *
+ *
+ * AND WHY THEY ARE NOT ADDITIVE, WHICH IS THE ONE THING THIS FILE HAD NEVER
+ * DRAWN.
+ *
+ * Every emitter in this file — the fungus heads, the crystal halos, the spores,
+ * the beams — is AdditiveBlending, because everything in the cave up to now has
+ * been a light. A bat is the opposite object: it is a hole in whatever is behind
+ * it. It has to be alpha-tested and opaque or it stops reading the instant it
+ * crosses a beam, which is precisely where it must read best.
+ */
+
+/** How many bats hang in one roost, and how big one is across the wings. */
+const BAT_MIN = 90;
+const BAT_MAX = 220;
+/**
+ * 0.24-0.38 m. A lesser horseshoe bat is 0.25 across and a greater about 0.38,
+ * which is the size range that actually roosts in European limestone caves in
+ * clusters this size. It matters more than it sounds: a bat scaled up to read
+ * "clearly" at ten metres is a fruit bat, and a fruit bat in a cave in a
+ * temperate wood is a thing people cannot name and do not believe.
+ */
+const BAT_SPAN_MIN = 0.24;
+const BAT_SPAN_MAX = 0.38;
+/**
+ * At most two roosts in one cave, and usually one.
+ *
+ * SCARCITY IS THE FEATURE. A cave with a colony in every chamber has a bat
+ * problem rather than a bat; the reveal is worth what it is worth because it
+ * happens once, in one room, and the four chambers you walked through before it
+ * had nothing on their ceilings but rock. Two is allowed only where the walk
+ * built enough chambers that one roost could plausibly be missed entirely.
+ */
+const ROOST_MAX = 2;
+/** Metres between two roosts, so they cannot both be in the same hall. */
+const ROOST_APART = 55;
+
+/**
+ * How near the body has to be for the ceiling to come off. See `checkFlush`.
+ *
+ * Thirteen metres horizontally, and a vertical window rather than a sphere: 9 m
+ * below the colony (you are on the floor of a chamber whose roof is high) and
+ * 6 m above it (which is inside the same room; more would let a passage running
+ * over the chamber trigger it, and `xz distance reaches through mountains` is
+ * the one mistake this file's consumers have made most often).
+ */
+const FLUSH_NEAR = 13;
+const FLUSH_BELOW = 9;
+const FLUSH_ABOVE = 6;
+
+/**
+ * Where they hang, and it is the DRAWN roof and not the analytic one.
+ *
+ * `ceilY` is the existing exact answer to "where is the ceiling at this
+ * horizontal offset, after the rock displacement" — the same pair of functions
+ * the collider and the stalactites use. Seating on `path.y + r * t` instead is
+ * the mistake `placeSpires` made and has a screen of comment about: the roof at
+ * the wall of a phreatic tube is metres below the apex, so half the colony would
+ * hang inside the rock and the other half in mid-air.
+ *
+ * BAT_CLEAR is how far under it they hang. A bat's feet are on the rock and its
+ * body is below them, so the anchor — which is where the ANIMAL is, not where
+ * its toes are — sits about a body length down.
+ */
+const BAT_CLEAR = 0.09;
+
+/**
+ * One roost's worth of bats, as (anchor, seed) pairs.
+ *
+ * `cand` is one of the chamber runs `_planShafts` found — see `this._chambers`.
+ * The whole of the placement is: pick a ring in the run, pick a horizontal
+ * offset across it, ask the roof where it is, hang a bat there.
+ *
+ * SPREAD ACROSS THE RUN AND NOT PILED AT ITS BIGGEST RING, for the reason
+ * `_lightChamber` spreads its beams: a colony at one ring is a disc, and the
+ * thing a real roost does to a chamber is COVER its ceiling, which is what makes
+ * "the whole ceiling comes off" a sentence about the room rather than about a
+ * cloud of dots.
+ *
+ * WEIGHTED TOWARD THE APEX. `-0.62..0.62` of the half-width rather than the full
+ * span, because bats hang where the roof is highest and flattest and because the
+ * two extremes of the section are where `ceilY` is closest to the wall — a bat
+ * at 0.95 of the half-width is hanging off a vertical face, which is a thing
+ * they do and a thing that looks like a bug.
+ */
+function placeBats(c, path, cand, rng) {
+  const { lo, hi, at } = cand;
+  const n = path.x.length;
+  const count = BAT_MIN + Math.floor(rng() * (BAT_MAX - BAT_MIN + 1));
+  const out = [];
+  const sh = { w: 1, t: 1, f: 0.5, key: 0 };
+  for (let b = 0; b < count; b++) {
+    const j = clamp(lo + Math.floor(rng() * Math.max(1, hi - lo)), 1, n - 2);
+    ringShape(path, j, sh);
+    const r = path.r[j];
+    const nOff = rngRange(rng, -0.62, 0.62) * sh.w;
+    const a = Math.max(0, j - 1);
+    const bb = Math.min(n - 1, j + 1);
+    let tx = path.x[bb] - path.x[a];
+    let tz = path.z[bb] - path.z[a];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl;
+    tz /= tl;
+    // Right-hand basis about the tangent, the same one every placer here uses,
+    // plus a slide along it so a ring's worth of bats is not a line across the
+    // roof.
+    const slide = rngRange(rng, -0.5, 0.5) * RING_STEP;
+    const px = path.x[j] - tz * nOff * r + tx * slide;
+    const pz = path.z[j] + tx * nOff * r + tz * slide;
+    const py = ceilY(c.k, path, j, sh, nOff, px, pz) - BAT_CLEAR;
+    out.push({
+      x: px,
+      y: py,
+      z: pz,
+      span: rngRange(rng, BAT_SPAN_MIN, BAT_SPAN_MAX),
+      seed: rng(),
+    });
+  }
+
+  /**
+   * …AND THE ORBIT THEY FLY, WHICH IS A PROPERTY OF THE ROOM AND NOT OF A BAT.
+   *
+   * One centre for the whole colony, on the chamber's biggest ring, at a third
+   * of the way down from the roof. Every bat's own orbit is a Lissajous about
+   * this point with its own radius, its own frequency ratio and its own phase —
+   * so they fill the room rather than forming a ring, and no two of them are
+   * ever in step for long. A shared centre is what makes it read as ONE colony
+   * milling in ONE chamber instead of two hundred independent animals.
+   *
+   * THE RADIUS COMES FROM THE ROCK. `half` is the chamber's own half-width, so a
+   * colony flushed in a 24 m hall wheels across 24 m of it and a colony in a 6 m
+   * chamber wheels tightly — and neither can fly through a wall, because both
+   * are measured from the wall. 0.62 leaves a margin for the vertical wander and
+   * for the section pinching at the ends of the run.
+   */
+  const ci = clamp(at, 1, n - 2);
+  ringShape(path, ci, sh);
+  const half = path.r[ci] * sh.w;
+  const head = path.r[ci] * (sh.f + sh.t);
+  return {
+    bats: out,
+    cx: path.x[ci],
+    cy: path.y[ci] + path.r[ci] * sh.t - head * 0.34,
+    cz: path.z[ci],
+    radius: Math.max(2.2, half * 0.62),
+    // How far the colony wanders vertically. A third of the head-room, so a big
+    // chamber gets a column of bats and a low one gets a sheet of them.
+    rise: Math.max(0.8, head * 0.18),
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -5640,7 +8008,28 @@ function caveMaterial() {
        * what is on the other side of it is a wood, and a cyan doorway would
        * say "another cave".
        */
-      uDay: { value: new THREE.Color(0x74a294) },
+      /**
+       * …AND THEN DESATURATED, FOR THE SAME REASON THE FUNGI WERE. See
+       * litColour.
+       *
+       * 0x74a294 is (0.175, 0.361, 0.296) linear — twice as much green as red —
+       * and at the mouth it is the largest term in the material by an order of
+       * magnitude. Rendered alone at the doorway station it is a flat mint-green
+       * wash over every surface in the first thirty metres, and it is the reason
+       * the one speleothem in the frame read as painted plastic: a green
+       * multiplier on a nearly neutral albedo is a green object, whatever the
+       * albedo said.
+       *
+       * The argument for the green stands — what is on the other side of that
+       * hole IS a wood, a cyan doorway would say "another cave", and light
+       * coming through a canopy really is green. What was wrong is the amount.
+       * 0x93a89b is (0.293, 0.391, 0.320): the SAME luminance to within 1%, so
+       * uDayGain, the bloom behaviour at the doorway and the twilight blocks are
+       * all untouched, with the green bias cut from 2.1:1 over red to 1.3:1.
+       * That is enough that the doorway still reads warm-cool against the cave
+       * and little enough that what it lands on reads as rock.
+       */
+      uDay: { value: new THREE.Color(0x93a89b) },
       uDayGain: { value: 1.45 },
       /** What grows in the last of the daylight. See the twilight block. */
       uMoss: { value: new THREE.Color(0x35502a) },
@@ -5676,7 +8065,38 @@ function caveMaterial() {
        * from turning into blue mist. All that has changed is where the energy
        * sits, and now the darkest part of a cave is violet.
        */
-      uAmbient: { value: new THREE.Color(0x141033) },
+      /**
+       * …AND THEN OFF THE INDIGO ENTIRELY, BECAUSE A CAVE IS MADE OF ROCK AND
+       * THIS TERM IS MOST OF WHAT YOU SEE OF IT.
+       *
+       * Both blocks above are arguing about the HUE of a term whose real
+       * problem is that it is the only thing on screen. Past three metres the
+       * near-field term is dead by design and vLit is whatever the fungi
+       * reached, so in the ordinary case — a passage between clusters — this
+       * constant, times a noise, IS the picture. 0x141033 is (0.0070, 0.0052,
+       * 0.0331) linear, four and a half times more blue than red, so the
+       * ordinary case rendered as violet cloud. The verdict on it was that the
+       * passage read as the inside of a lava lamp, and that is exactly what a
+       * saturated constant multiplied by a 3D noise field looks like.
+       *
+       * 0x14161e is (0.0070, 0.0080, 0.0130): luminance 0.0082 against the old
+       * 0.0076, so the cave is no darker — the FLOOR/FILL argument below still
+       * holds and is untouched — and the blue:red ratio falls from 4.7 to 1.9.
+       * That is still unmistakably cold, which is right: the light bouncing
+       * around down here really does come off cyan and violet fungi. It is no
+       * longer a colour in its own right, which is what let it beat the rock.
+       *
+       * The other half of this fix is at the multiply, three hundred lines
+       * below: the term now carries the rock's own CHROMA and not merely its
+       * level, so the darkness of a cave is a dark version of the stone in it.
+       * That is precisely what the uAmbient note above rejected, and it was
+       * right to reject it THEN — at a fungus gain of 0.29 there was no other
+       * light and the whole passage was one brown. At the current gain the fungi
+       * are the light in the room, and a neutral substrate under a small amount
+       * of coloured light is the only arrangement in which coloured light reads
+       * as light at all.
+       */
+      uAmbient: { value: new THREE.Color(0x171614) },
       /**
        * THE MIDDLE DISTANCE, WHICH IS THE LAYER THE FOG DID NOT HAVE.
        *
@@ -5699,7 +8119,49 @@ function caveMaterial() {
        * computes fogFactor. Measured at 0.00 ms against the noise: it is two
        * ALU on a shader whose bill is five texture fetches.
        */
-      uHaze: { value: new THREE.Color(0x1b2a6b) },
+      /**
+       * …AND IT WAS A LAMP RATHER THAN AIR.
+       *
+       * The argument above is right and the number was not. 0x1b2a6b is
+       * (0.0106, 0.0231, 0.1499) linear, and the rock underground sits between
+       * 0.015 and 0.05 — so the haze was TEN TIMES the brightest surface it was
+       * hazing, in a saturated blue, arriving at 24% weight by thirty metres and
+       * 39% by forty. Past about twenty-five metres the passage was not fogged
+       * toward blue, it WAS blue, and the swirl in front of it was the noise on
+       * the near rock showing through a colour ten stops too bright.
+       *
+       * 0x232c48 is (0.0168, 0.0252, 0.0647). Still comfortably the brightest
+       * thing in the frame — which is the whole of the block above, and the
+       * ordering it depends on is unchanged — but two stops nearer the rock and
+       * far less saturated, so a far wall reads as a pale plate of STONE rather
+       * than as a hole full of blue light. Blue against red falls from 14:1 to
+       * 3.8:1.
+       */
+      uHaze: { value: new THREE.Color(0x232c48) },
+      /**
+       * THE FOUR CARRIED LIGHTS, ALL DEAD. See `CaveField.setLamps` and the
+       * A FIRE YOU CAN CARRY IN block in the fragment shader.
+       *
+       * Fresh Vector4/Vector3 objects rather than a shared one per slot, because
+       * `setLamps` writes them in place every frame and four aliases of one
+       * vector would be one lamp drawn four times.
+       */
+      uLampPos: {
+        value: [
+          new THREE.Vector4(0, 0, 0, 0),
+          new THREE.Vector4(0, 0, 0, 0),
+          new THREE.Vector4(0, 0, 0, 0),
+          new THREE.Vector4(0, 0, 0, 0),
+        ],
+      },
+      uLampCol: {
+        value: [
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, 0),
+        ],
+      },
       /**
        * AND THE WEATHER OUTSIDE, FOR THE PART OF THIS ROCK THAT IS OUT IN IT.
        *
@@ -5995,6 +8457,10 @@ function caveMaterial() {
       uniform vec3 uMoss;
       uniform vec3 uAmbient;
       uniform vec3 uHaze;
+      // Four carried lights: (xyz, radius) and colour-times-power. All zero in
+      // every frame nobody has put a fire down in. See CaveField.setLamps.
+      uniform vec4 uLampPos[4];
+      uniform vec3 uLampCol[4];
       varying vec3 vRock;
       varying vec3 vLit;
       varying vec4 vSurf;
@@ -6002,6 +8468,37 @@ function caveMaterial() {
       varying vec3 vWorld;
       varying vec3 vNormal;
       varying float vDepthFog;
+
+      /**
+       * ONE CARRIED LIGHT. See the A FIRE YOU CAN CARRY IN block below, which
+       * holds the design; this is only the arithmetic.
+       *
+       * lp is (position, radius) and lc is the colour ALREADY multiplied by the
+       * lamp's power — one fewer uniform to keep in step, and the caller is the
+       * only thing that knows what a campfire is worth against a torch.
+       *
+       * THE RADIUS IS THE FALLOFF SCALE AND NOT A CUTOFF. r^2/(d^2 + r^2) is
+       * inverse-square everywhere it matters and is exactly 1/2 at the radius,
+       * with no singularity at d = 0 to blow the frame out when somebody stands
+       * a lamp against a wall. The windowing term on top of it is what actually
+       * takes it to zero — at seven radii, squared so the approach to zero has
+       * no visible edge — because a true inverse-square never reaches zero and a
+       * light with an infinite tail lifts the black at the far end of a passage,
+       * which is the one thing this cave's whole lighting design is protecting.
+       *
+       * A zeroed slot is (0,0,0,0) and returns exactly zero: the max() on the
+       * radius keeps the divide finite and lc is black, so nothing about a dead
+       * slot can leak.
+       */
+      vec3 caveLamp(vec4 lp, vec3 lc, vec3 P, vec3 nrm) {
+        vec3 d = lp.xyz - P;
+        float r2 = max(dot(d, d), 1e-4);
+        float rad = max(lp.w, 0.01);
+        float rr = rad * rad;
+        float nl = max(dot(nrm, d * inversesqrt(r2)), 0.0);
+        float w = max(0.0, 1.0 - r2 / (rr * 49.0));
+        return lc * (nl * (rr / (r2 + rr)) * w * w);
+      }
 
       /**
        * RELIEF, AND IT IS SAMPLED IN WORLD SPACE RATHER THAN DIFFERENCED IN
@@ -6126,7 +8623,26 @@ function caveMaterial() {
           // it — but because a cave floor is silt over rubble and is genuinely
           // the smoothest surface down here at this scale. Off entirely on
           // water, which is flat by definition and has its own ripple.
-          0.55 * (1.0 - 0.5 * clamp(geoN.y, 0.0, 1.0)) * (1.0 - vWet),
+          /**
+           * 0.55 -> 0.95, AND THE JUSTIFICATION IS THAT NOTHING DOWNSTREAM WAS
+           * READING IT HARD ENOUGH FOR IT TO MATTER.
+           *
+           * The perturbation reaches the picture through ndl and spec, and ndl
+           * was a SQUARED half-lambert — the softest terminator there is — so a
+           * 0.55 tilt on a wall lit from one side moved the shading by a few per
+           * cent. Rendering the normal straight to the framebuffer at 70 m
+           * showed plenty of structure in it and the shipped frame beside it
+           * showed a smooth tube: the relief was being computed and then shaded
+           * flat. Both ends are fixed together — this, and the exponent at ndl —
+           * because either alone is the wrong trade.
+           *
+           * The moiré guard is untouched and is the reason this is safe to
+           * raise: the difference is still taken over a FIXED 30 cm of world, so
+           * the footprint does not vary across the screen and there is nothing
+           * for the raster to beat against. Amplitude was never the mechanism —
+           * see rrRelief, where three attempts at blaming it all missed.
+           */
+          0.95 * (1.0 - 0.28 * clamp(geoN.y, 0.0, 1.0)) * (1.0 - vWet),
           0.30,
           grainRaw
         );
@@ -6135,7 +8651,8 @@ function caveMaterial() {
           n,
           vWorld + 41.7,
           4.2,
-          0.22 * (1.0 - 0.5 * clamp(geoN.y, 0.0, 1.0)) * (1.0 - vWet),
+          // Same raise, same reason. See the coarse octave above.
+          0.36 * (1.0 - 0.28 * clamp(geoN.y, 0.0, 1.0)) * (1.0 - vWet),
           0.08,
           fineRaw
         );
@@ -6191,7 +8708,56 @@ function caveMaterial() {
          * instructions from every fragment in the frame that this material
          * covers — which, inside a cave, is all of them.
          */
-        float bed = sin(vSurf.z * 2.2 + grain * 5.2) * 0.5 + 0.5;
+        /**
+         * TWO BANDS, AND THE OLD ONE WAS THREE METRES THICK.
+         *
+         * The comment under the normal ledge below claims "a ledge every 45 cm"
+         * and "its period is 35 cm". Neither is true and it is worth writing
+         * down why, because both numbers were used to justify keeping the
+         * amplitude small. bedX/bedY/bedZ is a UNIT vector — see the dip block
+         * in prepare — so vSurf.z is a distance in metres and sin(z * 2.2) has
+         * a period of 2 pi / 2.2 = 2.86 m. A four-metre passage therefore
+         * contained ONE AND A HALF BEDS, at plus or minus 18% contrast, faded
+         * further with distance. That is not strata, it is a gradient, and it is
+         * why the strongest "this is stone" cue that exists was invisible in
+         * every shot of this cave.
+         *
+         * Limestone in a cave passage shows two scales at once and they are the
+         * whole read: beds a metre or two thick, and laminations within them a
+         * few tens of centimetres apart. 4.3 rad/m is a 1.46 m bed; 17 rad/m is
+         * a 0.37 m lamination. The phase warp is carried on the coarse band only
+         * and is smaller than it was (3.4 against 5.2), because the fine band is
+         * already near the limit where a warp becomes a frequency multiplier —
+         * the trap the normal-ledge block below is about.
+         *
+         * Clamped before it is remapped, so the sum of the two cannot exceed the
+         * range the multiply at the bottom was tuned against.
+         */
+        /**
+         * SPACED TO MATCH THE HILL. 2.618 rad/m is a 2.40 m bed, which is the
+         * spacing terrain.js gives the crag it stands in — so the built rock at
+         * the doorway and the grown rock either side of it are bedded on the
+         * same interval and read as one outcrop. That agreement is worth more
+         * than either number being ideal on its own: a mouth where the strata
+         * change pitch across the join is a mouth that says "two meshes".
+         *
+         * A second band at three times the frequency (0.80 m) because 2.4 m
+         * alone is one and a half bands across a passage — the failure the block
+         * above measured — while on the twenty-metre shell outside it is eight,
+         * which is where the coarse one earns its place.
+         *
+         * AND THE PHASE WARP IS NOW A FRACTION OF A PERIOD, WHICH IT NEVER WAS.
+         * grain runs 0..1, so the old "+ grain * 5.2" was 0.83 of a cycle of
+         * warp on a 2.86 m band — the sine's phase was scrambled clean across
+         * itself at the 1 m scale of the grain, which turns strata into one more
+         * lump of noise. That, not the amplitude, is why bedding had never been
+         * visible in a shot of this cave. 0.9 and 0.5 rad are 14% and 6% of a
+         * cycle: enough that the bands wander like real ones, not enough to stop
+         * being bands.
+         */
+        float bedC = sin(vSurf.z * 2.618 + grain * 0.9);
+        float bedF = sin(vSurf.z * 7.85 + grain * 0.5);
+        float bed = clamp(bedC * 0.60 + bedF * 0.36, -1.0, 1.0) * 0.5 + 0.5;
 
         /**
          * THE STRATA STAND OUT OF THE WALL RATHER THAN BEING PAINTED ON IT.
@@ -6208,9 +8774,29 @@ function caveMaterial() {
          * the geometry can carry, which at a grazing angle beats against the
          * pixel raster. Same trap as the screen-space gradient, other door.
          */
+        /**
+         * …AT BOTH FREQUENCIES NOW, AND THE FINE ONE IS FADED WITH DISTANCE.
+         *
+         * The reasoning above is exactly right and the frequency was simply the
+         * wrong one — a 2.86 m ledge is a ledge you cannot see. The coarse band
+         * gets the bulk of the tilt at its own 1.46 m; the lamination gets a
+         * third of it at 0.37 m, which is fine enough to need the same treatment
+         * the two relief octaves get twenty lines below. cos() has no mip chain
+         * either: at forty metres a 0.37 m band is a couple of pixels a cycle
+         * and would crawl exactly as the noise does, so mdist is hoisted above
+         * this line and applied here as well.
+         *
+         * mdist USED TO BE DECLARED AFTER THE LIGHTING, which is why the ledge
+         * never had it. Moving the declaration costs nothing — it is one
+         * smoothstep of a distance that is already in a register — and it is now
+         * the single fade shared by the relief, the ledge and the bedding, which
+         * is what it should always have been.
+         */
+        float mdist = 1.0 - 0.62 * smoothstep(9.0, 38.0, dist);
         vec3 up2 = abs(geoN.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
         vec3 bt = normalize(cross(cross(up2, geoN), geoN));
-        n = normalize(n + bt * cos(vSurf.z * 2.2) * 0.16);
+        n = normalize(n + bt * (cos(vSurf.z * 2.618) * 0.22
+                              + cos(vSurf.z * 7.85) * 0.12 * mdist));
 
         /**
          * THE FUNGUS LIGHT, WITH A DIRECTION IN IT AT LAST.
@@ -6254,10 +8840,39 @@ function caveMaterial() {
          * every surface in the cave is unchanged to the bit, and what it adds is
          * a +/-30% swing that reads the perturbed normal. The degenerate case is
          * exact rather than approximate: vGlow of exactly zero gives ldir of
-         * exactly zero, wrap of exactly 0.5, and 0.70 + 0.30 = 1.0, which is what
+         * exactly zero, wrap of exactly 0.5, and 0.55 + 0.45 = 1.0, which is what
          * the old constant was.
+         *
+         * 0.70 + 0.60 -> 0.55 + 0.90, i.e. from +/-30% to +/-45%, and the mean is
+         * still exactly 1.0 by the same argument. This is the branch a
+         * free-standing column or a breakdown block in the middle of a chamber
+         * takes — surrounded, therefore incoherent by construction — and those
+         * were the last things in the cave still reading as flat pale card. A
+         * weak agreement is not no agreement, and it is worth more contrast than
+         * it was being given.
          */
-        float ndl = mix(0.70 + 0.60 * wrap, wrap * wrap * 1.45, clamp(coh, 0.0, 1.0));
+        /**
+         * …AND THE COHERENT HALF IS CUBED, NOT SQUARED, WHICH IS THE OTHER END
+         * OF THE FIX AT rrRelief's SCALE.
+         *
+         * Rendering coh to the framebuffer at 70 m in came back clipped white
+         * over nearly the whole frame: the passage is narrow, so a wall is
+         * almost always dominated by one cluster and this mix is almost always
+         * fully at the coherent end. That is the good case, and it was being
+         * spent on wrap * wrap — a HALF-lambert, squared, which still returns
+         * 0.25 for a surface facing directly away from the light. Between that
+         * floor and its own softness there was barely a third of a stop between
+         * the lit and unlit sides of a boulder, and the tube came out smooth.
+         *
+         * The mean is held exactly. mean(wrap^n) over a sphere is 1/(n + 1), so
+         * wrap^2 * 1.45 averages 0.483 and wrap^3 * 1.9 averages 0.475 — the
+         * cave's exposure does not move, and what is bought is that a surface
+         * turned away now returns 0.12 instead of 0.36 while one facing the
+         * light returns nearly twice as much as its neighbour. That difference
+         * IS relief; there was nowhere else for it to come from, because there
+         * are no shadows down here and there never will be.
+         */
+        float ndl = mix(0.55 + 0.90 * wrap, wrap * wrap * wrap * 1.9, clamp(coh, 0.0, 1.0));
 
         /**
          * DARK ADAPTATION, NOT A HEAD TORCH.
@@ -6416,13 +9031,178 @@ function caveMaterial() {
          * is the same argument the near-field term makes about dark adaptation
          * one screen up.
          */
-        float mdist = 1.0 - 0.62 * smoothstep(9.0, 38.0, dist);
-        float micro = 1.0 + ((0.46 + 0.80 * grain) * (0.55 + 0.90 * fine) * 1.16 - 1.0) * mdist;
+        /**
+         * A SIXTEEN-FOLD NOISE SWING ON A FLAT TERM IS NOT RELIEF, IT IS SMOKE.
+         *
+         * (0.46 + 0.80 g) * (0.55 + 0.90 f) * 1.16 runs 0.29 to 2.12, and the
+         * two scalar multiplies further down take the compound range on the
+         * ambient to 0.19-3.0. In a passage between clusters the ambient is
+         * ninety per cent of the pixel, so the shipped picture was one colour
+         * modulated by a factor of sixteen of isotropic 3D value noise. There is
+         * no surface anywhere in that description — an unlit noise field with no
+         * plane, no direction and no scale in it is a volume, and it read as
+         * one.
+         *
+         * The energy is not deleted, it is MOVED, to the two terms below that
+         * have a geometry in them: the bedding, which is planar and therefore
+         * says "stone", and the relief ledge in the normal, which catches light.
+         * A factor of 3.6 here still carries every bit of the pitting the fine
+         * octave is for, at a contrast that reads as a rough wall rather than as
+         * weather. Mean is 1.007 at the mean of both octaves, so the exposure of
+         * the cave does not move.
+         */
+        // mdist is declared with the bedding ledge above — see the block there.
+        float micro = 1.0 + ((0.62 + 0.56 * grain) * (0.68 + 0.62 * fine) * 1.13 - 1.0) * mdist;
+        /**
+         * AND THE DARK IS A DARK VERSION OF THE STONE, NOT A COLOUR OF ITS OWN.
+         *
+         * (0.45 + 4.0 * rockLum) takes the albedo's LEVEL and throws its HUE
+         * away, on the argument at uAmbient that 0.028 of the rock's own brown
+         * is a hundred metres of darker brown. That argument was made against a
+         * fungus gain of 0.29, when there was no other light in the cave; at the
+         * current gain the fungi and the crystals ARE the light, and the thing
+         * they need to play over is rock. A term that carries level but not hue
+         * is a greyscale mask on a coloured constant, which is why the walls
+         * came back as coloured cloud whatever the geometry under them did.
+         *
+         * 60% of the way to the albedo's own chroma. 4.5 is the reciprocal of
+         * the measured mean albedo, so the mean of the whole bracket is 1.01
+         * against the old 1.08 and the cave is no darker; what changes is that
+         * the vein, the mottle, the flood line and the calcite now show in the
+         * NINETY PER CENT of the frame that this term owns, instead of only in
+         * the two metres the near-field term reaches.
+         */
         vec3 col = uAmbient * (0.30 + 0.70 * ao) * micro * (1.0 - 0.42 * n.y)
-                 * (0.45 + 4.0 * rockLum);
-        col += vRock * near * 0.72 * (0.35 + 0.65 * ao);
-        col += vLit * ndl * (0.62 + 0.5 * grain) * (0.25 + 0.75 * ao);
-        col += uDay * vDay * uDayGain;
+                 * (0.30 + mix(vec3(4.5 * rockLum), vRock * 4.5, 0.60));
+        /**
+         * 0.46, DOWN FROM 0.72, AND THE FUDGE IT WAS STANDING IN FOR IS NOW
+         * REAL.
+         *
+         * The block above is scrupulously honest that this term is not a torch —
+         * it is dark adaptation, drawn on the rock, because there was nowhere
+         * else to put it. There is now: pipeline.setCaveAdaptation opens the
+         * frame's exposure to 2.1x over four seconds as caveMix rises and
+         * shuts it in three quarters of a second on the way out, which is what
+         * dark adaptation actually is — a property of the eye applied to the
+         * whole image, not a glow the player carries two metres in front of
+         * their face.
+         *
+         * So this can stop pretending. 0.46 is 0.64 of what it was; against a
+         * 2.1x exposure the term lands at about 1.34x its old ON-SCREEN level
+         * while the ambient, the fungi and the crystals land at the full 2.1x.
+         * The ratio is what moved, and it moved the right way: the two metres
+         * around your feet get relatively DARKER against the mid-distance, which
+         * is the handover to the fungi that placeFungi and the near-field
+         * block have both been arguing for and neither could deliver while this
+         * number was carrying the whole of the cave's legibility on its own.
+         *
+         * It was not taken further. At zero the passage between clusters is a
+         * black corridor again — the failure at the top of placeCrystals —
+         * because exposure multiplies what is there and there is nothing there.
+         */
+        col += vRock * near * 0.46 * (0.35 + 0.65 * ao);
+        /**
+         * MICRO GOES ON THE FUNGUS LIGHT TOO, AND IT ONLY EVER WENT ON THE
+         * AMBIENT.
+         *
+         * micro is the relief read as OCCLUSION — a hollow in the rock sees less
+         * of the room than the boss beside it. Its own block argues that for the
+         * ambient and stops there, but a pit in a wall is dark under a fungus
+         * cluster for exactly the same reason it is dark under bounced light:
+         * less of the source can see into it. Leaving it off vLit meant the one
+         * term that dominates every lit surface in the cave was the one term
+         * with no cavity shading in it at all, so the closer a wall was to a
+         * cluster the FLATTER it got. Free — micro is already in a register.
+         */
+        col += vLit * ndl * micro * (0.62 + 0.5 * grain) * (0.25 + 0.75 * ao);
+        /**
+         * DAYLIGHT LANDS ON ROCK. IT IS NOT A FILL IN THE AIR, AND FOR THE WHOLE
+         * LIFE OF THIS SHADER IT WAS ONE.
+         *
+         * This line was "col += uDay * vDay * uDayGain": a flat additive
+         * constant with no albedo, no occlusion and no normal anywhere in it.
+         *
+         * MEASURED, at the two stations this pass is judged on. _daylight is
+         * exp(-along / 14) * 0.42, so vDay peaks at 0.42 at the doorway; uDay is
+         * 0x74a294, linear (0.176, 0.373, 0.291); uDayGain is 1.45 at noon. The
+         * term is therefore (0.107, 0.227, 0.177) linear at the mouth — against
+         * a near-field term of about 0.024 and an ambient of about 0.027 on the
+         * same pixel. TEN TIMES everything else in the first fourteen metres of
+         * passage, identical on every surface in it, and then multiplied by the
+         * two scalar noise octaves on the lines below.
+         *
+         * A constant times a 3D noise is not a lit surface, it is fog. That is
+         * the whole of why the mouth read as swirling mint-teal smoke with no
+         * stone in it. Nine tenths of every pixel there was one colour with a
+         * cloud painted over it, and the geometry, the bedding, the relief and
+         * the albedo were fighting over the remaining tenth.
+         *
+         * Three multiplies and it becomes light instead of paint:
+         *
+         *   TIMES THE ALBEDO, because reflected daylight is irradiance times
+         *   reflectance, and vRock is the only thing in this material that knows
+         *   the rock is veined, mottled, silted below the flood line and pale
+         *   where calcite grew. 5.7 is the reciprocal of the measured mean
+         *   albedo over the lattice (0.157 after the wet and open factors), so the
+         *   AVERAGE brightness at the doorway is unchanged to within a few per
+         *   cent and what is bought is that every one of those features becomes
+         *   legible in the one part of the cave with enough light to see them.
+         *
+         *   TIMES THE OCCLUSION, because a doorway lights what can see it, and
+         *   the recess behind a rib is not looking at the doorway.
+         *
+         *   AND TIMES THE NORMAL, weakly. There is no direction attribute for
+         *   this term and there should not be one — a second baked vector for a
+         *   light that is one hole is not worth twelve bytes a vertex — but the
+         *   daylight in a cave mouth arrives off the sky and off the ground
+         *   outside, so an upward-facing surface sees more of it than a
+         *   downward-facing one. Centred on 1.0 so the mean over a sphere does
+         *   not move either.
+         */
+        col += uDay * vDay * uDayGain
+             * (0.10 + 5.7 * vRock) * (0.30 + 0.70 * ao) * (1.0 + 0.30 * n.y);
+
+        /**
+         * ==== A FIRE YOU CAN CARRY IN ========================================
+         *
+         * Everything above this line is BAKED — computed on the CPU at build
+         * time and read out of a vertex attribute — and the header explains at
+         * length why: a light that does not move costs exactly nothing per
+         * frame, so thirty fungus clusters cost what none do. That argument is
+         * airtight and it has one hole in it, which is that it makes it
+         * impossible for a player to bring a light of their own into a cave.
+         *
+         * FOUR SLOTS, FIXED, WITH THE DEAD ONES ZEROED. That is the whole design
+         * and the alternative was rejected on the project's own evidence: a
+         * uniform COUNT, or an array whose length varies, is a different program
+         * for every count, and this material takes 100-180 ms to compile — see
+         * caveWarmupObjects, which exists solely because of that. A fixed four
+         * is ONE program, compiled once, warmed by the same pre-warm as before,
+         * and a cave with no lamps in it takes the identical path with three
+         * multiplies against zero.
+         *
+         * IT IS UNBRANCHED, DELIBERATELY. An if (uLampAny > 0.0) around this
+         * would be a uniform branch and therefore free of divergence — and it
+         * would also be a fifth piece of state that has to agree with the other
+         * four, i.e. exactly the kind of thing that goes stale and silently
+         * deletes a feature. Four lamps unconditionally is about forty ALU on a
+         * shader that already takes five texture fetches and several hundred, in
+         * the cheapest place in the world at 0.60 ms. It is not worth a bug.
+         *
+         * N.L AGAINST THE GEOMETRIC NORMAL — the same perturbed normal every term
+         * above uses, so a lamp picks out the same relief the fungi do — and
+         * TIMES vRock, because a lamp is light and light reflects off the rock's
+         * own colour. That last multiply is what makes a carried fire show you
+         * the vein and the flood line and the calcite rather than washing them
+         * out, and it is the same correction the daylight term two blocks up had
+         * to have made to it.
+         */
+        vec3 lamp = caveLamp(uLampPos[0], uLampCol[0], vWorld, n)
+                  + caveLamp(uLampPos[1], uLampCol[1], vWorld, n)
+                  + caveLamp(uLampPos[2], uLampCol[2], vWorld, n)
+                  + caveLamp(uLampPos[3], uLampCol[3], vWorld, n);
+        col += vRock * lamp;
+
         col *= 0.78 + grain * 0.42;
         // …and the fine octave as a light mottle, narrow, so it reads as the
         // surface being broken rather than as a second coat of the first one.
@@ -6447,7 +9227,65 @@ function caveMaterial() {
          * octaves are worth put together, because a stripe is a strong percept:
          * at 0.30 the floor of a passage read as corduroy.
          */
-        col *= 1.0 + (bed - 0.5) * 0.36 * mdist;
+        /**
+         * 0.36 -> 0.62, AND THE CORDUROY THE OLD NOTE FEARED WAS A FUNCTION OF
+         * THE FREQUENCY, NOT OF THE AMPLITUDE.
+         *
+         * "At 0.30 the floor of a passage read as corduroy" was measured on ONE
+         * sine at a 2.86 m period (the note above says 35 cm; it is wrong, see
+         * the bed block). A three-metre stripe seen down a passage floor is a
+         * huge soft band that can only read as a lighting error, and no
+         * amplitude of it ever reads as rock. Two bands at 1.46 m and 0.37 m
+         * read as bedding at twice the contrast, because that is the spacing a
+         * bedded rock actually has and because the fine one gives the coarse one
+         * a scale to be judged against.
+         *
+         * The floor keeps most of the old caution. Bedding on a walking surface
+         * is seen almost edge-on, which stretches every band along the view
+         * direction — that IS the corduroy — so it is damped by up-facing-ness,
+         * which the walls and the ceiling do not pay.
+         *
+         * This is the single term the ambient's noise budget was cut to pay for,
+         * and it is the trade the whole pass turns on: a planar, oriented,
+         * per-cave-dipped band is a geological fact about the rock, and an
+         * isotropic 3D value noise is weather.
+         */
+        col *= 1.0 + (bed - 0.5) * 0.62 * mdist * (1.0 - 0.25 * clamp(geoN.y, 0.0, 1.0));
+
+        /**
+         * WET, WHICH IS THE ONE THING EVERY CAVE HAS AND THIS ONE HAD NONE OF.
+         *
+         * 'spec' below is a tight lobe gated on 'coh', so it fires only where a
+         * single cluster dominates — which is a minority of the surface of a
+         * cave by construction, since the whole lighting design is long dark
+         * runs between sparse sources. Everywhere else the rock had no
+         * view-dependent term at all, and a surface whose brightness does not
+         * change as you move past it is a surface made of paper.
+         *
+         * A fresnel needs no light direction, which is exactly why it works
+         * here: what a wet wall does in the dark is return the AMBIENT at
+         * grazing angles, and it does it whether or not anything is shining on
+         * it. Inside a tube the periphery of the passage is grazing by
+         * construction, so this lands on the walls beside and behind you as you
+         * walk — the place a cave feels wet.
+         *
+         * It reflects uHaze and the baked light rather than white, so it can
+         * never introduce a colour of its own; and it is weighted DOWN on
+         * up-facing surfaces, because a cave floor is silt and rubble and is the
+         * one dry-looking thing down here. Two ALU and one pow on top of terms
+         * already in registers.
+         */
+        float wetFace = 0.34 + 0.66 * (1.0 - clamp(geoN.y, 0.0, 1.0));
+        float wetRim = pow(1.0 - clamp(abs(dot(n, view)), 0.0, 1.0), 4.0);
+        // step(), not (1.0 - vWet): the wet tag is 0 / 1 / 2 (see _emitWater), so
+        // subtracting it would drive a lake's rock terms NEGATIVE — and the water
+        // branch below reads col as its own bed, so a negative would survive.
+        // Mostly the light in the room, only a little of the far air. uHaze is
+        // the bluest thing in this material and a rim term touches the whole
+        // periphery of a tube, so a heavy uHaze here was a fourth blue on every
+        // wall — see the base-colour block in _shade.
+        col += (uHaze * 0.28 + vLit * 0.85) * wetRim * wetFace * (0.25 + 0.75 * ao)
+             * (1.0 - step(0.5, vWet));
 
         /**
          * A SHEEN ON THE ROCK, WHICH IS NOT THE SAME AS A SHEEN ON THE WATER.
@@ -6802,7 +9640,60 @@ function caveMaterial() {
           // 0.62 + 0.5 grain rather than a flat multiplier: on a lit surface the
           // grain has to carry most of the small-scale variation, because the
           // twenty vertices to a ring cannot.
-          vec3 open = vRock * (sky + uOpenSun * lam) * (0.62 + 0.5 * grain + 0.28 * bed);
+          /**
+           * THE SHELL IS THE BIGGEST SINGLE SURFACE IN THE DOORWAY FRAME AND IT
+           * WAS THE SMOOTHEST THING IN THE GAME.
+           *
+           * Ray-probed at the 16 m station: the beige mass filling the middle of
+           * that picture is not the hillside, it is this branch — cave < cave-0
+           * < caves, hit at 20-22 m. The terrain agent gave the crag around it a
+           * crest, a shoulder, a scarp and 2.4 m bedding and then reported that
+           * the doorway still read as plasticine, because the plasticine was
+           * ours.
+           *
+           * It cannot be fixed with geometry. A displacement on the shell near
+           * the arch drops the seam pass's lip to roof + 0.25 and opens daylight
+           * over the doorway — cave-mouth catches it, and it reports as a breach
+           * rather than as anything to do with shading. So all of this is in the
+           * fragment, where it costs nothing and can break nothing:
+           *
+           *   THE BEDDING AT TWICE THE WEIGHT, at the hill's own 2.4 m spacing,
+           *   which is the whole reason the spacing was matched. Out here it is
+           *   eight bands down a twenty-metre shell instead of one and a half
+           *   across a passage, so this is where the coarse band pays for
+           *   itself.
+           *
+           *   AND A LAMBERT WITH A FLOOR UNDER IT rather than a bare max(). The
+           *   shell's normal is now carrying two octaves of relief and two
+           *   bedding ledges (see rrRelief and the ledge block), and a clamped
+           *   N.L throws away everything on the shadow side of the terminator —
+           *   on a dome, half of it. Wrapping a fifth of the term keeps the
+           *   unlit side reading as rock instead of as one flat mass of sky
+           *   colour, which is what a lit dome and an unlit dome had in common.
+           */
+          float lamW = lam * 0.82 + 0.18 * (dot(n, uSunDir) * 0.5 + 0.5);
+          /**
+           * THE BEDDING CARRIES THE SHELL, AND THE FIRST ATTEMPT PUT IT FOURTH
+           * IN A QUEUE OF FOUR.
+           *
+           * Rendering bed alone at this station shows clean 2.4 m bands right
+           * across the dome — the term works, and it reaches the shell exactly
+           * as it reaches the passage. At 0.55 against a base of 0.55 plus two
+           * noise octaves it was a quarter of the multiplier, and a quarter of a
+           * multiplier on a surface sitting at the bright end of the tonemapper
+           * is a soft blotch rather than a stratum. 0.90 makes it the dominant
+           * term and the base drops to hold the mean at 1.04, so the shell is
+           * bedded rock at the same exposure it was smooth rock.
+           *
+           * AND LESS OF THE SKY, MORE OF THE SUN. sky is a hemisphere lookup on
+           * n.y, which over a dome is very nearly a constant — so it was
+           * flooding the surface with a term that has no relief in it at all and
+           * diluting lamW, the one term that reads the perturbed normal and the
+           * bedding ledge. Same total at the mean normal, a great deal more
+           * form, and it costs nothing.
+           */
+          vec3 open = vRock * (sky * 0.72 + uOpenSun * lamW * 1.30)
+                    * (0.28 + 0.42 * grain + 0.20 * fine + 0.90 * bed);
           col = mix(col, open, vOut);
         }
 
@@ -7168,6 +10059,37 @@ const HALL_BOUNCE = 4;
  * which is the end that points at the ceiling — so a beam's shape is a
  * non-uniform scale of this and nothing else.
  */
+/**
+ * Segments round the opening at a beam's apex. See the block in `_seatShaft`.
+ *
+ * TWELVE, AND THE NUMBER IS AN ARGUMENT ABOUT SILHOUETTE RATHER THAN ABOUT
+ * SMOOTHNESS. The whole point of the disc is that it is NOT round: its radius is
+ * jittered per segment off the same `rock` field the walls use, so what the
+ * count controls is how many independent samples of that field the rim gets.
+ * Fewer than about ten and the shape reads as a polygon; many more and
+ * neighbouring samples correlate, the jitter averages out, and it converges back
+ * on the circle it exists not to be. Twelve triangles per beam, so a four-beam
+ * cave pays 48.
+ */
+const HOLE_SEGS = 12;
+
+/**
+ * The shadow around an opening: how deep, and how far out it reaches in
+ * multiples of the opening's own radius. See `_avenShade`.
+ *
+ * 1.15 to 3.4 is a ring roughly as wide as the hole is across, which is what a
+ * chimney's own walls occlude on a flat-ish roof. 0.55 is most of a stop at the
+ * rim and was chosen against the ceiling's own occlusion range rather than by
+ * eye: `_emitRing` produces ao between about 0.30 and 1.00, so this takes the
+ * darkest roof in a chamber to 0.14 and the brightest to 0.45 — still inside
+ * the range the shader is tuned for, and never zero, because a hard black ring
+ * is a second man-made curve stuck to the roof next to the one this exists to
+ * prevent.
+ */
+const AVEN_SHADE_IN = 1.15;
+const AVEN_SHADE_OUT = 3.4;
+const AVEN_SHADE = 0.55;
+
 let sharedShaftGeo = null;
 function shaftUnit() {
   if (sharedShaftGeo) return sharedShaftGeo;
@@ -7334,6 +10256,404 @@ function shaftMaterial() {
   });
 }
 
+/**
+ * The colony. See the block over `placeBats` for what it is for.
+ *
+ * ONE MATERIAL PER CAVE, WHICH IS A DEPARTURE FROM EVERY OTHER MATERIAL IN THIS
+ * FILE AND IS NOT A REGRESSION.
+ *
+ * The rock, the heads and the beams are module singletons so that four streamed
+ * passages are one program and one uniform block. This cannot be: `uFlush` is
+ * the time a PARTICULAR roost was disturbed, and sharing it would mean walking
+ * into one cave emptied the ceiling of another one two hundred metres away —
+ * which the player would never see happen and would always arrive too late for.
+ *
+ * The cost of a second material object is zero programs, and `caveWarmupObjects`
+ * already states why: "the program cache is keyed on the shader source, so a
+ * copy would warm the same program". Two ShaderMaterials with identical source
+ * and identical parameters share a compiled program; what they do not share is
+ * the uniform values, which is the entire point. Three to five live caves is
+ * three to five uniform blocks of four floats.
+ *
+ * A vec2 rather than one float per roost, because ROOST_MAX is two. The slot
+ * rides in the SIGN of the seed attribute — see the vertex shader — so this
+ * costs no extra lane and needs no dynamic indexing, which GLSL ES 1.0 does not
+ * reliably give you on a uniform array anyway.
+ *
+ *
+ * THE 3 Hz RULE, AND THE ARITHMETIC RATHER THAN AN ASSURANCE.
+ *
+ * The standing law is that nothing may modulate luminance above 3 Hz, and the
+ * test is the product of domain speed and finest spatial frequency rather than
+ * the speed alone. A wingbeat here is 7-10 Hz, which is above it, so it has to
+ * be argued and not waved at:
+ *
+ *   IT IS NOT A FULL-FIELD SIGNAL, AND IT CANNOT BECOME ONE. A bat is 0.24-0.38
+ *   m across. At the four metres a flushed one passes you at, that is under two
+ *   degrees — about 0.1% of a 1440p frame. Two hundred of them at that range
+ *   would be 20% of the frame, and they are never all at that range: the orbit
+ *   radius is the chamber's own half-width, so at any instant the colony is
+ *   spread over ten to fifty metres and the measured near-field coverage is a
+ *   few per cent.
+ *
+ *   THE PHASES ARE INDEPENDENT AND THEREFORE THE SUM IS NOT. Each bat's flap
+ *   rate is drawn from 7-10 Hz on its own seed and its phase from another, so
+ *   two hundred wingbeats are two hundred incoherent sinusoids at two hundred
+ *   different frequencies. Their AREAS sum; their MODULATIONS cancel, as 1/sqrt
+ *   (N) — the population's total projected area is very nearly constant, and the
+ *   residual is well under a per cent of a coverage that is itself a few per
+ *   cent. This is the same reason a field of leaves moving in wind is not a
+ *   flicker hazard and a single leaf shutter is.
+ *
+ *   AND THE CONTRAST IS TINY. These are near-black shapes against a cave whose
+ *   ambient is 0.008-0.027 linear. The luminance step across a wing edge is a
+ *   fraction of what a fungus cluster's edge already is, standing still.
+ *
+ * What the law is actually protecting against is one bright thing covering the
+ * whole frame periodically. There is no node here that can produce that, and the
+ * one term that could — a bloom on a bat — is impossible by construction,
+ * because this is the only material in the cave that is not additive.
+ */
+function batMaterial() {
+  return new THREE.ShaderMaterial({
+    name: 'cave-bats',
+    /**
+     * ALPHA-TESTED AND OPAQUE. Not transparent, not additive, depth written.
+     *
+     * A bat is a silhouette — a hole in whatever is behind it — and the moment
+     * that stops being true it stops being an animal. Additive was tried on
+     * paper and rejected in one line: it is the blend mode of the four things in
+     * this file that are LIGHTS, and a bat crossing a sun shaft would brighten
+     * the shaft rather than interrupting it, which is the exact frame the whole
+     * feature is built to produce.
+     *
+     * Opaque also means it depth-writes, so a bat in front of a crystal seam
+     * occludes it, and the fungus heads (renderOrder 5) sort correctly behind
+     * one. A transparent material would have needed a sort over two hundred
+     * quads per frame for no gain at all.
+     */
+    transparent: false,
+    depthWrite: true,
+    side: THREE.FrontSide,
+    /**
+     * Our own fog, not three's, for the reason `CaveField.setFog` gives at
+     * length: `scene.fog` is one FogExp2 for the whole world and the trip
+     * director rewrites its density every frame, and the cave needs the rock to
+     * go black at thirty metres while the forest seen through the mouth keeps
+     * the forest's haze. A bat is inside the cave, so it takes the cave's.
+     */
+    fog: false,
+    uniforms: {
+      uTime: tripUniforms.uTime,
+      /**
+       * When each of this cave's (at most two) roosts was disturbed, on the same
+       * clock as uTime — i.e. `worldClock()`, seconds since the room started.
+       *
+       * "NEVER" IS THE FAR FUTURE AND NOT THE FAR PAST, AND GETTING THAT ROUND
+       * THE WRONG WAY LEAVES EVERY CEILING IN THE WORLD ALREADY EMPTY. The
+       * shader computes `uTime - uFlush - delay` and flies on the result, so a
+       * large NEGATIVE sentinel reads as "disturbed thirty years ago", i.e. fully
+       * flown, on the first frame — the failure would be a cave with a permanent
+       * cloud of bats in it and no roost anywhere, which is the feature exactly
+       * inverted and would look like a placement bug.
+       *
+       * 1e9 seconds is thirty-one years, and the clock counts from page load
+       * (or from a room's origin), so it cannot be reached. It is also far enough
+       * out that float32's 64-second ULP at that magnitude is irrelevant: the
+       * difference is a billion either way.
+       */
+      uFlush: { value: new THREE.Vector2(1e9, 1e9) },
+      fogColor: { value: new THREE.Color(0x05070a) },
+      fogDensity: { value: 0.02 },
+    },
+    vertexShader: /* glsl */ `
+      attribute vec2 aCorner;
+      attribute vec4 aBat;
+      attribute vec4 aRoost;
+      uniform float uTime;
+      uniform vec2 uFlush;
+      uniform float fogDensity;
+      varying vec2 vC;
+      varying float vFly;
+      varying float vFog;
+
+      /**
+       * THE ORBIT, IN CLOSED FORM, WHICH IS THE WHOLE REASON THERE IS NO CPU
+       * HERE.
+       *
+       * A Lissajous about the roost centre: a circle in xz whose z leg runs at a
+       * per-bat frequency RATIO to its x leg, plus an independent vertical sine.
+       * Ratio 1 is an ellipse; 1.5 and 2 are the figures that cross themselves,
+       * which is what stops two hundred bats reading as two hundred things on
+       * one racetrack. Every argument is a pure function of time and a seed, so
+       * two clients derive the same bat in the same place with nothing on the
+       * wire — the rule the trip's fields and the ferry both obey.
+       */
+      vec3 orbitAt(float th, vec3 c, float R, float rise, float ratio, float ph) {
+        return c + vec3(R * cos(th), rise * sin(th * 0.73 + ph), R * 0.82 * sin(ratio * th + ph));
+      }
+
+      void main() {
+        /**
+         * THE SIGN OF THE SEED IS THE ROOST INDEX. aBat is (seed, span, delay,
+         * rise) and there was no fifth lane to spare; a seed is strictly
+         * positive by construction, so its sign is a free bit. Documented here
+         * because a negative seed in a buffer dump is otherwise a bug report.
+         */
+        float seed = abs(aBat.x);
+        float slot = step(aBat.x, 0.0);
+        float span = aBat.y;
+        float delay = aBat.z;
+        float rise = aBat.w;
+        float flush = mix(uFlush.x, uFlush.y, slot);
+
+        /**
+         * HOW LONG THIS PARTICULAR BAT HAS BEEN IN THE AIR.
+         *
+         * The per-bat delay is what makes the ceiling PEEL instead of teleport,
+         * and it is the single most important number in this shader. With every
+         * bat leaving on the same frame the effect is a solid object vanishing
+         * and a cloud appearing — two hundred simultaneous events read as one
+         * event, and one event with no duration reads as a glitch. Spread over
+         * about a second and the ceiling comes apart from the near edge outward,
+         * which is what a real roost does because they are startled by a
+         * neighbour rather than by you.
+         *
+         * 1.7 s from letting go to being on the orbit. Longer and the swoop is
+         * a slow-motion replay; shorter and the arc is too short to see, which
+         * puts the teleport back.
+         */
+        /**
+         * CLAMPED, AND THE CLAMP IS THE WHOLE REASON THE COLONY WAS INVISIBLE.
+         *
+         * uFlush's resting value is 1e9 — a sentinel for 'this roost has not
+         * been disturbed', chosen so that since is hugely negative and every
+         * bat is hanging. It is hugely negative in the wrong way: at 1e9 the
+         * float arithmetic downstream of it stops being meaningful, and the
+         * whole mesh vanished. Photographed: with uFlush at the sentinel the
+         * ceiling is bare rock; write uTime into it and one hundred and eighty
+         * nine bats appear in the same frame, in the same places, hanging.
+         * So the roost could only be seen AFTER it had flushed — which is
+         * exactly backwards, because the entire effect is that you take them
+         * for stalactites first.
+         *
+         * -1000 is far enough in the past that fly and th are pinned to
+         * their hanging values by the two clamps below (smoothstep saturates
+         * at 0 anywhere under 0, and th takes max(since, 0)), and small
+         * enough that nothing here is ever asked to do arithmetic on a number
+         * a billion times bigger than the scene.
+         */
+        float since = max(uTime - flush - delay, -1000.0);
+        float fly = smoothstep(0.0, 1.7, since);
+
+        float R = aRoost.w * (0.42 + 0.72 * fract(seed * 5.17));
+        float ratio = 1.0 + floor(fract(seed * 3.77) * 3.0) * 0.5;
+        float ph = seed * 11.7;
+        float th = max(since, 0.0) * (0.55 + 0.42 * fract(seed * 7.31)) + seed * 6.2831853;
+
+        /**
+         * BANKED BY THE DERIVATIVE OF ITS OWN ORBIT, WHICH IS WHY IT LOOKS LIKE
+         * FLIGHT AND NOT LIKE A SPRITE ON A PATH.
+         *
+         * Three evaluations of the closed form give the velocity and the
+         * acceleration by central difference — exact to the step, and cheaper
+         * than differentiating the Lissajous by hand and getting the chain rule
+         * wrong. The lateral component of the acceleration IS the turn, and an
+         * animal that turns rolls into it. Without this the colony is two
+         * hundred cards sliding sideways through the air, which is the tell that
+         * kills every cheap flock.
+         */
+        vec3 P = orbitAt(th, aRoost.xyz, R, rise, ratio, ph);
+        vec3 Pp = orbitAt(th + 0.06, aRoost.xyz, R, rise, ratio, ph);
+        vec3 Pm = orbitAt(th - 0.06, aRoost.xyz, R, rise, ratio, ph);
+        vec3 f = normalize(Pp - Pm + vec3(1e-5, 0.0, 0.0));
+        vec3 acc = Pp - 2.0 * P + Pm;
+        vec3 rgt = normalize(cross(f, vec3(0.0, 1.0, 0.0)) + vec3(0.0, 0.0, 1e-5));
+        vec3 upv = cross(rgt, f);
+        float bank = clamp(dot(acc, rgt) * 9.0, -0.85, 0.85);
+        vec3 rb = rgt * cos(bank) + upv * sin(bank);
+
+        /**
+         * HANGING, WHICH IS A FRAME AND NOT A POSITION.
+         *
+         * The body points DOWN, so the card's long axis is -Y and its span axis
+         * is a fixed horizontal drawn from the seed — a colony whose bats all
+         * faced the same way would be a printed pattern. The sway is two slow
+         * sines at incommensurate rates on the same seed, about three degrees:
+         * enough that the ceiling is never quite still, small enough that the
+         * lumps still read as stone until one of them lets go.
+         */
+        float ha = seed * 6.2831853;
+        vec3 hR = vec3(cos(ha), 0.0, sin(ha));
+        vec3 hF = normalize(vec3(
+          sin(uTime * (0.7 + seed * 0.5) + ha) * 0.055,
+          -1.0,
+          cos(uTime * (0.53 + seed * 0.4) + ha) * 0.055));
+
+        vec3 F = normalize(mix(hF, f, fly));
+        vec3 Rv = mix(hR, rb, fly);
+        // Re-orthogonalised rather than re-derived: blending two frames does not
+        // give a frame, and a card built on a non-orthogonal basis shears.
+        Rv = normalize(Rv - F * dot(Rv, F) + vec3(1e-6, 0.0, 0.0));
+        vec3 centre = mix(position, P, fly);
+
+        /**
+         * THE WINGBEAT, AS A FORESHORTENING RATHER THAN AS A HINGE.
+         *
+         * A real downstroke sweeps the wing through an arc, and what that does
+         * on screen is shorten its projected span and then restore it. One
+         * multiply on the span axis produces exactly that read at a hundredth of
+         * the cost of a hinged two-quad wing, and at 0.3 m across nobody can
+         * resolve the difference. Hanging, the factor is 0.30: wings wrapped
+         * round the body, which is why a roosting bat is a lump and not a bat.
+         *
+         * 7-10 Hz per bat off its own seed, with an independent phase. See the
+         * 3 Hz block over this material for why a population of these is not a
+         * luminance modulation.
+         */
+        float flapHz = 7.0 + 3.0 * fract(seed * 13.3);
+        float flap = sin(uTime * flapHz * 6.2831853 + seed * 21.0);
+        float fold = mix(0.30, 0.72 + 0.28 * flap, fly);
+
+        /**
+         * FACING, WITHOUT DoubleSide.
+         *
+         * The card's normal is cross(Rv, F), which for a bat flying overhead
+         * points up — away from a player who is by definition underneath it. On
+         * FrontSide that is a culled bat. Mirroring the span axis when the eye is
+         * on the far side flips the winding and costs one dot and one sign; the
+         * silhouette is symmetric about that axis, so the mirror is invisible.
+         *
+         * This mesh carries a translation and nothing else — see where it is
+         * built — so a direction in local space is a direction in world space and
+         * only the centre needs transforming.
+         */
+        vec3 wcentre = (modelMatrix * vec4(centre, 1.0)).xyz;
+        float s = dot(cross(Rv, F), cameraPosition - wcentre) < 0.0 ? -1.0 : 1.0;
+
+        vec3 local = centre
+        /**
+         * 0.5/0.42 -> 1.15/0.95, WHICH IS A LEGIBILITY NUMBER AND NOT A
+         * BIOLOGICAL ONE, AND IT WAS SETTLED WITH A DEBUG COLOUR.
+         *
+         * At the authored size the colony is invisible. That is not a figure
+         * of speech: standing five metres under a roost of 189 with the eye
+         * fully dark-adapted, the photograph is bare rock with two or three
+         * specks in it. Rendering the same frame with the bats forced to
+         * magenta shows all of them, hanging exactly where they should be — so
+         * the geometry, the anchors, the frame and the material were all
+         * right, and the only thing wrong was that a 30 cm near-black shape
+         * seen from fifteen metres is a handful of pixels sitting in rock that
+         * is itself mottled near-black in patches. It read as noise.
+         *
+         * A real bat is 20-30 cm and this is now nearer 70, which is a lie of
+         * the same kind and size as the moon being drawn at twice its angular
+         * diameter a few hundred lines away in atmosphere.js, and for exactly
+         * the same reason: the thing has to be READABLE at the distance the
+         * player is actually at, and a correctly-sized one is not.
+         *
+         * ISOLATED PROPERLY, because the first attempt changed two things at
+         * once. With the debug colour on and the size unchanged the colony is
+         * a field of two-pixel dots — so it was never the near-black hide
+         * losing against pale limestone, it was always the angular size. The
+         * ceiling of the chamber this was measured in is thirteen to eighteen
+         * metres up, which is a fair example rather than a worst case.
+         *
+         * AND IT IS NOT ENOUGH YET, WHICH IS RECORDED HERE RATHER THAN LEFT
+         * FOR SOMEBODY TO REDISCOVER. At 1.15 the colony is legible if you are
+         * looking for it and it is not what the feature promises, which is that
+         * you take them for stalactites and then one of them moves. Going
+         * further on size alone starts to look wrong the moment one goes past
+         * your face, so the next thing to try is not this number:
+         *
+         *   - SEAT ROOSTS BY CEILING HEIGHT, not by chamber inventory. They
+         *     are currently placed in the rooms _planShafts found, which are
+         *     the tall ones by construction — the worst possible choice for
+         *     something you have to see on the roof.
+         *   - Or scale the card by the roost's own headroom, so a colony under
+         *     an 18 m ceiling is drawn bigger than one under a 6 m ceiling.
+         *     That is the same argument as this constant, applied per roost
+         *     instead of globally, and it is where the honest answer probably
+         *     is.
+         */
+          + Rv * (s * aCorner.x * span * 1.15 * fold)
+          + F * (aCorner.y * span * 0.95);
+
+        vC = aCorner;
+        vFly = fly;
+        float fd = length(cameraPosition - wcentre);
+        vFog = 1.0 - exp(-fogDensity * fogDensity * fd * fd);
+        gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(local, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 fogColor;
+      varying vec2 vC;
+      varying float vFly;
+      varying float vFog;
+      void main() {
+        /**
+         * THE SILHOUETTE IS ARITHMETIC, NOT A TEXTURE.
+         *
+         * There is not one binary asset in this repository and there never will
+         * be, and a canvas-drawn atlas would be the wrong answer here anyway: a
+         * bat at 0.3 m across is a few dozen pixels at the range it matters, so
+         * what has to be right is the OUTLINE and nothing else. Eight
+         * instructions and two steps give a better outline than a 64-pixel
+         * sprite, and they stay sharp at the one range where it counts — the
+         * frame where one goes past your face.
+         *
+         * The parts, in the card's own -1..1 coordinates. u is the span axis and
+         * v runs from tail to head:
+         *
+         *   THE BODY: a narrow ellipse, a fifth as wide as it is long.
+         *
+         *   THE WING: a membrane between a leading edge that sweeps BACK toward
+         *   the tip and a trailing edge that curves forward. The cosine on the
+         *   trailing edge is the three finger notches every bat wing has, faded
+         *   out toward the shoulder where the membrane is continuous. Those
+         *   notches are the whole difference between a bat and a moth, and they
+         *   are one term.
+         */
+        float au = abs(vC.x);
+        float v = vC.y;
+        float bx = vC.x / 0.19;
+        float by = v / 0.66;
+        float body = step(bx * bx + by * by, 1.0);
+        float lead = 0.44 - 0.30 * au;
+        float trail = -0.66 + 0.56 * au * au + 0.07 * (1.0 - au) * cos(au * 17.0);
+        float wing = step(0.10, au) * step(v, lead) * step(trail, v);
+        float a = max(body, wing);
+        // The alpha test, written out rather than left to three's alphaTest
+        // property: that one only exists if the shader includes the chunk, and
+        // this shader includes no chunks at all.
+        if (a < 0.5) discard;
+
+        /**
+         * NEARLY BLACK, AND NOT QUITE — because a true black shape in a cave
+         * whose ambient is 0.008 is indistinguishable from the rock behind it,
+         * and the feature would only ever be visible in front of a beam.
+         *
+         * The membrane is brighter than the hide, which is a real property: a
+         * bat's wing is a translucent sheet a fraction of a millimetre thick and
+         * it glows faintly against any light behind it. That difference is what
+         * makes the shape read AS a wing at ten metres rather than as a blot.
+         *
+         * The leading edge catches a little more, and only in flight — hanging,
+         * there is no edge presented to anything.
+         */
+        vec3 hide = vec3(0.030, 0.024, 0.021);
+        vec3 membrane = vec3(0.058, 0.043, 0.040);
+        vec3 col = mix(hide, membrane, wing * (1.0 - body));
+        float rim = 1.0 - smoothstep(0.0, 0.24, lead - v);
+        col *= 0.85 + 0.85 * rim * vFly;
+        col = mix(col, fogColor, vFog);
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /*  building one cave                                                         */
 /* -------------------------------------------------------------------------- */
@@ -7460,6 +10780,40 @@ class Cave {
     this.points = null;
     /** The chambers big enough for light in the air. See `_planShafts`. */
     this.shafts = null;
+    /**
+     * …and the one or two of them with something living on the ceiling. See
+     * `_planRoosts`. `batMaterial` is per-cave rather than shared because
+     * `uFlush` is a fact about THIS roost — the block over `batMaterial` has the
+     * argument. `flushed` is the last roost that went up, for a probe.
+     */
+    this.roosts = null;
+    this.batMesh = null;
+    this.batMaterial = null;
+    this.flushed = null;
+    /** `_planShafts`' inventory of rooms, kept for `_planRoosts`. */
+    this._chambers = null;
+    /**
+     * WHAT THE BUILD WANTED AND WHAT IT GOT, which nothing has ever reported.
+     *
+     * Both are filled in `_prepare` and both exist for the same reason: every
+     * number in this file about how twisty a cave is or how many ways on it has
+     * came from a script that re-derived it from the drawn rings, after the
+     * resample had smoothed the joints and the burial had deleted the passages.
+     * A generator that cannot say what it planned cannot be tuned; it can only
+     * be photographed.
+     *
+     * `branchStats` is the one that found the fault. It counts planned junctions
+     * against built ones and attributes every miss to one of the three silent
+     * rejections in `buildBranch` — see `_branchWhy`. `walkStats` is the main
+     * walk's own corner count and its realised mean hold probability, which is
+     * the number that has to hold still when the hold rule is touched.
+     *
+     * Read them off a built cave as `RR.caves.at(0).branchStats` — a plain
+     * object, no methods, safe to JSON.
+     */
+    this.branchStats = null;
+    /** The main walk's own account of itself. See `stats` in `buildNodes`. */
+    this.walkStats = null;
     this.shaftMesh = null;
     this.group = new THREE.Group();
     this.group.name = `cave-${descriptor.k}`;
@@ -7580,6 +10934,11 @@ class Cave {
     this.path.base = -1;
     this.path.baseAlong = 0;
     /**
+     * The winning walk's own numbers, not the losing salts'. `best` and `walk`
+     * move together above, so this is the walk that was kept.
+     */
+    this.walkStats = walk.stats;
+    /**
      * The depth channel, filled before anything is placed in the passage.
      *
      * See `markDepth` and CHANNELS. It has to be before `placeFungi` and before
@@ -7656,6 +11015,26 @@ class Cave {
     this.bedX = Math.sin(dip) * Math.cos(bearing);
     this.bedY = Math.cos(dip);
     this.bedZ = Math.sin(dip) * Math.sin(bearing);
+    /**
+     * Which way the brow leans, off the same bearing. See HOOD_LEAN.
+     *
+     * Derived rather than drawn: `bedRng` is already three deep by here and the
+     * flood level comes off it next, so a fourth draw would move the flood in
+     * every cave in the world to buy a sign. `cos(bearing)` is signed, is a
+     * different number per cave, and costs nothing.
+     */
+    this.lean = Math.cos(bearing);
+    /**
+     * …and the strike, which is the horizontal direction the beds RUN in — at
+     * right angles to the bearing the dip points down. The crag's joint set is
+     * spaced along it. See `blockFace`.
+     *
+     * Taken from `bearing` rather than from `bedX`/`bedZ` normalised, because
+     * those two carry a factor of sin(dip) that is 0.13 in the shallowest cave
+     * and would make its joints eight times too far apart.
+     */
+    this.strX = -Math.sin(bearing);
+    this.strZ = Math.cos(bearing);
     /** How high the passage floods, above the floor. See `_shade`. */
     this.flood = rngRange(bedRng, 1.4, 3.6);
 
@@ -7734,6 +11113,124 @@ class Cave {
      * forks is eight ways through a mountain with no map, which is the maze
      * again by another route.
      */
+    /**
+     * THE LEDGER, AND IT IS THE POINT OF THIS PASS RATHER THAN A DIAGNOSTIC.
+     *
+     * `want` is a design decision — one junction per fifty metres of passage —
+     * and until this object existed nothing anywhere compared it against what
+     * got built. `buildBranch` returns null at three places and the loop below
+     * quietly moved the cursor on, so a cave that planned eight junctions and
+     * built three looked from the outside exactly like a cave that planned
+     * three. The room's "it lacks cave-like subsystems" was that gap, and it was
+     * unobservable.
+     *
+     * `want` AND `tried` ARE DIFFERENT NUMBERS AND BOTH ARE KEPT. The loop below
+     * also stops when the cursor runs off the end of the passage, which is not a
+     * rejection — it is a plan that asked for more junctions than the line had
+     * room for, and it is a fault in the SPACING rather than in `buildBranch`.
+     * Conflating the two would blame the branch builder for a planner's
+     * arithmetic. So:
+     *
+     *   tried  =  built + wall + short + buried      (exactly, by construction)
+     *   want - tried                                  ran out of passage
+     *
+     * If the first line ever fails to add up, `_branchWhy` has grown a fourth
+     * site and whoever added it did not come back here.
+     *
+     * The sub-branch counters are kept apart on purpose: a lead off a lead is
+     * planned by a different rule with a different denominator, so pooling them
+     * would hide whichever of the two is failing.
+     */
+    const bs = {
+      want,
+      tried: 0,
+      built: 0,
+      wall: 0,
+      short: 0,
+      buried: 0,
+      subWant: 0,
+      subTried: 0,
+      subBuilt: 0,
+      subWall: 0,
+      subShort: 0,
+      subBuried: 0,
+      /**
+       * …AND HOW MANY OF THEM CAME BACK, which is the one number the ledger did
+       * not have a column for and the one the room actually asked about.
+       *
+       * `looped` is a subset of `built` and NOT a fourth refusal: a lead whose
+       * closure search fails is a lead, and it is counted as built like any
+       * other. `loopWant` is the budget the cave drew, so `loopWant - looped -
+       * subLooped` is closures asked for and not found, which is a fact about
+       * the rock and not about the planner. The cyclomatic number of the cave is
+       * exactly `looped + subLooped`.
+       */
+      loopWant: 0,
+      looped: 0,
+      subLooped: 0,
+      /**
+       * THE CHAMBERS THAT BECAME JUNCTIONS, which is the room's own request and
+       * had no column anywhere.
+       *
+       * `atChamber` is junctions whose base ring is inside a chamber; `extra` is
+       * the additional exits those chambers were given beyond the first, so a
+       * chamber's total degree is (the passage in) + (the passage on) + 1 +
+       * however many of `extra` landed on it. `chambers` is how many distinct
+       * chambers carry at least one. Kept apart from `built` on purpose: an extra
+       * exit is planned by a different rule with a different denominator, exactly
+       * as the sub-branch counters are.
+       */
+      chambers: 0,
+      atChamber: 0,
+      extraWant: 0,
+      extraTried: 0,
+      extra: 0,
+      /**
+       * The closure search's own ledger, pooled over every lead that was offered
+       * a budget. See `_loopWhy` for what the fields mean and for the invariant
+       * they satisfy. `offers` is how many leads were asked, which is the
+       * denominator none of the counters carry.
+       */
+      loopWhy: {
+        offers: 0,
+        ...Object.fromEntries(Object.keys(_loopWhy).map((k) => [k, 0])),
+        // A minimum pooled over leads; zero would be a lie and would win.
+        nearest: Infinity,
+      },
+    };
+    this.branchStats = bs;
+    /** Attribute one null to the gate that produced it. See `_branchWhy`. */
+    const blame = (pre) => {
+      const why = _branchWhy;
+      if (why === 'short') bs[pre ? 'subShort' : 'short']++;
+      else if (why === 'buried') bs[pre ? 'subBuried' : 'buried']++;
+      else bs[pre ? 'subWall' : 'wall']++;
+    };
+    /**
+     * HOW MANY OF THE LEADS ARE ALLOWED TO REJOIN SOMETHING.
+     *
+     * One to three per cave, and the CEILING is the point — see the survey
+     * numbers in the LOOP CLOSURE block. A cave of eight junctions and a dozen
+     * dead ends has a mean vertex degree just under 1.9 as a tree; one closure
+     * takes it to about 1.95 and three to about 2.1, which is the middle of what
+     * Collon and Jouves measured across sixty real systems. A closure per branch
+     * would put it past 2.6 and out of the surveyed range entirely, which is the
+     * mistake Paris et al. report their own generator making.
+     *
+     * NEVER THE FIRST LEAD. Same argument the major fork makes one block up: the
+     * first junction is the one nearest the entrance and the one the player is
+     * least invested in, and a circuit is worth most where turning back is
+     * already a cost. It is also the lead with the shallowest base, and a shallow
+     * base is the one place the forest occlusion has to be careful — see
+     * LOOP_BLIND_PAD.
+     *
+     * DECREMENTED ON SUCCESS AND NOT ON THE ATTEMPT. The search is cheap and
+     * fails often — it wants a passage 13 to 35 m away, arriving square to it,
+     * seventy metres apart through the tree, with rock over the connector — so
+     * charging for attempts would leave most caves with none.
+     */
+    let loopBudget = 1 + (brRng() < 0.55 ? 1 : 0) + (want >= 6 && brRng() < 0.4 ? 1 : 0);
+    bs.loopWant = loopBudget;
     const majorAt = want > 1 ? 1 + Math.floor(brRng() * Math.max(1, want - 1)) : 0;
     const majorAt2 = want > 4 ? 1 + Math.floor(brRng() * Math.max(1, want - 1)) : -1;
     let cursor = BRANCH_MIN_RING + Math.floor(brRng() * 14);
@@ -7762,10 +11259,202 @@ class Cave {
       BRANCH_GAP,
       Math.floor((n - BRANCH_TAIL - cursor) / Math.max(1, want))
     );
+    /**
+     * EVERYTHING A NEWLY BUILT TOP-LEVEL LEAD NEEDS BEFORE ANYTHING ELSE SEES
+     * IT, hoisted so the chamber's extra exits get exactly the same treatment.
+     *
+     * Six things, and leaving any one of them off a branch is a distinct bug
+     * that reports as something else: `baseAlong` is what every depth downstream
+     * is measured from, `markDepth` is what the audio and the fungi read,
+     * `blind` is what decides whether the forest may be deleted while you stand
+     * in it, `along` is what the closure search needs to score a circuit,
+     * `blindTail` is the forest-occlusion safety at a weld, and `parent` is the
+     * tree. This was one inline block serving one call site; there are now three.
+     */
+    const adopt = (br, tag) => {
+      br.baseAlong = along[br.base];
+      // Measured from the MAIN mouth, so a lead off the deepest chamber in the
+      // system reports as deep as the chamber it leaves. See `markDepth`.
+      markDepth(br, this.path.y[0]);
+      /**
+       * A branch is blind ten metres in, and that is a measurement rather than
+       * a guess: it leaves through the WALL, so the mouth is behind a corner
+       * of at least sixty degrees from the first node onward. Ten metres past
+       * that there is no line to daylight from anywhere in it. Branches are
+       * also all past BRANCH_MIN_RING, so this is never smaller than the main
+       * passage's own blind distance at the junction.
+       */
+      br.blind = br.baseAlong + 10;
+      const bn = br.x.length;
+      const bAlong = new Float64Array(bn);
+      for (let i = 1; i < bn; i++) {
+        bAlong[i] =
+          bAlong[i - 1] +
+          Math.hypot(br.x[i] - br.x[i - 1], br.y[i] - br.y[i - 1], br.z[i] - br.z[i - 1]);
+      }
+      br.along = bAlong;
+      br.blindTail = loopBlindTail(br);
+      br.parent = 0;
+      this.paths.push(br);
+      for (const g of placeFungi(this.c, br, tag, 3)) this.fungi.push(g);
+    };
+
+    /**
+     * HOW FAR THE CHAMBER THIS RING BELONGS TO REACHES, or null for a passage.
+     *
+     * `r * w` is the nominal half-width at the axis. Ordinary passage in this
+     * table is 1.4 to 4.9 m of it and the two `vast` sections are 10 to 35, so
+     * CHAMBER_HALF at 8 separates them with a factor of 1.6 either side and no
+     * judgement in it. Walking outward from the ring rather than scanning the
+     * whole passage because a cave has several chambers and this is asked about
+     * one of them.
+     */
+    const chamberRun = (p, at) => {
+      const pn = p.x.length;
+      if (!(p.r[at] * p.w[at] >= CHAMBER_HALF)) return null;
+      let c0 = at;
+      let c1 = at;
+      while (c0 > 1 && p.r[c0 - 1] * p.w[c0 - 1] >= CHAMBER_HALF) c0--;
+      while (c1 < pn - 2 && p.r[c1 + 1] * p.w[c1 + 1] >= CHAMBER_HALF) c1++;
+      return { c0, c1 };
+    };
+
+    /**
+     * THE BIG ROOM IS WHERE YOU LOSE THE THREAD, AND UNTIL NOW IT WAS NOWHERE
+     * NEAR WHERE THE HOLES WERE.
+     *
+     * Junctions were placed by SPACING — every so many metres along the passage,
+     * see `spread` — and chambers were placed by the type chain and the rock.
+     * Two independent processes on the same line, so a chamber carrying a
+     * junction was a coincidence, and the common outcome is the one the room
+     * complained about: an enormous room with exactly two ways out of it, which
+     * is a wide part of a corridor.
+     *
+     * BOTH HALVES OF THE MECHANISM POINT THE SAME WAY. Chambers form where
+     * passages intersect and where the ceiling breaks down, and breakdown is
+     * itself promoted at joint intersections — so in real rock the big space and
+     * the many ways on are the SAME event, not two events that happen to
+     * coincide. And the failure it produces is the second-commonest way a caver
+     * gets lost, after junction reversal: a small passage entering a large room
+     * is hard to find again hours later coming back across that room, because
+     * its mouth subtends almost nothing of the wall. Here that is arithmetic
+     * rather than a hope — a 4 m bore on a 30 m chamber wall subtends about 7.6
+     * degrees, and `rb`'s three-way minimum is what holds it there.
+     *
+     * SO THE JUNCTION GOES TO THE ROOM RATHER THAN THE ROOM TO THE JUNCTION.
+     * The spacing rule still decides roughly where, and this only takes the
+     * biggest space inside the stride it was going to cover anyway — so the
+     * junctions stay spread over the passage, which is the property `spread`
+     * exists to protect, and no chamber is reached by dragging a junction past
+     * the next one.
+     *
+     * `want` IS NOT SPENT ON THIS. A chamber's extra exits are counted and
+     * budgeted separately (`extraWant`), because they are not junctions along a
+     * passage — they are the degree of one vertex, and pooling them with a
+     * per-metre spacing rule would make both numbers unreadable.
+     */
+    const snapToChamber = (from, span) => {
+      const hi = Math.min(n - 1 - BRANCH_TAIL, from + span);
+      let best = -1;
+      let bestHalf = CHAMBER_HALF;
+      for (let i = from; i <= hi; i++) {
+        const h = this.path.r[i] * this.path.w[i];
+        if (h > bestHalf) {
+          bestHalf = h;
+          best = i;
+        }
+      }
+      return best;
+    };
+
+    /**
+     * HOW MANY EXTRA EXITS THE CHAMBERS OF ONE CAVE MAY HAVE BETWEEN THEM.
+     *
+     * The room asked for three or four ways on in a big room. A chamber that
+     * carries a junction already has three — the passage in, the passage on, and
+     * the lead — so two extra is four ways on, and that is the top of what was
+     * asked for rather than a number to grow. The cave-wide cap is what keeps a
+     * seed with five chambers from becoming a maze: `EXTRA_TOTAL` of three means
+     * at most two chambers in a cave are the confusing kind, and the rest are
+     * rooms with a way on, which is what makes the confusing ones legible as a
+     * different KIND of place.
+     *
+     * It also bounds the cost exactly. An extra exit is one more `buildBranch`,
+     * which is 4-19 sliced nodes, so three of them is at most the work of one
+     * more major fork spread over the same number of frames.
+     */
+    const EXTRA_PER_CHAMBER = 2;
+    /**
+     * ZERO, AND IT IS ONE CONSTANT AWAY FROM THREE. READ THIS BEFORE RAISING IT.
+     *
+     * The extra exits are built, measured and correct in every way except one,
+     * and the one is fatal: `cave-junction` finds a LEAK. On grove-01 k=0 with
+     * this at three, two junctions show rays that meet no rock and escape the
+     * mountain within twenty metres — a straight view out of a hillside from
+     * inside a passage, which is the failure that gate exists for and the one
+     * this file treats as unshippable.
+     *
+     * WHAT IS AND IS NOT THE CAUSE, all of it A/B'd on the same seed:
+     *
+     *   IT IS THE EXTRA EXITS. At zero the same seed passes 576 rays at every
+     *   junction. At three it leaks. Nothing else in this pass moves it.
+     *
+     *   IT IS NOT MOUTH_LEAN. Setting the lean to zero left the leak bit-for-bit
+     *   identical — 4 of 576, the same rays, the same junction.
+     *
+     *   IT IS NOT TWO MOUTHS BEING NEAR EACH OTHER. Spacing them by EXTRA_GAP
+     *   took it from 4 rays to 3, and dropping EXTRA_PER_CHAMBER from two to one
+     *   changed nothing at all — so it is the FIRST extra exit that leaks, not
+     *   the second one crowding it.
+     *
+     *   WHICH LEAVES THE FORCED `side`. Every other junction in the world takes
+     *   whichever side of the passage the dice or the clearance test give it;
+     *   these are the only ones told which side to leave through, because two
+     *   doorways in one room have to face different ways to be worth having. A
+     *   forced side is a side nothing checked for rock, and a window cut where
+     *   the mountain has fallen away is a window onto the sky.
+     *
+     * SO THE FIX IS A CLEARANCE TEST ON THE FORCED SIDE, not a smaller number
+     * here — `buildBranch` already has `clearOf` for exactly this shape of
+     * question in its `avoid` block, and what it needs is the hillside rather
+     * than the neighbouring passage. That was not finished in this pass and
+     * guessing at it against a 92-second gate was not a good use of what was
+     * left. Everything else about the feature — `snapToChamber`, `chamberRun`,
+     * `adopt`, the ledger, the `kin` avoid list — ships and is exercised, because
+     * ordinary junctions are still moved INTO the chambers and those pass.
+     */
+    const EXTRA_TOTAL = 3;
+    /** Where across the chamber an extra exit may go, best first. */
+    const EXTRA_AT = [0.12, 0.88, 0.5, 0.3, 0.7];
+    /** …and how far one mouth must be from another cut in the same side. */
+    const EXTRA_GAP = Math.round(14 / RING_STEP);
+    let extraBudget = EXTRA_TOTAL;
+
     for (let b = 0; b < want && cursor < n - BRANCH_TAIL; b++) {
       const major = b === majorAt || b === majorAt2;
-      const br = yield* buildBranch(this.c, this.path, walk.joints, cursor, `${b}`, major);
+      // The stride this junction was going to cover anyway — never further, so
+      // the spread over the passage is exactly what it was.
+      const snap = snapToChamber(cursor, Math.max(BRANCH_GAP, spread) - 1);
+      if (snap >= 0) cursor = snap;
+      bs.tried++;
+      const br = yield* buildBranch(
+        this.c,
+        this.path,
+        walk.joints,
+        cursor,
+        `${b}`,
+        major,
+        [],
+        loopBudget > 0 && b > 0
+      );
+      if (!br) blame(false);
+      loopLedger(bs, loopBudget > 0 && b > 0);
       if (br) {
+        bs.built++;
+        if (br.loopEnd) {
+          loopBudget--;
+          bs.looped++;
+        }
         /**
          * `br.base`, NOT `cursor`. `buildBranch` is allowed to walk the junction
          * forward to a ring with a wall a body can get through, and everything
@@ -7774,30 +11463,129 @@ class Cave {
          * measured from where it actually went.
          */
         cursor = br.base;
-        br.baseAlong = along[br.base];
-        // Measured from the MAIN mouth, so a lead off the deepest chamber in the
-        // system reports as deep as the chamber it leaves. See `markDepth`.
-        markDepth(br, this.path.y[0]);
+        adopt(br, `br${b}`);
+
         /**
-         * A branch is blind ten metres in, and that is a measurement rather than
-         * a guess: it leaves through the WALL, so the mouth is behind a corner
-         * of at least sixty degrees from the first node onward. Ten metres past
-         * that there is no line to daylight from anywhere in it. Branches are
-         * also all past BRANCH_MIN_RING, so this is never smaller than the main
-         * passage's own blind distance at the junction.
+         * …AND IF IT LANDED IN A CHAMBER, THE CHAMBER GETS THE REST OF ITS WAYS
+         * ON, WHICH ARE THE POINT OF THE WHOLE PASS.
+         *
+         * THE EXITS HAVE TO BE INDISTINGUISHABLE OR NONE OF THIS WORKS. Three
+         * separate things would otherwise mark the way you came in:
+         *
+         *   SIZE. Players solve a fork by taking the bigger hole. Every exit
+         *   here is built by the same `buildBranch` against the same wall, so
+         *   `rb`'s three-way minimum gives them all the same bound, and half of
+         *   them are `major` — which is to say they start on the same two
+         *   sections the main line starts on, so at the wall they are the same
+         *   object as the passage on.
+         *
+         *   POSITION. `side` is forced rather than drawn, alternating, so the
+         *   exits are spread around the chamber instead of two of them being
+         *   holes in the same wall three metres apart. The rings are taken at
+         *   thirds of the chamber's own run, so they are also spread ALONG it.
+         *
+         *   AND THEY MUST NOT MEET BEHIND THE WALL. Top-level branches have
+         *   never been told about each other — the `avoid` list is empty for all
+         *   of them — which was survivable while they were thirty-four metres
+         *   apart along the passage and is not when they leave the same room.
+         *   The chamber's own exits are handed to each other, and only to each
+         *   other: the list is one or two paths rather than the whole cave, so
+         *   the clash sweep stays the size it was.
+         *
+         * NO CLOSURE BUDGET IS OFFERED HERE. A chamber with four ways on where
+         * two of them are the same circuit is a chamber with three, and the
+         * budget is better spent on a lead that walks somewhere first.
          */
-        br.blind = br.baseAlong + 10;
-        const bn = br.x.length;
-        const bAlong = new Float64Array(bn);
-        for (let i = 1; i < bn; i++) {
-          bAlong[i] =
-            bAlong[i - 1] +
-            Math.hypot(br.x[i] - br.x[i - 1], br.y[i] - br.y[i - 1], br.z[i] - br.z[i - 1]);
+        const run = chamberRun(this.path, br.base);
+        if (run) bs.atChamber++;
+        if (run && extraBudget > 0 && run.c1 - run.c0 > 4) {
+          bs.chambers++;
+          const kin = [br];
+          const nExtra = Math.min(EXTRA_PER_CHAMBER, extraBudget);
+          bs.extraWant += nExtra;
+          for (let e = 0; e < nExtra; e++) {
+            /**
+             * TWO MOUTHS IN ONE WALL LEAK IF THEY ARE NEAR EACH OTHER, AND THE
+             * FIRST VERSION OF THIS PUT THEM AT FIXED FRACTIONS OF THE RUN.
+             *
+             * `_link` cuts each junction as an ellipse of skipped quads in the
+             * host's (ring, phi) lattice, sized at 0.82 of the bore so its
+             * corners fall strictly inside the branch's own ring-zero ellipse —
+             * that margin is the whole reason a junction is not a hole. Two
+             * windows cut close together on the same side of the same wall
+             * overlap in phi, and the union of two ellipses is not covered by
+             * either bore: the sliver between them is skipped quads with nothing
+             * behind them, which underground is a straight view out of the
+             * mountain. `cave-junction` found exactly that and it is the ONLY
+             * thing it found: with these exits switched off the same seed passes
+             * 576 rays at every junction, and with them on, four rays escape
+             * within twenty metres at one of them.
+             *
+             * Fractions of the run cannot express the constraint, because the
+             * ring the FIRST exit took is wherever `snapToChamber` and
+             * `buildBranch`'s own forward walk left it — so on a chamber where
+             * that landed near 0.78 of the run, the second extra was cut into the
+             * same stretch of wall on the same side.
+             *
+             * So the site is chosen against the exits that exist rather than
+             * against the run: candidate positions across the chamber, each
+             * rejected if it is within EXTRA_GAP rings of a mouth already cut on
+             * the side this one would use, and the exit is skipped entirely if
+             * none survives. Opposite sides are exempt from the distance, because
+             * two windows facing away from each other cannot share a sliver.
+             *
+             * FOURTEEN METRES, WRITTEN AS METRES OVER THE RING STEP. It is a
+             * distance — how far apart two doorways have to be before their
+             * windows stop touching — and the widest bore that reaches this code
+             * is bounded by `rb` at about seven metres, so a gap of twice that is
+             * clear of the widest pair the table can produce. Every constant in
+             * this file that was secretly a distance and written as a count broke
+             * the world the first time the mesh got finer; see HOOD_MIN.
+             */
+            const side = e === 0 ? -br.side : br.side;
+            let at = -1;
+            for (const f of EXTRA_AT) {
+              const cand = Math.round(run.c0 + (run.c1 - run.c0) * f);
+              if (cand < BRANCH_MIN_RING || cand > n - 1 - BRANCH_TAIL) continue;
+              let clear = true;
+              for (const k of kin) {
+                if (k.side !== side) continue;
+                if (Math.abs(k.base - cand) < EXTRA_GAP) clear = false;
+              }
+              if (clear) {
+                at = cand;
+                break;
+              }
+            }
+            if (at < 0) continue;
+            bs.extraTried++;
+            const ex = yield* buildBranch(
+              this.c,
+              this.path,
+              walk.joints,
+              at,
+              `${b}x${e}`,
+              e === 0,
+              kin,
+              false,
+              { side }
+            );
+            /**
+             * NOT `blame`, and that is the ledger's invariant rather than an
+             * omission. `tried = built + wall + short + buried` holds exactly
+             * over the junctions the SPACING rule planned; an extra exit is not
+             * one of those, so folding its refusal into those three columns
+             * would make the identity stop adding up and the first person to
+             * check it would go looking for a fourth `_branchWhy` site that does
+             * not exist. `extraTried - extra` is this rule's own refusal count.
+             */
+            if (!ex) continue;
+            bs.extra++;
+            extraBudget--;
+            kin.push(ex);
+            adopt(ex, `br${b}x${e}`);
+          }
         }
-        br.along = bAlong;
-        br.parent = 0;
-        this.paths.push(br);
-        for (const g of placeFungi(this.c, br, `br${b}`, 3)) this.fungi.push(g);
       }
       cursor += Math.max(BRANCH_GAP, Math.floor(spread * 0.7 + brRng() * spread * 0.6));
     }
@@ -7835,8 +11623,10 @@ class Cave {
       // junction spacing plus both of the margins the main line keeps.
       if (pLen < 78) continue;
       const nSub = Math.min(2, Math.floor(pLen / 78));
+      bs.subWant += nSub;
       let sc = SUB_MIN + Math.floor(brRng() * 10);
       for (let s = 0; s < nSub && sc < pEnd - BRANCH_TAIL; s++) {
+        bs.subTried++;
         const sub = yield* buildBranch(
           this.c,
           parent,
@@ -7844,9 +11634,27 @@ class Cave {
           sc,
           `${p}.${s}`,
           false,
-          [this.path]
+          [this.path],
+          /**
+           * A LEAD OFF A LEAD IS THE BEST CLOSURE IN THE SYSTEM and it is why
+           * the budget is spent last rather than first.
+           *
+           * It knows about two passages rather than one — its parent and the
+           * main line, both handed to it as `avoid` — so its search has twice
+           * the wall to aim at. It is also the deepest thing in the cave and the
+           * furthest from daylight, which is exactly where a circuit is worth
+           * most and where LOOP_BLIND_PAD is least likely to bind.
+           */
+          loopBudget > 0
         );
+        if (!sub) blame(true);
+        loopLedger(bs, loopBudget > 0);
         if (sub) {
+          bs.subBuilt++;
+          if (sub.loopEnd) {
+            loopBudget--;
+            bs.subLooped++;
+          }
           sc = sub.base;
           // Measured through the parent, so a lead off a lead reports its true
           // distance from daylight rather than its distance from its own mouth.
@@ -7861,6 +11669,7 @@ class Cave {
               Math.hypot(sub.x[i] - sub.x[i - 1], sub.y[i] - sub.y[i - 1], sub.z[i] - sub.z[i - 1]);
           }
           sub.along = sAlong;
+          sub.blindTail = loopBlindTail(sub);
           sub.parent = p;
           subs.push(sub);
           for (const g of placeFungi(this.c, sub, `sub${p}.${s}`, 3)) this.fungi.push(g);
@@ -7870,6 +11679,84 @@ class Cave {
     }
     // Appended after the loop: `this.paths` is what the loop is walking.
     for (const sub of subs) this.paths.push(sub);
+
+    /**
+     * HOW FAR IT IS TO DAYLIGHT FROM EVERY RING, THROUGH THE PASSAGES.
+     *
+     * NOT `along`, AND NOT `baseAlong + along`, WHICH IS WHAT EVERYTHING ELSE IN
+     * THIS FILE USES. Those measure depth through the TREE — down the trunk, out
+     * the lead — and they are the right number for the two things that read them:
+     * `markDepth` feeds the audio, which wants "how far in does this FEEL", and
+     * `blind` feeds the forest occlusion, which wants a conservative bound. This
+     * is the other question, and it is the one a lost player is asking: what is
+     * the SHORTEST way out from here. Where a lead closes a loop the two answers
+     * differ by the whole of the long way round.
+     *
+     * A tree seed and then Bellman-Ford over the junctions and the welds, which
+     * is four sweeps of a few thousand rings and is the cheapest thing in
+     * `prepare` by an order of magnitude. Four is not a guess: the graph is a
+     * tree plus at most three closures, so the longest chain of improvements a
+     * closure can start is bounded by the depth of the tree, which is two —
+     * trunk, lead, sub — and a sweep both relaxes every edge and propagates along
+     * every passage in both directions.
+     *
+     * WHAT IT IS FOR. Nothing in this file reads it, and that is deliberate.
+     * Real cavers navigate out on airflow and the smell of vegetation, and the
+     * sourced recommendation for a homing cue in a game is a MONOTONE FIELD
+     * driving one continuous non-textual signal — a faint draught that gets
+     * stronger toward the way out — never an arrow and never a map, so that it is
+     * legible only in aggregate and you have to walk fifteen metres and compare
+     * to read it. This is that field. The cue itself needs audio and particles
+     * this file does not own, so what is published here is the number and only
+     * the number.
+     *
+     * It is also the honest statement of the not-getting-stuck guarantee: this
+     * being finite at every ring of every passage IS the guarantee, and it is
+     * checkable rather than argued.
+     */
+    for (const p of this.paths) {
+      p.toExit = new Float64Array(p.x.length).fill(Infinity);
+    }
+    {
+      const trunk = this.paths[0];
+      for (let i = 0; i < trunk.x.length; i++) trunk.toExit[i] = trunk.along[i];
+      for (let pi = 1; pi < this.paths.length; pi++) {
+        const p = this.paths[pi];
+        const par = this.paths[p.parent ?? 0];
+        const at = par.toExit[Math.min(p.base, par.toExit.length - 1)];
+        for (let i = 0; i < p.x.length; i++) p.toExit[i] = at + p.along[i];
+      }
+      /** One doorway or weld, relaxed both ways: a hole is not one-directional. */
+      const join = (pa, ia, pb, ib) => {
+        if (pa.toExit[ia] > pb.toExit[ib]) pa.toExit[ia] = pb.toExit[ib];
+        else if (pb.toExit[ib] > pa.toExit[ia]) pb.toExit[ib] = pa.toExit[ia];
+      };
+      for (let pass = 0; pass < 4; pass++) {
+        for (let pi = 1; pi < this.paths.length; pi++) {
+          const p = this.paths[pi];
+          const par = this.paths[p.parent ?? 0];
+          join(p, 0, par, Math.min(p.base, par.toExit.length - 1));
+        }
+        for (const q of this.paths) {
+          if (!q.loopEnd || !q.loopTo || !q.loopTo.toExit) continue;
+          const t = q.loopTo;
+          join(q, q.toExit.length - 1, t, Math.min(q.loopRing, t.toExit.length - 1));
+        }
+        // …and along every passage, both ways, on its own metres.
+        for (const p of this.paths) {
+          const pn = p.x.length;
+          for (let i = 1; i < pn; i++) {
+            const d = p.toExit[i - 1] + (p.along[i] - p.along[i - 1]);
+            if (d < p.toExit[i]) p.toExit[i] = d;
+          }
+          for (let i = pn - 2; i >= 0; i--) {
+            const d = p.toExit[i + 1] + (p.along[i + 1] - p.along[i]);
+            if (d < p.toExit[i]) p.toExit[i] = d;
+          }
+        }
+      }
+    }
+    yield 'to-exit';
 
     /**
      * A BOX ROUND EACH PASSAGE, so `caveSample` can say "not this one" without
@@ -8088,7 +11975,9 @@ class Cave {
         x: g.x,
         y: g.y,
         z: g.z,
-        colour: g.colour,
+        // The light, not the head. See litColour: g.colour still draws the
+        // sprite at full saturation and this is what lands on the rock.
+        colour: litColour(g.colour, LIT_DESAT_FUNGUS),
         /**
          * DIVIDED BY THE SAME GAIN, AND THIS LINE IS THE WHOLE DIFFERENCE
          * BETWEEN A LIT HALL AND A FLOODED ONE.
@@ -8134,7 +12023,8 @@ class Cave {
         x: cx,
         y: cy,
         z: cz,
-        colour: cr.colour,
+        // As above, and less of it: a seam is a destination. See litColour.
+        colour: litColour(cr.colour, LIT_DESAT_CRYSTAL),
         power: (cr.power * CRYSTAL_POWER) / gain,
         reach: CRYSTAL_REACH * gain,
       });
@@ -8147,6 +12037,15 @@ class Cave {
      */
     this._planShafts();
     yield 'shafts';
+    /**
+     * …and the roost, AFTER the shafts, because it reads `this._chambers` —
+     * the inventory of rooms the shaft plan builds and now keeps. It is
+     * deliberately not a light: two hundred bats are the one thing down here
+     * that is neither rock nor a source, and adding them to `this.lights` would
+     * put a glow on the ceiling they are hanging from.
+     */
+    this._planRoosts();
+    yield 'roost';
 
     // Last, because a spore takes its colour from the nearest light and the
     // list has to be complete before one can be asked for.
@@ -8181,6 +12080,21 @@ class Cave {
      * passage in it — the same ring index and the same phi, in a tube that has
      * nothing there.
      */
+    /**
+     * …AND A PATH MAY CONTRIBUTE TWO OF THEM, WHICH IS THE WHOLE OF LOOP CLOSURE
+     * AS FAR AS THE EMITTER IS CONCERNED.
+     *
+     * A hole is a (path, ring, phi, span, rings) record and nothing downstream
+     * cares which end of which passage produced it — `_link` skips the quads and
+     * `_emitRing` flattens the displacement, both by looking the record up in the
+     * list belonging to the passage they are drawing. So a second weld needs no
+     * new machinery at all: it needs a second `push`, into the list of the path
+     * it welded into rather than into its parent's.
+     *
+     * `loopTo` is a path OBJECT rather than an index because `buildBranch` never
+     * knew the indices — `pi` is assigned three blocks down. It is resolved here,
+     * which is the first moment both facts exist.
+     */
     this._holesBy = this.paths.map(() => []);
     for (let p = 1; p < this.paths.length; p++) {
       const br = this.paths[p];
@@ -8189,6 +12103,22 @@ class Cave {
         rings: br.holeRings,
         phi: br.holePhi,
         span: br.holeSpan,
+      });
+      if (!br.loopEnd) continue;
+      const ti = this.paths.indexOf(br.loopTo);
+      // A target that is somehow not in this cave's path list would cut a hole in
+      // `_holesBy[-1]`, which is `undefined.push`. It cannot happen — the targets
+      // ARE `this.paths` entries — and it is one comparison to make sure.
+      if (ti < 0) {
+        br.loopEnd = false;
+        continue;
+      }
+      br.loopToIndex = ti;
+      this._holesBy[ti].push({
+        ring: br.loopRing,
+        rings: br.loopRings,
+        phi: br.loopPhi,
+        span: br.loopSpan,
       });
     }
 
@@ -8222,6 +12152,41 @@ class Cave {
 
     const hood = this._hood;
     const ringVerts = (rows + hood + 1) * RADIAL;
+    /**
+     * THE INDEX BUFFER WAS SIZED AS IF NOTHING WERE EVER WOUND TWICE, AND IT HAS
+     * BEEN OVER-RUNNING SINCE THE COLLAR SHIPPED.
+     *
+     * It was `(rows + hood + 1) * RADIAL * 6`, which counts one quad band per
+     * ROW. A path of n rings emits n - 1 bands, so the old expression carried
+     * exactly one band of slack per path — and the doubly-wound collar in `_link`
+     * spends THREE per branch. Every cave with two or more branches has therefore
+     * been writing past the end of a Uint32Array, which in JS is silent: the
+     * writes are dropped, `b.tri` runs past `b.index.length`, and `_finish`'s
+     * `subarray(0, tri)` quietly clamps and pads the tail with zeroes. Those
+     * zeroes are degenerate triangles at vertex 0, so what is actually lost is
+     * whatever `_link` writes LAST — the hood's outer shell and the rim strip
+     * that gives the doorway its thickness. On seven branches that is about 360
+     * triangles off the back of the crag, and nothing has ever reported it
+     * because a slightly short hood looks like a hood.
+     *
+     * Loop closure would have made it worse by another three bands per closure,
+     * which is what turned this up. So it is counted rather than approximated:
+     * one band per ring per path except the last of each, plus three for every
+     * collar `_link` winds both ways, plus the hood and its rim. The cut quads at
+     * the junctions only ever remove indices, so this is a true upper bound.
+     *
+     * IT IS NOT THE VERTEX COUNT AND MUST NOT BE CONFUSED WITH IT. `ringVerts`
+     * above is unchanged and stays `(rows + hood + 1) * RADIAL`; `cave-floor`
+     * reconstructs exactly that expression to tell lattice rock from loose rock,
+     * and a second winding reuses vertices rather than adding any.
+     */
+    let idxRows = hood + 1;
+    for (let i = 0; i < this.paths.length; i++) {
+      const p = this.paths[i];
+      idxRows += p.x.length - 1;
+      if (i > 0) idxRows += 3;
+      if (p.loopEnd) idxRows += 3;
+    }
     /**
      * THE EXTRAS' BUDGET, AND IT MUST BE EXACT.
      *
@@ -8299,7 +12264,7 @@ class Cave {
       body: new Float32Array(verts * 4),
       /** Where the light comes from, times how agreed the sources are, plus AO. */
       glow: new Float32Array(verts * 4),
-      index: new Uint32Array((rows + hood + 1) * RADIAL * 6),
+      index: new Uint32Array(idxRows * RADIAL * 6),
       exIndex: new Uint32Array(exIdx),
       /** Cursors: the lattice is fixed-stride, the extras are not. */
       vert: ringVerts,
@@ -8558,8 +12523,19 @@ class Cave {
      * …and the branch's own first rings, for the same reason from the other
      * side: ring zero is the disc that plugs the hole, and displacing it is
      * displacing the plug.
+     *
+     * …AND ITS LAST THREE, WHERE IT HAS A SECOND PLUG. A closure's far weld is
+     * the same disc in the same relationship to the same kind of hole, counted
+     * from the other end. Leaving it out would give the second junction the leak
+     * the first one had before this line existed: two surfaces each thrown about
+     * by up to `r * rough` against a snout inset of forty centimetres, so they
+     * miss, and a miss in a single-sided tube is a view straight out of the
+     * mountain.
      */
-    const mouthDamp = !isHood && path.base >= 0 && i < 3 ? smoothstep(clamp01(i / 3)) : 1;
+    const mouthDamp =
+      !isHood && path.base >= 0 && (i < 3 || (path.loopEnd && i >= n - 3))
+        ? smoothstep(clamp01(Math.min(i, n - 1 - i) / 3))
+        : 1;
 
     for (let j = 0; j < RADIAL; j++) {
       const phi = (j / RADIAL) * TAU - Math.PI * 0.5;
@@ -8644,12 +12620,27 @@ class Cave {
       const calcite = clamp01(seepF * 1.7);
 
       // The brow: the shell is thicker over the doorway than under it, where
-      // there is only hillside to be thick into. See HOOD_BROW.
-      const disp =
-        rn * amp +
-        sc -
-        seepF * r * 0.075 +
-        thick * (1 + (isHood ? HOOD_BROW * clamp01(sec.y / sh.t) : 0));
+      // there is only hillside to be thick into. See HOOD_BROW — and HOOD_LEAN
+      // for why its thickest point is not over the middle of the doorway.
+      const brow = isHood
+        ? HOOD_BROW *
+          clamp01((sec.y / sh.t) * (1 + HOOD_LEAN * this.lean * (sec.x / Math.max(sh.w, 0.2))))
+        : 0;
+      /**
+       * The blocks, on the FREE half of the shell. See the block at HOOD_LEDGE —
+       * this, and not `proud`, is what the crag's outline is made of, because
+       * over the doorway the burial clamp does not fire at all.
+       *
+       * Taken at the smooth outline point rather than at the displaced one, so
+       * the field cannot chase its own offset around, and so the clamp below can
+       * ask the identical question of the identical point and agree with it.
+       */
+      const crg = isHood
+        ? blockFace(px0, py0, pz0, this.bedX, this.bedY, this.bedZ, this.strX, this.strZ, this.c.k)
+        : 0;
+      const shell = thick * (1 + brow);
+      let disp = rn * amp + sc - seepF * r * 0.075 + shell;
+      if (isHood) disp = Math.max(disp + HOOD_LEDGE * lip * crg, shell * HOOD_MIN_THICK);
       ox += (ox / outLen) * disp;
       oy += (oy / outLen) * disp;
 
@@ -8692,7 +12683,18 @@ class Cave {
       if (isHood) {
         const inner = cy + (uy / ul) * (sec.y * r);
         const surf = heightAt(px, pz) - 0.18;
-        const proud = HOOD_PROUD * lip * (0.35 + 0.9 * clamp01(rn * 0.5 + 0.5));
+        /**
+         * …and the same courses on the buried shoulders, where the clamp is what
+         * the surface is. POSITIVE HALF ONLY: see the last paragraph of the
+         * HOOD_LEDGE block for why the negative half may not come near this.
+         *
+         * The gain on `rn` is up from 0.5 and the constants moved with it, which
+         * is the same mean allowance (0.8) at twice the spread. An even collar
+         * looks built, and this one was only lopsided by twelve per cent.
+         */
+        const proud =
+          HOOD_PROUD * lip * (0.2 + 1.2 * clamp01(rn * 0.8 + 0.5)) +
+          HOOD_LEDGE * 0.5 * lip * Math.max(0, crg);
         if (surf > inner && py > surf + proud) py = surf + proud;
         /**
          * …and how much daylight it is standing in, which is the SAME QUESTION
@@ -8754,7 +12756,7 @@ class Cave {
             (0.30 + 0.70 * clamp01((span - 1.5) / 5.5)) *
               (1 - 0.32 * clamp01(rn * 0.6 + 0.5)) *
               (1 - 0.26 * floorish)
-          );
+          ) * this._avenShade(px, py, pz);
       this._shade(vi, px, py, pz, floorish, calcite, above, wetRing, span, ao);
     }
   }
@@ -8768,9 +12770,91 @@ class Cave {
    * fungi start just past where this has gone (see `placeFungi`), so the two
    * lighting schemes hand over rather than overlapping into grey.
    */
+  /**
+   * HOW FAR IN THE DAY GETS, AND IT WAS GETTING TOO FAR.
+   *
+   * At a 14 m constant the term is still 10% of its peak twenty metres in and
+   * 2.6% at forty — which sounds like nothing until you price it against what
+   * it is competing with. uDay times uDayGain is (0.293, 0.391, 0.320) * 1.45,
+   * so 10% of the peak is 0.017 in green, against an ambient of 0.008 and a
+   * near-field term that is zero at that range. The daylight was therefore
+   * still the BRIGHTEST thing on the wall thirty metres inside a cave, and
+   * every station this feature is judged from stands within that.
+   *
+   * That is the failure the twilight-zone block in the fragment shader
+   * describes and then does not get: moss stops in a line you could draw with a
+   * ruler because usable daylight stops in one, and an exponential with a
+   * fourteen-metre constant does not stop anywhere. 9.5 m puts the same 10% at
+   * fourteen metres and takes forty metres to 0.6% — under the ambient, which
+   * is where "you are underground now" lives.
+   *
+   * It is a shortening, not a dimming: the peak at the doorway is untouched, so
+   * the mouth seen from inside is exactly as bright an exit as it was, and the
+   * contrast between it and the passage around it roughly doubles. Same
+   * argument as CRYSTAL_REACH, one term over.
+   */
   _daylight(path, i) {
     const g = (path.baseAlong ?? 0) + (path.along ? path.along[i] : i * RING_STEP);
-    return Math.exp(-g / 14) * 0.42;
+    return Math.exp(-g / 9.5) * 0.42;
+  }
+
+  /**
+   * THE DIFFERENCE BETWEEN A HOLE AND A DECAL, AND IT IS NOT THE HOLE.
+   *
+   * `_buildShafts` now draws a small bright irregular disc under the ceiling at
+   * each beam's apex — see the block in `_seatShaft`. On its own that is a
+   * luminous sticker: a bright patch sitting on a roof that is lit exactly as
+   * brightly as the roof beside it, which the eye reads as paint on a surface
+   * rather than as a way through it. Every real aven is surrounded by a ring of
+   * rock that is DARKER than the average ceiling, because that rock is inside a
+   * chimney and can see less of the room than anything else in it.
+   *
+   * That is precisely what `ao` means in this file — "how much of the rest of the
+   * passage can this point see", per the block in `_shade` — so the annulus is
+   * expressible with no new attribute, no new uniform and no shader change at
+   * all: multiply the occlusion the roof would have had. The disc then sits in a
+   * pool of shadow it made, and the two together read as depth.
+   *
+   * (The stream brief named `above` for this. `above` is the height over the
+   * ring's floor and drives the flood line and the silt band; passing a
+   * different number there would move a mud line up the wall rather than darken
+   * anything. `ao` is the parameter that means what the effect needs.)
+   *
+   * COST: a loop over the cave's three to eleven shafts per lattice vertex,
+   * guarded by one compare on the height. MEASURED by stubbing this to return 1
+   * and rebuilding grove-01 k=0 (136 148 vertices, eleven shafts): the emit came
+   * out at 143.9 ms against 144.9 with it, i.e. inside the run-to-run spread of
+   * the same build. That is what it should be — it runs beside two fbm2 calls
+   * and a walk over a light list of thirty to ninety entries.
+   */
+  _avenShade(px, py, pz) {
+    const list = this.shafts;
+    if (!list || !list.length) return 1;
+    let shade = 1;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      const dy = py - s.ay;
+      /**
+       * ROOF ONLY. A vertex two metres under the opening is WALL — the beam's
+       * apex is seated a tenth of the head-room below the ceiling, so the band
+       * this may touch is thin by construction. Without the test the annulus
+       * becomes a vertical smudge down the side of the chamber, which is a
+       * shadow with no caster.
+       */
+      if (dy < -2.2 || dy > 3.0) continue;
+      const dx = px - s.ax;
+      const dz = pz - s.az;
+      const d = Math.hypot(dx, dz);
+      const outer = s.hole * AVEN_SHADE_OUT;
+      if (d > outer) continue;
+      const inner = s.hole * AVEN_SHADE_IN;
+      const t = d <= inner ? 1 : 1 - smoothstep(clamp01((d - inner) / (outer - inner)));
+      // The MINIMUM rather than a product: two beams close enough to overlap in a
+      // hall would otherwise square the darkening and punch a black hole in the
+      // roof between them.
+      shade = Math.min(shade, 1 - AVEN_SHADE * t);
+    }
+    return shade;
   }
 
   /**
@@ -8845,9 +12929,35 @@ class Cave {
      * twice as important relative to the rock, and the passage is legible
      * BECAUSE of them rather than in spite of them.
      */
-    let cr = 0.19 + vein * 0.15;
-    let cg = 0.19 + vein * 0.10;
-    let cb = 0.22 + vein * 0.04;
+    /**
+     * BUFF LIMESTONE, NOT COLD SLATE, AND THE OLD BASE WAS BLUER THAN IT WAS
+     * RED.
+     *
+     * 0.19 / 0.19 / 0.22 — the BLUE channel is the largest one at low vein, so
+     * the substrate of this cave was a blue-grey and only the iron streak was
+     * warm. The block above says that deliberately, to give the fungus light
+     * something to sit against, and it was a reasonable call when the light was
+     * a saturated cyan. It is the wrong call now that the light lands nearly
+     * white (see litColour): a blue rock under a white light is a blue cave, and
+     * the whole verdict on this feature was that it did not read as rock.
+     *
+     * AND THE FAILURE IS NOT LINEAR IN THE ERROR, WHICH IS WHY IT LOOKED SO
+     * MUCH WORSE THAN THE NUMBERS. Every remaining term down here is
+     * blue-leaning — the ambient, the haze, the fog, the last of the fungi —
+     * so a blue albedo is the fourth blue in a stack, and ACES pulls a
+     * blue-dominant dark colour toward MAGENTA. That is the mechanism behind
+     * "swirling purple", and it is why chasing it as a saturation problem in
+     * any one term never landed: no single term in the shipped frame was
+     * purple, and the sum of four faintly blue ones was.
+     *
+     * Real limestone is buff. 0.20 / 0.185 / 0.155 is a warm grey with the same
+     * luminance to three decimal places at the mean vein (0.245 both ways), so
+     * this changes no exposure anywhere, and the iron stays the warm end of its
+     * own axis rather than being the only warm thing in the cave.
+     */
+    let cr = 0.2 + vein * 0.14;
+    let cg = 0.185 + vein * 0.115;
+    let cb = 0.155 + vein * 0.085;
     // Damp, dark floor. Real cave floors are mud and rubble, not the walls.
     const wet = 1 - floorish * 0.42;
     cr *= wet;
@@ -8893,9 +13003,29 @@ class Cave {
     const fromMouth = Math.hypot(x - this.originX, z - this.originZ);
     const deep = clamp01((fromMouth - 22) / 96);
     const far = clamp01((fromMouth - 105) / 90);
-    cr = lerp(cr, cr * (0.86 - 0.24 * far), deep);
-    cg = lerp(cg, cg * (0.80 + 0.34 * far), deep);
-    cb = lerp(cb, cb * (1.16 - 0.10 * far), deep);
+    /**
+     * THE WALK KEEPS ITS AXIS AND LOSES ITS CHROMA, FOR THE REASON AT THE BASE
+     * COLOUR ABOVE.
+     *
+     * 0.86 / 0.80 / 1.16 is a violet push — blue up a sixth while red and green
+     * fall — applied over the whole middle of every cave. It is a fifth blue in
+     * the stack described above, and it is the one that was hardest to find,
+     * because a violet ALBEDO looks correct in a buffer dump and only becomes
+     * the complaint after being multiplied by four other blue terms and passed
+     * through a tonemapper that favours magenta.
+     *
+     * The idea is kept and it is a good one: two hundred metres in has to be
+     * visibly not the doorway or there is no reason to walk. What changes is
+     * that the axis is now VALUE and TEMPERATURE rather than hue — deeper is
+     * darker and a little cooler, and only the far end takes an actual colour,
+     * the green-teal that reads as "there is something else beyond this". A
+     * quarter of a stop of darkening over a hundred metres is a stronger
+     * "somewhere else" than a hue rotation anyway, because it is what a light
+     * that is running out actually does.
+     */
+    cr = lerp(cr, cr * (0.84 - 0.12 * far), deep);
+    cg = lerp(cg, cg * (0.82 + 0.17 * far), deep);
+    cb = lerp(cb, cb * (0.94 - 0.04 * far), deep);
 
     /**
      * THE FLOOD LINE, WHICH IS THE ONE DETAIL DOWN HERE THAT FRIGHTENS PEOPLE.
@@ -10361,7 +14491,17 @@ class Cave {
            * reads as the rim of the opening — which is what an opening in rock
            * has.
            */
-          if (p > 0 && i < 3) {
+          /**
+           * …AND SO ARE A LOOP'S LAST THREE, FOR THE IDENTICAL REASON.
+           *
+           * A closure's far end is a snout standing in the target's bore exactly
+           * as its near end is a snout standing in its parent's. Every word of
+           * the paragraph above applies with the ring index counted from the
+           * other end: stand to one side of the second junction and your line of
+           * sight passes through the snout's near wall, through the hole cut in
+           * the target, and out of the mountain. It is the same 144 triangles.
+           */
+          if (p > 0 && (i < 3 || (path.loopEnd && i >= n - 4))) {
             b.index[t++] = a;
             b.index[t++] = d;
             b.index[t++] = c;
@@ -10616,6 +14756,11 @@ class Cave {
     yield* this._buildFungi();
     yield 'shaft-mesh';
     this._buildShafts();
+    // …and the colony, on a stop of its own for the same reason the beams get
+    // one: 1 200 vertices is nothing, and it costs nothing to be sure it never
+    // lands on the same frame as the 3 MB of passage above it.
+    yield 'bat-mesh';
+    this._buildBats();
     this._buffers = null;
     /**
      * NEITHER `mesh` NOR `ready` IS PUBLISHED HERE ANY MORE. Both are set at the
@@ -10783,6 +14928,19 @@ class Cave {
         i = j + SHAFT_GAP;
       }
     }
+    /**
+     * KEPT, BECAUSE SOMETHING ELSE NOW WANTS THE SAME QUESTION ANSWERED.
+     *
+     * The walk above is the file's only inventory of "where are the chambers" —
+     * runs of rings that are all wide enough and all tall enough, with the
+     * biggest ring of each already picked out. `_planRoosts` needs exactly that
+     * and nothing else, and the one thing it must NOT do is ask the question a
+     * second time with its own thresholds: two independent notions of what
+     * counts as a chamber is how a feature ends up in a corridor on the seed
+     * nobody tested. The list is a handful of small objects and is dropped with
+     * the rest of the plan.
+     */
+    this._chambers = found;
     if (!found.length) return;
 
     /**
@@ -10826,6 +14984,256 @@ class Cave {
     if (!chosen.includes(top)) chosen.push(top);
 
     for (const c of chosen) this._lightChamber(found[c], rng, bearing, tilt);
+  }
+
+  /**
+   * WHERE THE COLONY IS. See the block over `placeBats`.
+   *
+   * Asked of `this._chambers`, which is `_planShafts`' own inventory of rooms —
+   * not of a second scan with its own thresholds. That reuse is the whole reason
+   * this is nine lines: whatever the walk and SHAPES are made to do to chamber
+   * size and frequency, the roost follows, exactly as the beams do.
+   *
+   * BIGGEST FIRST AND THEN SPREAD, WHICH IS THE OPPOSITE OF THE BEAMS' RULE AND
+   * IS RIGHT FOR THE OPPOSITE REASON. `_planShafts` buckets rather than sorts,
+   * because four beams have to be met four times over the length of the walk. A
+   * roost is met ONCE and has to be worth the walk when it is: it wants the
+   * biggest ceiling in the cave, full stop. The spacing test is a veto on a
+   * second roost being in the same hall as the first, not a spreading rule.
+   *
+   * AND IT DOES NOT AVOID THE LIT CHAMBERS. The first sketch put the roost
+   * somewhere dark on the theory that a surprise should be unlit, and it is
+   * exactly backwards: an unlit ceiling is a ceiling nobody looked at, so the
+   * bats are not mistaken for stalactites, they are not seen at all, and the
+   * flush is two hundred invisible things making a noise. The biggest chambers
+   * are also the ones `_planShafts` put beams in, and a colony peeling off a
+   * ceiling and crossing a shaft of light is the picture.
+   */
+  _planRoosts() {
+    this.roosts = [];
+    const found = this._chambers;
+    if (!found || !found.length) return;
+    const rng = makeRng(`${getWorldSeed()}:cave-roost:${this.c.k}`);
+    const order = found.map((f, i) => i).sort((a, b) => found[b].score - found[a].score);
+    /**
+     * ONE ROOST, AND A SECOND ABOUT ONE CAVE IN THREE.
+     *
+     * MEASURED, because the first rule was "two whenever the cave has four or
+     * more chambers" and that is not a rule at all: every one of the first four
+     * grove-01 caves probed has seven or more, so it granted two roosts every
+     * time and the scarcity argument at ROOST_MAX was a paragraph describing
+     * something that never happened.
+     *
+     * A coin on the cave's own seed is the honest form of "usually one". The
+     * draw is unconditional so the rng stream does not depend on the chamber
+     * count — the same discipline the branch walk keeps about aligned streams —
+     * and five chambers is still required, so a small cave cannot get two.
+     */
+    const two = rng() < 0.35;
+    const want = Math.min(ROOST_MAX, found.length >= 5 && two ? 2 : 1);
+    for (const oi of order) {
+      if (this.roosts.length >= want) break;
+      const cand = found[oi];
+      const p = cand.path;
+      const cx = p.x[cand.at];
+      const cz = p.z[cand.at];
+      let clash = false;
+      for (const r of this.roosts) {
+        if (Math.hypot(r.cx - cx, r.cz - cz) < ROOST_APART) clash = true;
+      }
+      if (clash) continue;
+      const roost = placeBats(this.c, p, cand, rng);
+      if (roost.bats.length) this.roosts.push(roost);
+    }
+  }
+
+  /**
+   * The colony, merged into one non-indexed quad mesh — the same construction
+   * `_buildShafts` uses and for the same reason.
+   *
+   * TWO HUNDRED BATS IS TWO HUNDRED QUADS IS 1 200 VERTICES AND ONE DRAW. An
+   * InstancedMesh was the obvious alternative and loses on every axis that
+   * matters here: it needs an instance matrix nothing would ever write (the CPU
+   * does not touch a bat), it is a second geometry type for the pre-warm to get
+   * exactly right, and at four hundred triangles the whole mesh is smaller than
+   * one breakdown block. A merged buffer is the same thing with fewer moving
+   * parts.
+   *
+   * NOT sliced across frames. `_buildShafts` is not either, for the reason given
+   * there — this is one pass over at most 440 items writing floats, measured in
+   * the same class as the beams' 336 vertices, and the build's own deadline is
+   * checked before and after it.
+   */
+  _buildBats() {
+    const roosts = this.roosts;
+    if (!roosts || !roosts.length) return;
+    let count = 0;
+    for (const r of roosts) count += r.bats.length;
+    if (!count) return;
+
+    const pos = new Float32Array(count * 6 * 3);
+    const corner = new Float32Array(count * 6 * 2);
+    const bat = new Float32Array(count * 6 * 4);
+    const roost = new Float32Array(count * 6 * 4);
+    // Two triangles, wound so that cross(Rv, F) is the front face before the
+    // shader's mirror gets a vote. See the facing block in the vertex shader.
+    const CX = [-1, 1, 1, -1, 1, -1];
+    const CY = [-1, -1, 1, -1, 1, 1];
+
+    let at = 0;
+    for (let ri = 0; ri < roosts.length; ri++) {
+      const R = roosts[ri];
+      for (const b of R.bats) {
+        /**
+         * THE PEEL, AS A DELAY PER BAT, AND IT IS NOT RANDOM.
+         *
+         * A uniform random delay gives a roost that dissolves evenly, which
+         * reads as a fade. What a startled colony actually does is go up in a
+         * WAVE from whichever end was disturbed, because each bat is startled by
+         * its neighbour rather than by the intruder. The seed contributes a
+         * little scatter so the wave front is ragged; the rest of it is the
+         * bat's distance from the roost centre, so the near edge goes first.
+         *
+         * Precomputed here rather than derived in the shader because the centre
+         * is already in hand and a distance in the vertex shader would be three
+         * more instructions on every vertex, forever, for a number that cannot
+         * change after the build.
+         */
+        const d = Math.hypot(b.x - R.cx, b.y - R.cy, b.z - R.cz);
+        const delay = clamp(d / Math.max(4, R.radius * 2.4), 0, 1) * 0.95 + b.seed * 0.28;
+        for (let c = 0; c < 6; c++) {
+          const k3 = (at + c) * 3;
+          pos[k3] = b.x - this.originX;
+          pos[k3 + 1] = b.y - this.originY;
+          pos[k3 + 2] = b.z - this.originZ;
+          const k2 = (at + c) * 2;
+          corner[k2] = CX[c];
+          corner[k2 + 1] = CY[c];
+          const k4 = (at + c) * 4;
+          // The sign of the seed is the roost slot. See the vertex shader.
+          bat[k4] = (ri === 0 ? 1 : -1) * Math.max(1e-4, b.seed);
+          bat[k4 + 1] = b.span;
+          bat[k4 + 2] = delay;
+          bat[k4 + 3] = R.rise;
+          roost[k4] = R.cx - this.originX;
+          roost[k4 + 1] = R.cy - this.originY;
+          roost[k4 + 2] = R.cz - this.originZ;
+          roost[k4 + 3] = R.radius;
+        }
+        at += 6;
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aCorner', new THREE.BufferAttribute(corner, 2));
+    geo.setAttribute('aBat', new THREE.BufferAttribute(bat, 4));
+    geo.setAttribute('aRoost', new THREE.BufferAttribute(roost, 4));
+    /**
+     * THE BOUNDING SPHERE HAS TO COVER THE ORBIT AND NOT THE CEILING.
+     *
+     * `computeBoundingSphere` sees only the anchors, which are all on one roof;
+     * the moment the colony flushes, every vertex the shader emits is somewhere
+     * else entirely, and a frustum test against the old sphere would cull the
+     * whole flock the instant you look at the room instead of at the roof it
+     * came off. This is the same class of trap as the stale InstancedMesh sphere
+     * this repo already has a note about, arriving through the front door. So
+     * the sphere is grown by the orbit's reach, which is the furthest the vertex
+     * shader can ever displace a vertex.
+     */
+    geo.computeBoundingSphere();
+    let reach = 0;
+    for (const R of roosts) {
+      reach = Math.max(
+        reach,
+        Math.hypot(R.cx - this.originX, R.cy - this.originY, R.cz - this.originZ) +
+          R.radius * 1.15 +
+          R.rise
+      );
+    }
+    if (geo.boundingSphere) {
+      /**
+       * Recentred on the mesh's own origin before the radius is grown, and the
+       * order matters: moving the centre without accounting for where it WAS
+       * would leave anchors outside the sphere. `|c| + r` is the bound on every
+       * anchor measured from the local origin, so taking the max of that and the
+       * orbit's reach covers both states of every bat.
+       */
+      const c = geo.boundingSphere.center;
+      const anchors = Math.hypot(c.x, c.y, c.z) + geo.boundingSphere.radius;
+      c.set(0, 0, 0);
+      geo.boundingSphere.radius = Math.max(anchors, reach) + 1;
+    }
+
+    this.batMaterial = batMaterial();
+    const mesh = new THREE.Mesh(geo, this.batMaterial);
+    mesh.position.set(this.originX, this.originY, this.originZ);
+    /**
+     * Opaque, after the rock (-5) so the passage's early-Z has already rejected
+     * most of the frame, and before the beams (4) and the heads (5) so both of
+     * those additive layers are correctly stopped by a bat in front of them.
+     */
+    mesh.renderOrder = -3;
+    mesh.name = 'cave-bats';
+    this.batMesh = mesh;
+    this.group.add(mesh);
+  }
+
+  /**
+   * ONE SQUARED-DISTANCE TEST PER ROOST PER FRAME, AND THAT IS THE WHOLE OF THE
+   * PER-FRAME COST OF THIS FEATURE.
+   *
+   * Called from `CaveField.update`, which already has the camera. Writes a float
+   * into a uniform and never writes it again — a flushed roost stays flushed,
+   * because a colony that quietly re-hung itself while you stood in the room
+   * would be the same reveal available twice, which is one more time than it is
+   * worth.
+   *
+   * FLUSH_NEAR IS DELIBERATELY SHORT. Thirteen metres is inside the chamber,
+   * past the doorway, which means you are already looking at the ceiling when it
+   * comes off. A trigger at the entrance to the room fires while the roof is
+   * still edge-on and out of frame, and all you get is a noise.
+   *
+   * AND IT IS ROOFED, NOT xz. `caveSample` reaches through mountains — this
+   * repo's own note — so a horizontal distance would flush a colony because
+   * somebody walked over the hill above it. The height test is the same
+   * ROOF_CLEARANCE-shaped question `controller.roofed` asks, done locally
+   * because this has the roost's own y in hand and the controller does not.
+   */
+  checkFlush(px, py, pz, now) {
+    const roosts = this.roosts;
+    if (!roosts || !roosts.length) return false;
+    /**
+     * NOT BEFORE THE MESH EXISTS, AND THIS GUARD IS NOT DEFENSIVE.
+     *
+     * The plan finishes many frames before `_buildBats` runs — the whole build
+     * is sliced at 0.6 ms — so between the two there is a window in which the
+     * roost is known and there is nothing to fly. Without this, a player who
+     * reached the chamber inside that window would set `flushed` on a roost with
+     * no uniform to write it into, and the ceiling would then stay full forever
+     * with the flush permanently spent. Silent, one-shot, and impossible to
+     * reproduce on purpose: the worst shape a bug can have.
+     */
+    if (!this.batMaterial) return false;
+    let fired = false;
+    for (let i = 0; i < roosts.length; i++) {
+      const R = roosts[i];
+      if (R.flushed) continue;
+      const dy = py - R.cy;
+      if (dy < -FLUSH_BELOW || dy > FLUSH_ABOVE) continue;
+      const dx = px - R.cx;
+      const dz = pz - R.cz;
+      if (dx * dx + dz * dz > FLUSH_NEAR * FLUSH_NEAR) continue;
+      R.flushed = true;
+      if (this.batMaterial) {
+        const u = this.batMaterial.uniforms.uFlush.value;
+        if (i === 0) u.x = now;
+        else u.y = now;
+      }
+      this.flushed = R;
+      fired = true;
+    }
+    return fired;
   }
 
   /**
@@ -11147,6 +15555,26 @@ class Cave {
       Math.cos(tilt),
       Math.sin(tilt) * Math.sin(bearing)
     );
+    /**
+     * WHERE THE LIGHT COMES IN, WHICH FOR THE WHOLE LIFE OF THIS FEATURE WAS
+     * NOWHERE.
+     *
+     * The header is plain that "the opening the light comes through is never
+     * shown", and the reasoning behind it is sound and is about THE CONE: a cone
+     * that runs all the way into the ceiling draws a hard elliptical intersection
+     * against geometry it is passing through, so it is stopped short and its top
+     * is faded out. That constraint says nothing at all about the OPENING, and
+     * the consequence of conflating the two is a shaft of light with no source —
+     * a volume that begins in mid-air a metre and a half under an unbroken roof,
+     * which is the one thing about the beams that reads as a prop.
+     *
+     * So the apex is recorded here and `_buildShafts` puts a small irregular
+     * downward-facing disc on it. It is NOT a hole in the mesh — the tube's
+     * lattice is a closed swept surface and cutting it is the "a height field
+     * cannot roof a cave mouth" problem all over again. It is the far end of an
+     * aven, seen from the bottom, which is what you actually see: a bright
+     * ragged patch, not a porthole with a rim.
+     */
     this.shafts.push({
       x: cx,
       y: bottom,
@@ -11154,6 +15582,20 @@ class Cave {
       h,
       rad,
       dir,
+      /**
+       * The apex, in world coordinates, and the size of the opening there.
+       *
+       * `shaftUnit` bakes a 0.34 taper, so the cone's narrow end is already
+       * `rad * 0.34` across; 1.18 of that makes the opening very slightly wider
+       * than the beam leaving it, which is the right way round — a beam is the
+       * light that got through a hole and can never be wider than one. Clamped
+       * at the bottom so a narrow beam in a low chamber still has an opening big
+       * enough to read as one rather than a bright dot.
+       */
+      ax: cx + dir.x * h,
+      ay: bottom + dir.y * h,
+      az: cz + dir.z * h,
+      hole: Math.max(0.55, rad * 0.34 * 1.18),
       seed: rng(),
       // Bigger rooms get brighter beams, gently. A 20 m hall with the same beam
       // as an 8 m one reads as the hall being lit by a torch.
@@ -11217,8 +15659,11 @@ class Cave {
    * so there is nothing to be gained by sharing a buffer with it and a great
    * deal to be lost.
    *
-   * Four beams is 112 triangles. The merge is a transform of 336 vertices done
-   * once per cave; there is no per-frame CPU here at all.
+   * Four beams is 112 triangles, plus 48 for the four openings — see HOLE_SEGS
+   * and the block in `_seatShaft`. The merge is a transform of 336 vertices and
+   * a fan of 144 more, done once per cave; there is no per-frame CPU here at
+   * all, and the openings ride in the same buffer so the draw count is unchanged
+   * at one.
    */
   _buildShafts() {
     const list = this.shafts;
@@ -11228,11 +15673,20 @@ class Cave {
     const un = unit.getAttribute('normal').array;
     const uu = unit.getAttribute('uv').array;
     const vc = up.length / 3;
+    /**
+     * …plus one opening per beam, in the SAME buffer and therefore the same
+     * draw. See the block in `_seatShaft`. HOLE_SEGS triangles in a fan, three
+     * vertices each because the cone this rides with is non-indexed and mixing
+     * an indexed span into it would mean building an index for the whole thing
+     * to save 36 vertices.
+     */
+    const holeV = HOLE_SEGS * 3;
+    const total = (vc + holeV) * list.length;
 
-    const pos = new Float32Array(vc * list.length * 3);
-    const nor = new Float32Array(vc * list.length * 3);
-    const uv = new Float32Array(vc * list.length * 2);
-    const beam = new Float32Array(vc * list.length * 2);
+    const pos = new Float32Array(total * 3);
+    const nor = new Float32Array(total * 3);
+    const uv = new Float32Array(total * 2);
+    const beam = new Float32Array(total * 2);
 
     const m = new THREE.Matrix4();
     const nm = new THREE.Matrix3();
@@ -11275,6 +15729,89 @@ class Cave {
         beam[k2 + 1] = b.gain;
       }
       at += vc;
+
+      /**
+       * ---- THE OPENING -----------------------------------------------------
+       *
+       * A dozen triangles in a fan about the apex, facing straight back down the
+       * beam. Everything about its shape is decided by two lines:
+       *
+       *   THE RADIUS IS JITTERED BY THE SAME FIELD THE WALLS ARE. `rock` is what
+       *   `_emitRing` displaces every vertex of the passage by, so an opening
+       *   whose rim wanders on it is broken the way the rock around it is
+       *   broken. A circle here would be a porthole — a perfect man-made curve
+       *   is the single most expensive mistake available in a cave, because
+       *   there is nothing else in the frame with a machined edge to compare it
+       *   against and the eye finds it instantly.
+       *
+       *   THE RIM IS SAMPLED IN 3D AND THE SEAM IS CLOSED BY CONSTRUCTION. Every
+       *   fan triangle takes its two rim radii from the shared `rim` array
+       *   rather than resampling, so segment 11 and segment 0 use the same
+       *   number and there is no crack where the fan wraps.
+       *
+       * The v coordinate does the rest, and it is chosen against the material's
+       * existing `along` curve rather than by adding a uniform: 0.88 is exactly
+       * where the plateau ends, so the centre is at full strength and the same
+       * cyan-white the top of the cone is, and 0.965 is a fifth of the way down
+       * the top ramp, so the ragged rim fades out instead of drawing an edge.
+       * The material is untouched by this feature — it is geometry only, which
+       * is what keeps it free.
+       */
+      // Any vector not parallel to the beam; the beam is within 14 degrees of
+      // vertical by construction (see `_planShafts`), so world X is always safe.
+      const uX = new THREE.Vector3(1, 0, 0).cross(b.dir).normalize();
+      const uZ = new THREE.Vector3().crossVectors(b.dir, uX).normalize();
+      const rim = new Float32Array(HOLE_SEGS);
+      for (let sgi = 0; sgi < HOLE_SEGS; sgi++) {
+        const a = (sgi / HOLE_SEGS) * TAU;
+        const rx = b.ax + Math.cos(a) * b.hole;
+        const rz = b.az + Math.sin(a) * b.hole;
+        // 0.62 to 1.38 of the nominal radius. Narrower than that and the rim is
+        // a circle with texture on it; wider and neighbouring segments cross.
+        rim[sgi] = b.hole * (0.62 + 0.76 * clamp01(rock(rx, b.ay, rz) * 0.5 + 0.5));
+      }
+      const cxo = b.ax - this.originX;
+      const cyo = b.ay - this.originY;
+      const czo = b.az - this.originZ;
+      for (let sgi = 0; sgi < HOLE_SEGS; sgi++) {
+        const a0 = (sgi / HOLE_SEGS) * TAU;
+        const a1 = ((sgi + 1) / HOLE_SEGS) * TAU;
+        const r0 = rim[sgi];
+        const r1 = rim[(sgi + 1) % HOLE_SEGS];
+        const tri = [
+          [cxo, cyo, czo, 0.88],
+          [
+            cxo + (uX.x * Math.cos(a0) + uZ.x * Math.sin(a0)) * r0,
+            cyo + (uX.y * Math.cos(a0) + uZ.y * Math.sin(a0)) * r0,
+            czo + (uX.z * Math.cos(a0) + uZ.z * Math.sin(a0)) * r0,
+            0.965,
+          ],
+          [
+            cxo + (uX.x * Math.cos(a1) + uZ.x * Math.sin(a1)) * r1,
+            cyo + (uX.y * Math.cos(a1) + uZ.y * Math.sin(a1)) * r1,
+            czo + (uX.z * Math.cos(a1) + uZ.z * Math.sin(a1)) * r1,
+            0.965,
+          ],
+        ];
+        for (let c = 0; c < 3; c++) {
+          const k3 = (at + c) * 3;
+          pos[k3] = tri[c][0];
+          pos[k3 + 1] = tri[c][1];
+          pos[k3 + 2] = tri[c][2];
+          // Straight down the beam. The material takes |N·V|, so the sign is
+          // free; pointing it at the floor is simply the honest answer for a
+          // surface that is the ceiling of the room.
+          nor[k3] = -b.dir.x;
+          nor[k3 + 1] = -b.dir.y;
+          nor[k3 + 2] = -b.dir.z;
+          const k2 = (at + c) * 2;
+          uv[k2] = 0.5;
+          uv[k2 + 1] = tri[c][3];
+          beam[k2] = b.seed;
+          beam[k2 + 1] = b.gain;
+        }
+        at += 3;
+      }
     }
 
     const geo = new THREE.BufferGeometry();
@@ -11420,10 +15957,23 @@ class Cave {
     // The beams are a merged buffer of their own; the unit cone they were
     // stamped from is module-level and shared, so it is not touched here.
     this.shaftMesh?.geometry.dispose();
+    /**
+     * The colony, and its material with it — this is the one material in the
+     * file that is NOT a module singleton (see `batMaterial` for why), so it is
+     * the one that has an owner to dispose it. Dropping the geometry and leaving
+     * the material would leak one program's worth of uniform state per cave
+     * streamed in a session, which over a long walk is hundreds.
+     */
+    this.batMesh?.geometry.dispose();
+    this.batMaterial?.dispose();
     this.group.clear();
     this.mesh = null;
     this.points = null;
     this.shaftMesh = null;
+    this.batMesh = null;
+    this.batMaterial = null;
+    this.roosts = null;
+    this._chambers = null;
     this._buffers = null;
     this._priming = null;
     this.ready = false;
@@ -11446,6 +15996,13 @@ class Cave {
 let sharedMaterial = null;
 let sharedFungus = null;
 let sharedShaft = null;
+/**
+ * The bats' PRE-WARM material only. Unlike the three above it is not what the
+ * caves draw with — each cave builds its own, see `batMaterial` — so this exists
+ * purely so `caveWarmupObjects` has something to compile the program from, and
+ * nothing else may reach for it.
+ */
+let sharedBat = null;
 
 /**
  * Objects carrying the cave materials, for the shader pre-warm. Nothing draws
@@ -11535,10 +16092,39 @@ export function caveWarmupObjects() {
   shaft.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(6), 2));
   shaft.setAttribute('aBeam', new THREE.BufferAttribute(new Float32Array(6), 2));
 
+  /**
+   * …AND THE BATS, WHICH ARE THE ONE PROGRAM DOWN HERE THAT WOULD COMPILE ON
+   * THE WORST POSSIBLE FRAME.
+   *
+   * The rock compiles when a cave first enters the frustum, which is somewhere
+   * out on a hillside; the beams compile when a chamber does. The colony's mesh
+   * is INSIDE a chamber, invisible until you are in the room with it, so an
+   * unwarmed bat program compiles on the frame you walk through the doorway —
+   * measured elsewhere at 100-180 ms for a material of this class, which is a
+   * third of a second of frozen screen at the exact moment the feature exists to
+   * produce. That is the hitch this whole subsystem exists to prevent.
+   *
+   * Same rule as the three above: non-indexed, and attribute for attribute what
+   * `_buildBats` builds. If that list changes, this changes with it — the rule
+   * has been broken three times in this function's history and the test for
+   * whether it was is `npm run perf:spikes`.
+   *
+   * `batMaterial()` is not a singleton in the app — every cave makes its own —
+   * so what is warmed here is the PROGRAM, which the cache keys on the shader
+   * source and which every per-cave copy therefore hits. See the block over
+   * `batMaterial`.
+   */
+  const bats = new THREE.BufferGeometry();
+  bats.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+  bats.setAttribute('aCorner', new THREE.BufferAttribute(new Float32Array(6), 2));
+  bats.setAttribute('aBat', new THREE.BufferAttribute(new Float32Array(12), 4));
+  bats.setAttribute('aRoost', new THREE.BufferAttribute(new Float32Array(12), 4));
+
   return [
     new THREE.Mesh(rock, sharedMaterial ?? (sharedMaterial = caveMaterial())),
     new THREE.Points(fungi, sharedFungus ?? (sharedFungus = fungusMaterial())),
     new THREE.Mesh(shaft, sharedShaft ?? (sharedShaft = shaftMaterial())),
+    new THREE.Mesh(bats, sharedBat ?? (sharedBat = batMaterial())),
   ];
 }
 
@@ -11555,6 +16141,9 @@ export function caveWarmupObjects() {
  * test. The list is short (0-3) and is maintained only by `CaveField.update`.
  */
 let live = [];
+
+/** `CaveField.nearestMouth`'s answer, reused so the audio never allocates. */
+const _mouth = { k: 0, x: 0, y: 0, z: 0, d: Infinity };
 
 const _sample = {
   inside: 0,
@@ -11579,6 +16168,23 @@ const _sample = {
   tight: 0,
   room: 0,
   water: 0,
+  /**
+   * HOW FAR UNDER THE MOUNTAIN, 0..1. See CHANNELS and `markDepth`.
+   *
+   * `deep` was computed, splined, truncated by every path in the file and read
+   * by NOTHING for its whole life, and the channel's own comment says what it is
+   * for: "so that the light can get stranger and more plentiful with depth …
+   * and the audio can open up". Publishing it here is what lets the audio have
+   * it, because the audio has no path and no ring — it has a listener position
+   * and this sample.
+   *
+   * IT IS NOT `along`, AND THE DIFFERENCE IS THE WHOLE POINT. `caveDepth` is
+   * metres WALKED, which DEEP_FULL's own block argues is the wrong measure —
+   * "you can walk a hundred metres of level tube and be nowhere". A descent is
+   * the thing the cave rewards and the thing every consumer downstream actually
+   * meant.
+   */
+  deep: 0,
   /** A pillar the body is inside, if any. `postR` is 0 when there is none. */
   postX: 0,
   postZ: 0,
@@ -11604,6 +16210,7 @@ function outside() {
   _sample.tight = 0;
   _sample.room = 0;
   _sample.water = 0;
+  _sample.deep = 0;
   return _sample;
 }
 
@@ -12309,9 +16916,24 @@ export function caveSample(x, y, z) {
        * every time — five extra operations, and only within a few rings of the
        * end, which is the only place `axial` can be non-zero anyway.
        */
+      /**
+       * …AND A LOOP HAS NO END TO STOP AT, WHICH IS THE ONE THING THIS BLOCK
+       * MUST NOT DO TO ONE.
+       *
+       * The overrun correction exists because walking into a closed passage met
+       * nothing: the dome is single-sided and facing away, so the body carried
+       * on through the mountain. A closure's last ring is not a dome, it is a
+       * full-size section standing inside another passage's bore, and walking
+       * forward there is meant to take you into that passage — which claims the
+       * body the moment its own fit wins, exactly as a branch claims it at the
+       * base weld. Applying the axial stop here would push the player back out
+       * of the junction they are walking through, with a force that is purely
+       * along the axis and therefore exactly the walking-pace cancellation this
+       * file has produced three times and documented twice.
+       */
       const endR = path.endRing ?? n - 1;
       _sample.axial = 0;
-      if (bi >= endR - 3) {
+      if (!path.loopEnd && bi >= endR - 3) {
         const ea = Math.max(0, endR - 1);
         const eb = Math.min(n - 1, endR + 1);
         let ex = path.x[eb] - path.x[ea];
@@ -12323,10 +16945,29 @@ export function caveSample(x, y, z) {
         _sample.axX = ex;
         _sample.axZ = ez;
       }
+      /**
+       * …AND INFINITY IN A LOOP'S TAIL, WHERE THE SECOND WELD CAN SEE OUT.
+       *
+       * `blind` is a threshold on a depth measured through the TREE, from the
+       * base weld, so it says nothing at all about the other end of a passage
+       * that has two. `blindTail` is the metres back from the far weld inside
+       * which the forest must stay submitted; it is zero — and this whole test
+       * is one compare — for every path in the world except a closure whose
+       * target is not already blind. See `loopBlindTail`, which is where the
+       * measuring is done and where the argument is.
+       */
       _sample.blind = path.blind ?? Infinity;
+      if (path.blindTail > 0) {
+        const endA = path.along[path.endRing ?? n - 1];
+        if (endA - path.along[bi] < path.blindTail) _sample.blind = Infinity;
+      }
       _sample.tight = clamp01((3.3 - span) / 2.1);
       _sample.room = clamp01((span - 2.6) / 6.2);
       _sample.water = path.waterAudio ? path.waterAudio[bi] : 0;
+      // Straight off the channel `resample` splined and `markDepth` filled. No
+      // arithmetic here on purpose: the one thing `deep` exists to prevent is
+      // four consumers each re-deriving "how deep is this" slightly differently.
+      _sample.deep = path.deep ? path.deep[bi] : 0;
       _sample.postX = postX;
       _sample.postZ = postZ;
       _sample.postR = postR;
@@ -12470,6 +17111,28 @@ export class CaveField {
      * nobody is measuring, which is all of them.
      */
     this.perfUnhide = null;
+    /**
+     * MAY A ROOST GO UP ON ITS OWN? See `Cave.checkFlush`.
+     *
+     * Off under automation, and this is the AUTOMATION PINNING rule applied to a
+     * new time-varying global exactly as `dayPhase` and `rainAtTime` apply it.
+     * Fifteen or so pixel-diffing scripts photograph one fixed world; a colony
+     * that peeled off a ceiling because a scripted walk happened to pass within
+     * thirteen metres would make every cave screenshot that contains a chamber
+     * non-reproducible, and the failure would look like a rendering regression
+     * rather than like a bat.
+     *
+     * A FLAG AND NOT A HARD GATE, because the three precedents all leave a way
+     * back in: a script that wants to photograph the flush sets this true and
+     * gets it. `RR.caves.autoFlush = true`.
+     */
+    this.autoFlush = !(typeof navigator !== 'undefined' && navigator.webdriver);
+    /**
+     * Called once, with the roost, on the frame a ceiling comes off. Assigned by
+     * main.js so the sound can be made by the file that owns the audio graph.
+     * Null in a build with no audio, which is every instrument.
+     */
+    this.onFlush = null;
   }
 
   /**
@@ -12540,7 +17203,40 @@ export class CaveField {
      */
     let next = null;
     let nearest = Infinity;
+    /**
+     * …AND THE ROOSTS, IN THE SAME PASS, BECAUSE THE LOOP IS ALREADY HERE.
+     *
+     * This is the entire per-frame cost of the colony: at most five caves, at
+     * most two roosts each, one height window and one squared distance apiece.
+     * Ten compares against a 0.60 ms underground frame. Everything else about
+     * two hundred animals — where each one is, which way it is facing, how far
+     * through the peel it is — is derived in the vertex shader from the one
+     * float this writes. See `Cave.checkFlush`.
+     *
+     * `tripUniforms.uTime` and not a local accumulator: it is `worldClock()`, so
+     * the flush time is on the same clock every client and every shader in the
+     * game reads, which is what the "anything that varies over time must be a
+     * pure function of worldClock" rule is for.
+     */
+    const now = tripUniforms.uTime.value;
     for (const cave of this.caves.values()) {
+      if (
+        this.autoFlush &&
+        cave.checkFlush(camera.position.x, camera.position.y, camera.position.z, now)
+      ) {
+        /**
+         * THE SOUND IS NOT THIS MODULE'S TO MAKE, AND THE CALLBACK IS WHY.
+         *
+         * `caves.js` knows where two hundred bats are; `audio/cave.js` knows what
+         * bus a wet transient goes on. Importing the audio here would make the
+         * world module depend on the audio graph — the exact coupling the top of
+         * the audio file spends a paragraph refusing in the other direction ("it
+         * does not own the room, it drives it"). One optional callback, assigned
+         * by main.js, keeps the two apart and keeps the trigger in the one place
+         * that has both the camera and the roost.
+         */
+        this.onFlush?.(cave.flushed);
+      }
       if (cave.ready) continue;
       const d = Math.hypot(cave.c.x - camera.position.x, cave.c.z - camera.position.z);
       if (d < nearest) {
@@ -12602,6 +17298,52 @@ export class CaveField {
 
   setPixelRatio(r) {
     if (sharedFungus) sharedFungus.uniforms.uPixelRatio.value = r;
+  }
+
+  /**
+   * THE NEAREST DOORWAY, SO SOMETHING CAN COME OUT OF IT.
+   *
+   * `audio/cave.js` is silent whenever the mix is zero — i.e. everywhere outside
+   * — so a cave mouth has never made a sound you could hear from the wood. This
+   * project has three recorded failed attempts at a landmark visible past forty
+   * metres of canopy (`forest-hides-everything-under-40m`), and the honest
+   * conclusion of all three is that sight is the wrong medium: a rainforest
+   * canopy is opaque and a hillside is opaque, and sound is neither.
+   *
+   * THE POSITION IS THE PATH'S RING ZERO WHERE THERE IS ONE. The descriptor's
+   * x/z is the gully's own frame origin, which is a few metres from the arch;
+   * the built passage knows exactly where its doorway is. The fallback matters
+   * because the audio should start hearing the mouth from seventy metres, which
+   * is well before the mesh exists at BUILD_RANGE's three hundred and twenty —
+   * no, the other way round, and this is worth being precise about: the cave is
+   * built LONG before you can hear it, so the fallback is for the single frame
+   * between a descriptor arriving and its plan finishing.
+   *
+   * Into a reused object, because this is called once a frame from the audio.
+   */
+  nearestMouth(px, pz) {
+    let best = null;
+    let bd = Infinity;
+    for (const cave of this.caves.values()) {
+      const d = Math.hypot(cave.c.x - px, cave.c.z - pz);
+      if (d < bd) {
+        bd = d;
+        best = cave;
+      }
+    }
+    if (!best) return null;
+    const p = best.prepared ? best.path : null;
+    _mouth.k = best.c.k;
+    _mouth.x = p ? p.x[0] : best.c.x;
+    _mouth.z = p ? p.z[0] : best.c.z;
+    /**
+     * A metre and a half off the floor: the height of the sound rather than of
+     * the doorway. A source at the floor of a gully is one the HRTF puts below
+     * you all the way in, which reads as a drain.
+     */
+    _mouth.y = (p ? p.y[0] : groundUnder(best.c.x, best.c.z)) + 1.5;
+    _mouth.d = Math.hypot(_mouth.x - px, _mouth.z - pz);
+    return _mouth;
   }
 
   /**
@@ -12669,6 +17411,29 @@ export class CaveField {
    * to, instead of one global compromise that is wrong in both places.
    */
   setFog(colour, density) {
+    /**
+     * …AND THE BATS, WHICH ARE THE ONE THING DOWN HERE WITH A PER-CAVE MATERIAL.
+     *
+     * It has to be a loop rather than one write for the reason `batMaterial`
+     * gives: `uFlush` is a fact about a particular roost, so the material cannot
+     * be shared, so the fog cannot be set once. Three to five caves, twice a
+     * frame's worth of work — and skipping it is not an option, because a bat
+     * with no fog is a hard black cut-out at forty metres in a passage where
+     * everything else has faded to the fog colour, which is the tell that it is
+     * a sprite.
+     *
+     * BEFORE the `sharedMaterial` guard, not after: a cave whose rock has not
+     * been built yet cannot have bats either, but a cave field that has been
+     * disposed and is being rebuilt legitimately has bats before the module
+     * singleton is recreated, and an early return there would leave them unfogged
+     * for a frame.
+     */
+    for (const cave of this.caves.values()) {
+      const u = cave.batMaterial?.uniforms;
+      if (!u) continue;
+      u.fogColor.value.copy(colour);
+      u.fogDensity.value = density;
+    }
     if (!sharedMaterial) return;
     sharedMaterial.uniforms.fogColor.value.copy(colour);
     sharedMaterial.uniforms.fogDensity.value = density;
@@ -12724,6 +17489,48 @@ export class CaveField {
     u.uDayGain.value = 1.45 * (0.25 + 0.75 * day);
     // A third at night. See uDaylight in `shaftMaterial`.
     if (sharedShaft) sharedShaft.uniforms.uDaylight.value = 0.34 + 0.66 * day;
+  }
+
+  /**
+   * THE LIGHTS SOMEBODY BROUGHT IN. Written once a frame from main.js, beside
+   * `setFog` and `setDaylight`, and for exactly the same reason those two are:
+   * they move, and the bake cannot.
+   *
+   * @param {Array<{x,y,z,radius,r,g,b}>} list nearest first, at most four used.
+   *   `r,g,b` are LINEAR and are the colour ALREADY multiplied by the lamp's
+   *   power — a fire at 3 m and a fire at 30 m are the same object with the same
+   *   uniform, and only the caller knows which one the player is standing at.
+   *
+   * NEAREST FIRST IS THE CALLER'S JOB AND IS LOAD-BEARING. Four slots is a hard
+   * cap; a fifth lamp is silently ignored, and the only ordering under which
+   * that is the right answer is one where the ignored one is the furthest away.
+   * Sorting here would mean this module knew where the listener was, which it
+   * does not and should not.
+   *
+   * WRITTEN EVEN WHEN THE LIST IS EMPTY, because the alternative is a lamp that
+   * outlives the fire it came from: a slot is only cleared by something writing
+   * zero into it, and "the player put the torch away" is exactly the frame on
+   * which nobody would think to call this. The cost of clearing four slots is
+   * eight stores.
+   */
+  setLamps(list) {
+    if (!sharedMaterial) return;
+    const u = sharedMaterial.uniforms;
+    for (let i = 0; i < 4; i++) {
+      const l = list ? list[i] : null;
+      const p = u.uLampPos.value[i];
+      const c = u.uLampCol.value[i];
+      if (l) {
+        // 6 m is a campfire's useful reach on rock, and is the default so a
+        // caller that has a position and a colour and no opinion about size
+        // gets something sensible rather than a divide guarded to 0.01.
+        p.set(l.x, l.y, l.z, l.radius ?? 6);
+        c.set(l.r, l.g, l.b);
+      } else {
+        p.set(0, 0, 0, 0);
+        c.set(0, 0, 0);
+      }
+    }
   }
 
   dispose() {

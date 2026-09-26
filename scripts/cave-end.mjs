@@ -174,6 +174,26 @@ for (const seed of SEEDS) {
         const p = cave.path;
         const n = p.x.length;
         const end = p.endRing ?? n - 1;
+        /**
+         * EVERY ASSERTION IN THIS FILE IS ABOUT A DOME, AND A LOOP HAS NONE.
+         *
+         * The four things gated here — the body is stopped before the last ring
+         * with standing room, the overrun is under 0.6 m, the terminus is wider
+         * than the passage feeding it, containment survives to the end — are all
+         * statements about a passage that CLOSES. A looping passage ends in a
+         * full-size ring standing inside another passage's bore: there is
+         * nothing to be stopped by, the overrun is the junction you are meant to
+         * walk through, and OPEN_RATIO would read a 1.0 and call a working
+         * circuit a taper.
+         *
+         * It cannot fire today — closures are only ever built on branches (see
+         * `wantLoop` in caves.js) and this gate only ever examines `paths[0]` —
+         * but "it cannot happen" is what the previous version of this comment
+         * said about a terminus without a dome. If the trunk is ever allowed to
+         * close a loop, this is the gate that goes red for a reason that is not
+         * a fault, so it says so here rather than in a commit message.
+         */
+        if (p.loopEnd) return { built: true, looped: true };
 
         /**
          * How big the terminus is against the passage that feeds it.
@@ -411,6 +431,12 @@ for (const seed of SEEDS) {
     if (!r.built) {
       console.log(`${seed} k=${c.k}  did not build`);
       rows.push({ seed, k: c.k, built: false, fails: ['not built'] });
+      continue;
+    }
+    // A trunk that closes a loop has no terminus to assert anything about. See
+    // the block where this is set.
+    if (r.looped) {
+      console.log(`${seed} k=${c.k}  trunk closes a loop — no dome to test`);
       continue;
     }
 

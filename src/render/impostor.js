@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 
 /**
  * OCTAHEDRAL IMPOSTORS — the fourth distance band, and the only one that is
@@ -111,15 +112,95 @@ import * as THREE from 'three';
  */
 let bakeRenderer = null;
 
+/**
+ * Is the band switched on at this quality level?
+ *
+ * THE SECOND HALF OF THE `impostorBand` KNOB, AND THE HALF THAT SAVES THE
+ * MEMORY. The first half is in world/culling.js, where `InstanceCuller` forces
+ * every layer named `impostor` hidden — that stops the DRAWS, which is fifteen
+ * of the ninety-six a Chromebook is submitting at `potato`, and it works whether
+ * the atlases exist or not.
+ *
+ * This half stops the atlases existing. `pumpImpostors` in forest.js is written
+ * to return immediately when `bakeRendererReady()` is null — it has to be,
+ * because the forest is built before the Pipeline that owns the renderer, and a
+ * headless probe may never build one at all — so refusing to publish the
+ * renderer while the band is off costs nothing to write and saves the whole
+ * bake: fifteen 1024² RGBA atlases, 60 MB of VRAM, and fifteen frames of about
+ * 37 ms each spent making them. On a 4 GB Chromebook the 60 MB is the larger of
+ * those two numbers.
+ *
+ * It is a GATE ON THE BAKE AND NOT AN UNDO. Turning the band back on mid-session
+ * republishes the renderer and `pumpImpostors` — which is called from `cull()`
+ * on every frame and still has its work list — picks up where it left off, one
+ * archetype a frame, exactly as it does at load. Turning it off after the bake
+ * has finished does not free the textures; only the draws stop. That asymmetry
+ * is deliberate: disposing fifteen atlases to reclaim memory on a machine that
+ * has already survived allocating them, at the cost of re-baking if the player
+ * changes their mind back, is a worse trade than leaving them there.
+ *
+ * A module-level `let` with the same justification as `bakeRenderer` above:
+ * there is exactly one renderer and exactly one band.
+ */
+let bandEnabled = true;
+
 /** Called once by the Pipeline constructor. See the block above. */
 export function provideRenderer(renderer) {
   bakeRenderer = renderer;
 }
 
-/** The renderer, or null if the pipeline has not been built yet. */
+/**
+ * The renderer, or null if the pipeline has not been built yet — or if the
+ * impostor band is switched off, which is deliberately indistinguishable from
+ * it. See `bandEnabled`.
+ */
 export function bakeRendererReady() {
-  return bakeRenderer;
+  return bandEnabled ? bakeRenderer : null;
 }
+
+/**
+ * WHETHER THE BAND IS ON, AS DISTINCT FROM WHETHER IT CAN BAKE YET.
+ *
+ * `bakeRendererReady` deliberately conflates two nulls — "no pipeline yet" and
+ * "band switched off" — because `pumpImpostors` wants to do the same nothing in
+ * both cases. Exactly one caller needs them apart, and it is `forest.settled`.
+ *
+ * The work list is built once, at load, from the archetype table. It is drained
+ * only by `pumpImpostors`, and `pumpImpostors` returns on the null above. So
+ * with the band off the list is never emptied and never can be — which made
+ * `settled` a condition that could not become true on `potato`, where the band
+ * is off by preset. Every instrument that waits on it (`perf/weak.mjs` seats
+ * the body and spins 600 frames on exactly this) then reported UNSETTLED on a
+ * world that had in fact fully arrived, and this repo's own recorded lesson is
+ * that a station photographed half-arrived reads as a win. Here it read as a
+ * failure instead, which is luckier and no more correct.
+ *
+ * The list is NOT cleared when the band goes off, and that is the whole reason
+ * this predicate exists rather than a one-line `impostorBakes.length = 0`.
+ * Clearing it would be irreversible: a player who starts at `potato` and moves
+ * to `high` would have no atlases and no way to make any, so the band would
+ * stay shut and the treeline would simply be missing at a preset that pays for
+ * it. Keeping the jobs and excusing them from the settle test costs an array
+ * that is never read, which is the cheaper of the two wrongs by a distance.
+ */
+export function impostorBandOn() {
+  return bandEnabled;
+}
+
+/**
+ * Claimed here rather than in main.js, on the registry's own rule: the module
+ * that owns the private state claims the knob. See the header of
+ * core/quality.js. The knob has a second setter in world/culling.js and needs
+ * both — this one stops the atlases being made, that one stops the meshes being
+ * drawn, and either alone leaves half the cost behind.
+ *
+ * A static import of `quality` from a render module is new, and it is the same
+ * shape render/pipeline.js already has (it imports FASTEST_USEFUL_PERIOD). The
+ * settings module imports nothing, so there is no cycle to create.
+ */
+quality.register('impostorBand', (on) => {
+  bandEnabled = !!on;
+});
 
 /**
  * Atlas geometry. Both of these are in the fragment shader as uniforms rather

@@ -1,0 +1,40 @@
+
+k=0  2397 probes  166 disagree by > 0.45 m  (58 hovering, 106 wading; 0 of them standing on a breakdown block)  worst hover +1.41 m, worst sunk -5.79 m
+   breakdown blocks: 177 columns with a slab in them  2 hovering / 0 wading over 0.45 m  mean |gap| 0.10 m  worst +0.59 / -0.45
+   p6 ring  98 across -0.75  analytic   -42.76  nearest drawn   -36.97  gap -5.79   | passage floor, rock floor off by -5.79  | sample said ring  96 floor   -42.76 inside 1  (this ring: axis -39.38 r 6.92 f 0.52)
+   p6 ring  95 across -0.75  analytic   -42.26  nearest drawn   -37.85  gap -4.41   | passage floor, rock floor off by -4.41  | sample said ring  93 floor   -42.26 inside 1  (this ring: axis -38.48 r 7.97 f 0.52)
+   p4 ring  98 across   0.4  analytic    -6.09  nearest drawn    -2.91  gap -3.18   | passage floor, rock floor off by -3.18  | sample said ring 100 floor    -6.09 inside 1  (this ring: axis -3.76 r 4.09 f 0.43)
+   p4 ring 101 across   0.4  analytic    -6.07  nearest drawn    -3.13  gap -2.94   | passage floor, rock floor off by -2.94  | sample said ring 100 floor    -6.07 inside 1  (this ring: axis -4.66 r 4.2 f 0.43)
+   p1 ring  86 across  0.75  analytic     -2.2  nearest drawn     0.48  gap -2.68   | passage floor, rock floor off by -2.68  | sample said ring  85 floor     -2.2 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p7 ring  65 across -0.75  analytic   -29.86  nearest drawn    -27.3  gap -2.56   | passage floor, rock floor off by -2.56  | sample said ring  69 floor   -29.86 inside 1  (this ring: axis -24.78 r 8.66 f 0.55)
+   p1 ring  89 across -0.75  analytic    -2.35  nearest drawn    -0.15  gap -2.2   | passage floor, rock floor off by -2.2  | sample said ring  86 floor    -2.35 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p1 ring  89 across  0.75  analytic    -2.29  nearest drawn     -0.1  gap -2.19   | passage floor, rock floor off by -2.19  | sample said ring  86 floor    -2.29 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p3 ring 104 across -0.75  analytic    -23.7  nearest drawn   -21.93  gap -1.77   | passage floor, rock floor off by -1.77  | sample said ring 101 floor    -23.7 inside 1  (this ring: axis -21.37 r 4.45 f 0.53)
+   p7 ring  92 across  0.75  analytic   -30.48  nearest drawn   -28.79  gap -1.68   | passage floor, rock floor off by -1.68  | sample said ring  90 floor   -30.48 inside 1  (this ring: axis -25.28 r 7.52 f 0.7)
+   p2 ring  32 across  0.75  analytic     2.99  nearest drawn     4.53  gap -1.54   | passage floor, rock floor off by -1.54  | sample said ring  35 floor     2.99 inside 1  (this ring: axis 4.91 r 2.33 f 0.79)
+   p1 ring  86 across  -0.4  analytic    -2.46  nearest drawn    -0.96  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.46 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p1 ring  86 across   0.4  analytic    -2.43  nearest drawn    -0.94  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.43 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p4 ring  98 across  0.75  analytic    -5.71  nearest drawn    -4.22  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring 100 floor    -5.71 inside 1  (this ring: axis -3.76 r 4.09 f 0.43)
+
+k=-1  1141 probes  79 disagree by > 0.45 m  (31 hovering, 48 wading; 0 of them standing on a breakdown block)  worst hover +1.52 m, worst sunk -20.61 m
+   breakdown blocks: 112 columns with a slab in them  2 hovering / 0 wading over 0.45 m  mean |gap| 0.08 m  worst +0.75 / -0.35
+   p0 ring 242 across  0.75  analytic   -10.69  nearest drawn     9.92  gap -20.61   | passage floor, rock floor off by -20.61  | sample said ring 242 floor   -10.69 inside 1  (this ring: axis -6 r 15.86 f 0.29)
+   p0 ring 263 across  0.75  analytic   -12.42  nearest drawn    -9.72  gap -2.7   | passage floor, rock floor off by -2.7  | sample said ring 260 floor   -12.42 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+   p0 ring 266 across  0.75  analytic   -12.49  nearest drawn    -9.89  gap -2.6   | passage floor, rock floor off by -2.6  | sample said ring 263 floor   -12.49 inside 1  (this ring: axis -8.82 r 8.9 f 0.41)
+   p0 ring 266 across -0.75  analytic   -12.38  nearest drawn    -9.88  gap -2.5   | passage floor, rock floor off by -2.5  | sample said ring 263 floor   -12.38 inside 1  (this ring: axis -8.82 r 8.9 f 0.41)
+   p3 ring 194 across  0.75  analytic   -44.67  nearest drawn   -42.57  gap -2.1   | passage floor, rock floor off by -2.1  | sample said ring 192 floor   -44.67 inside 1  (this ring: axis -41.95 r 5.37 f 0.5)
+   p3 ring  95 across  -0.4  analytic   -17.39  nearest drawn   -15.33  gap -2.06   | passage floor, rock floor off by -2.06  | sample said ring  95 floor   -17.39 inside 1  (this ring: axis -14.84 r 5.16 f 0.51)
+   p3 ring 194 across -0.75  analytic   -44.62  nearest drawn   -42.65  gap -1.97   | passage floor, rock floor off by -1.97  | sample said ring 192 floor   -44.62 inside 1  (this ring: axis -41.95 r 5.37 f 0.5)
+   p4 ring 101 across -0.75  analytic      -26  nearest drawn   -24.08  gap -1.92   | passage floor, rock floor off by -1.92  | sample said ring  98 floor      -26 inside 1  (this ring: axis -23.41 r 5.5 f 0.48)
+   p0 ring 269 across  0.75  analytic   -12.42  nearest drawn   -10.66  gap -1.76   | passage floor, rock floor off by -1.76  | sample said ring 266 floor   -12.42 inside 1  (this ring: axis -10.09 r 5.79 f 0.41)
+   p0 ring 269 across -0.75  analytic   -12.44  nearest drawn    -10.7  gap -1.75   | passage floor, rock floor off by -1.75  | sample said ring 266 floor   -12.44 inside 1  (this ring: axis -10.09 r 5.79 f 0.41)
+   p0 ring 212 across -0.75  analytic    -2.36  nearest drawn    -3.88  gap +1.52   | passage floor, rock floor off by 1.52  | sample said ring   0 floor    -2.36 inside 1  (this ring: axis 1.9 r 9.7 f 0.52)
+   p0 ring 212 across  0.75  analytic    -2.28  nearest drawn     -3.8  gap +1.52   | passage floor, rock floor off by 1.52  | sample said ring   0 floor    -2.28 inside 1  (this ring: axis 1.9 r 9.7 f 0.52)
+   p0 ring 263 across  -0.4  analytic   -12.45  nearest drawn   -10.94  gap -1.52   | passage floor, rock floor off by -1.52  | sample said ring 266 floor   -12.45 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+   p0 ring 263 across   0.4  analytic   -12.38  nearest drawn   -10.92  gap -1.46   | passage floor, rock floor off by -1.46  | sample said ring 266 floor   -12.38 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+
+245 disagreements over 0.45 m (89 hovering, 154 wading); worst hover +1.52 m  <-- the body stands in mid-air here
+breakdown blocks alone: 289 columns, 4 hovering + 0 wading = 4 bad, mean |gap| 0.09 m, worst +0.75 / -0.45 m
+flying probes (over 1.00 m): 6 of 3538 = 1.7 per 1000, bar 5.0
+
+PASS cave-floor  2 caves probed, worst hover +1.52 m against a 1.80 m bar, 1.7 flying per 1000 against 5.0

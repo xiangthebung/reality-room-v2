@@ -40,6 +40,34 @@ export const FLAG_BITE = 1 << 6;
 export const FLAG_PRESENTING = 1 << 7;
 
 /**
+ * THE TWO GESTURES, AND THEY COST EXACTLY ZERO EXTRA BYTES.
+ *
+ * `flags` is already an element of the row and already an integer; the server
+ * copies it through with `| 0` and never inspects a pose bit (see the comment
+ * over its own mirror of this block). So two more bits on a number that is on
+ * the wire eighteen times a second either way is the whole of the transport cost
+ * of being able to point at something and wave at somebody, and there is no
+ * server change at all.
+ *
+ * POINTING CARRIES NO DIRECTION, AND THAT IS THE DESIGN RATHER THAN A SAVING.
+ * The head's yaw and pitch are already in the row and already interpolated every
+ * frame by `avatar.js`, so an arm that follows the aim follows a signal that has
+ * been there since the first version — and, better, it is exactly the same
+ * signal the pointer is themselves looking along. A separate aim vector would be
+ * a second thing that could arrive a tick late, and the tell would be somebody
+ * pointing at one tree while looking at another.
+ *
+ * WAVING IS LATCHED AT THE SENDER, not here. A wave is a tap and the row goes
+ * out at 18 Hz, so `controller.js` holds the bit up for 1.6 s — see WAVE_HOLD
+ * over there. Doing it on the receiving side instead would need per-peer state
+ * and a rule for what a bit that arrives already-on means.
+ */
+/** An arm out along the line of sight. Held while the key is down. */
+export const FLAG_POINTING = 1 << 8;
+/** An arm up, rocking. Latched by the sender — see above. */
+export const FLAG_WAVING = 1 << 9;
+
+/**
  * The server's fan-out rate, and therefore ours.
  *
  * Sending our own transform faster than the server will forward it does nothing

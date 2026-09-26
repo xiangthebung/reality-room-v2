@@ -87,6 +87,41 @@ function identityGrid() {
   return out;
 }
 
+/**
+ * The same walk as `identityGrid`, but yielding where each sample came from.
+ *
+ * The order is a pure function of AUTHORED and IDENTITY_STEP, both of which are
+ * stored in the reference and checked before any comparison, so index i names
+ * the same point in both runs and the coordinates never have to be stored.
+ */
+function identityAt(i) {
+  let n = 0;
+  for (let z = -AUTHORED; z <= AUTHORED; z += IDENTITY_STEP) {
+    for (let x = -AUTHORED; x <= AUTHORED; x += IDENTITY_STEP) {
+      if (x * x + z * z > AUTHORED * AUTHORED) continue;
+      if (n++ === i) return { x, z };
+    }
+  }
+  return null;
+}
+
+/**
+ * One sample in SAMPLE_EVERY is kept in the reference so a failure can say
+ * WHERE, not merely THAT.
+ *
+ * The hash answers "did anything move" to the last bit and is the gate. It
+ * cannot answer "a ring of small errors at one radius, or one huge one", which
+ * the failure message has claimed to report since the day it was written and
+ * never did — `let worst = 0` was printed unassigned. Those two shapes want
+ * different fixes, and finding out which by bisecting the height field by hand
+ * is an afternoon.
+ *
+ * Rounded to a tenth of a millimetre, deliberately: this array exists to locate
+ * a move, not to detect one. Sub-ulp detection is the hash's job and the hash
+ * still does it exactly.
+ */
+const SAMPLE_EVERY = 8;
+
 /** FNV-1a over the raw float64 bits, so a 1 ulp move is a different hash. */
 function hashFloats(values) {
   const buf = new Float64Array(values);
@@ -198,7 +233,19 @@ if (args.save) {
   mkdirSync(resolve(process.cwd(), '.shots'), { recursive: true });
   writeFileSync(
     REF,
-    JSON.stringify({ points: grid.length, hash, step: IDENTITY_STEP, radius: AUTHORED, rows }, null, 2)
+    JSON.stringify(
+      {
+        points: grid.length,
+        hash,
+        step: IDENTITY_STEP,
+        radius: AUTHORED,
+        sampleEvery: SAMPLE_EVERY,
+        sample: grid.filter((_, i) => i % SAMPLE_EVERY === 0).map((h) => +h.toFixed(4)),
+        rows,
+      },
+      null,
+      2
+    )
   );
   console.log(`saved reference: ${grid.length} points inside ${AUTHORED} m, hash ${hash}`);
 }
@@ -233,12 +280,57 @@ if (!args.save && existsSync(REF)) {
     console.log('\nFAIL: the reference was captured with different sampling; recapture it');
     bad++;
   } else if (ref.hash !== hash) {
+    console.log(`\nFAIL: heights inside ${AUTHORED} m changed (hash ${ref.hash} -> ${hash})`);
     // Report the worst offender rather than only that something moved — a
     // radial-mask bug shows up as a ring of small errors at one radius, and a
     // sign error shows up as one huge one, and those want different fixes.
-    let worst = 0;
-    console.log(`\nFAIL: heights inside ${AUTHORED} m changed (hash ${ref.hash} -> ${hash})`);
-    console.log(`  ${grid.length} points sampled; largest move ${worst}`);
+    if (!Array.isArray(ref.sample) || ref.sampleEvery !== SAMPLE_EVERY) {
+      console.log(
+        `  ${grid.length} points sampled; this reference predates the sample grid, ` +
+          'so the move cannot be located — recapture with --save to get that next time'
+      );
+    } else {
+      const now = grid.filter((_, i) => i % SAMPLE_EVERY === 0);
+      let worst = 0;
+      let worstAt = -1;
+      let moved = 0;
+      let sumAbs = 0;
+      // Radius histogram, so a ring reads as a ring rather than as a mean.
+      const bands = [0, 20, 40, 60, 90, 120, 150, AUTHORED];
+      const bandN = new Array(bands.length - 1).fill(0);
+      const bandWorst = new Array(bands.length - 1).fill(0);
+      for (let i = 0; i < Math.min(now.length, ref.sample.length); i++) {
+        const d = Math.abs(now[i] - ref.sample[i]);
+        if (d <= 5e-4) continue;
+        moved++;
+        sumAbs += d;
+        if (d > worst) {
+          worst = d;
+          worstAt = i;
+        }
+        const p = identityAt(i * SAMPLE_EVERY);
+        const r = p ? Math.hypot(p.x, p.z) : 0;
+        for (let b = 0; b < bandN.length; b++) {
+          if (r >= bands[b] && r < bands[b + 1]) {
+            bandN[b]++;
+            if (d > bandWorst[b]) bandWorst[b] = d;
+            break;
+          }
+        }
+      }
+      const at = worstAt >= 0 ? identityAt(worstAt * SAMPLE_EVERY) : null;
+      console.log(
+        `  ${now.length} sampled points compared; ${moved} moved ` +
+          `(${((moved / now.length) * 100).toFixed(1)}%), mean move ` +
+          `${(moved ? sumAbs / moved : 0).toFixed(3)} m, largest ${worst.toFixed(3)} m` +
+          (at ? ` at (${at.x.toFixed(0)}, ${at.z.toFixed(0)}), ${Math.hypot(at.x, at.z).toFixed(0)} m out` : '')
+      );
+      const shape = bandN
+        .map((n, b) => (n ? `${bands[b]}-${bands[b + 1]} m: ${n} (max ${bandWorst[b].toFixed(2)})` : null))
+        .filter(Boolean)
+        .join('  |  ');
+      if (shape) console.log(`  by radius — ${shape}`);
+    }
     bad++;
   } else {
     console.log(`\nidentity: ${grid.length} points inside ${AUTHORED} m are bit-identical (hash ${hash})`);

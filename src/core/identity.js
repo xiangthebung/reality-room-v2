@@ -245,10 +245,33 @@ export function dyeFor(h = playerHue()) {
   return best;
 }
 
+/**
+ * What a player who has never chosen arrives at.
+ *
+ * IT WAS 'whenever', AND 'whenever' IS A UNIFORM RANDOM HOUR — so roughly two
+ * first-ever players in five landed in a pitch-dark wood, with no idea which
+ * key does anything, on the one screen where the game has to make its case. The
+ * two most interesting hours in this world are both hours you have to know to
+ * ask for; the default has to be the one that simply works.
+ *
+ * NOT WRITTEN TO STORAGE, and that is the whole shape of this change. Writing
+ * it would silently spend the Whenever button — a returning player who chose
+ * Whenever would be indistinguishable from one who never chose at all, and the
+ * option would quietly stop meaning anything. So this is a default for the
+ * unstored case only: the button stays available, and the first time anybody
+ * presses anything, `setArrivalId` writes their answer and this is never
+ * consulted again.
+ *
+ * Dead under automation. `dayPhase` returns AUTHORED_PHASE whenever
+ * `navigator.webdriver` is set, so a script gets the authored sky whatever
+ * origin the enter handler sets from this.
+ */
+const FIRST_ARRIVAL = 'morning';
+
 export function arrivalId() {
   if (arrival === null) {
     const stored = read(KEY_ARRIVAL);
-    arrival = ARRIVALS.some((a) => a.id === stored) ? stored : 'whenever';
+    arrival = ARRIVALS.some((a) => a.id === stored) ? stored : FIRST_ARRIVAL;
   }
   return arrival;
 }

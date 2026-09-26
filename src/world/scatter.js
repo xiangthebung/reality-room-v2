@@ -16,7 +16,23 @@ import {
  * because this module is evaluated inside `forest-worker.js`, where THREE and
  * anything that touches a canvas are unavailable. See its header.
  */
-import { siteClearance } from './sites.js';
+import { SITE_RADIUS, pathClearance, pathTrees, siteClearance, sitePlan } from './sites.js';
+/**
+ * WHICH LAND THIS IS. See `lands/index.js` for how a seed string carries one.
+ *
+ * This module holds the MACHINERY — the seeded lattice offsets, the density
+ * product, the sector grids, the tiling correction, the bucket packer — and the
+ * land holds every number and every rule that could differ between two worlds.
+ * The line between them is drawn in `lands/rainforest.js`'s header; the short
+ * version is that a rule shared by every land lives here and a rule that IS the
+ * content of a land lives there.
+ *
+ * `currentLand()` is one property read on a module-scope binding, so the guards
+ * below cost an identity compare rather than a lookup. It cannot be hoisted to a
+ * module-scope const: the worker imports this file BEFORE its init message
+ * arrives, so at import time this realm has not been told which land it is.
+ */
+import { currentLand } from './lands/index.js';
 
 /**
  * Where things grow. All of it, everywhere, from one function per layer.
@@ -115,8 +131,6 @@ import { siteClearance } from './sites.js';
  * same function, not because they ran the same script the same way.
  */
 
-const CLEARING_RADIUS = 14;
-
 /**
  * WHERE THE GROVES AND GLADES ARE, PER WORLD — the last unseeded field.
  *
@@ -147,16 +161,22 @@ const CLEARING_RADIUS = 14;
  * arrives, so at import time the realm's seed is still 0.
  */
 let _groveSeed = -1;
+let _groveLand = null;
 let _groveX = 5;
 let _groveZ = -9;
 
 function grove(x, z) {
   const s = getWorldSeed();
-  if (s !== _groveSeed) {
+  const land = currentLand();
+  if (s !== _groveSeed || land !== _groveLand) {
     _groveSeed = s;
+    _groveLand = land;
     if (s === 0) {
-      _groveX = 5;
-      _groveZ = -9;
+      // The identity offsets, which are the LAND's to name because they are the
+      // lattice its grove field was tuned on. Returned verbatim rather than
+      // derived, for the reason above.
+      _groveX = land.density.identity[0];
+      _groveZ = land.density.identity[1];
     } else {
       // Spread over a few hundred lattice units. `noise2` hashes on the integer
       // lattice, so anything smaller than a couple of features (~90 m at this
@@ -165,7 +185,8 @@ function grove(x, z) {
       _groveZ = (hashString(`grove:z:${s}`) % 100000) / 137.0 - 364;
     }
   }
-  return fbm2(x * 0.011 + _groveX, z * 0.011 + _groveZ, 3);
+  const d = currentLand().density;
+  return fbm2(x * d.groveFreq + _groveX, z * d.groveFreq + _groveZ, d.groveOctaves);
 }
 
 /**
@@ -182,8 +203,25 @@ function grove(x, z) {
  *
  * The consequence a caller has to know about: the answer is only valid until
  * the next call. Nothing holds one.
+ *
+ * ITS FIELDS ARE THE LAND'S, WHICH IS THE WHOLE POINT OF THE LAND LAYER. The
+ * rainforest declares `meadow, bramble, litter, damp, flower, canopy, wet,
+ * understorey`; the taiga declares `drift, scrub, needle, damp, exposure,
+ * canopy, wet, thicket` and shares only three of them. The object is built once
+ * per land, with every field pre-declared at 0 so the shape stays monomorphic —
+ * a hidden-class transition on the hottest object in the worker would cost more
+ * than the two fbms it exists to avoid.
  */
-const _ch = { meadow: 0, bramble: 0, litter: 0, damp: 0, flower: 0, canopy: 0, wet: 0 };
+let _ch = null;
+let _chLand = null;
+let _chFn = null;
+
+/**
+ * The kit `makeCharacter` is handed, built once. It is a module-scope const
+ * rather than a per-call object because the land's factory captures it, so the
+ * per-candidate cost is a closure variable rather than a property load.
+ */
+const _chKit = { forestDensity, wetness, fbm2, offsets };
 
 /**
  * WHICH WORLD'S BIOMES THESE ARE.
@@ -238,148 +276,102 @@ function offsets() {
  * disagrees with itself about what kind of place a point is at whatever radius
  * the two copies last drifted apart.
  *
- * TWO FIELDS AT DIFFERENT SCALES, AND THEY MUST NOT SHARE A LATTICE. `a` is the
- * grain of the ground — dry and open at one end, rank and shaded at the other —
- * and `b` is how vigorous the growth is. Sampling both from the same offsets
- * would correlate them, and then every meadow would also be a flower meadow and
- * every thicket would also be needle litter, which is one biome with two names.
- * Different frequencies AND different offsets is the same rule `terrain.js`
- * applies to its region amplitudes, for the same reason.
  *
- * The weights are deliberately competitive rather than independent: `bramble`
- * is multiplied by `1 - meadow`, `meadow` by `1 - damp`, and `litter` reads the
- * OPPOSITE end of `a` from `meadow`. Independent weights produce a place that
- * is 40% meadow and 40% thicket and 40% litter, which on the ground is a mess
- * with no character at all — the eye reads mixture as noise. Making them
- * exclude one another is what lets a region commit to being one thing.
+ * ==== THE ARITHMETIC MOVED TO THE LAND. THE CONTRACT DID NOT. ==============
+ *
+ * What is left here is the dispatch and the two invariants every land's version
+ * has to keep, because they are properties of the CALLERS rather than of any
+ * particular wood:
+ *
+ *   ONE OBJECT, FILLED IN PLACE. The answer is only valid until the next call.
+ *   Ninety per cent of candidates are rejected on the first weight they look at,
+ *   so returning a fresh object would be pure garbage in a worker.
+ *
+ *   TWO FIELDS AT DIFFERENT SCALES, AND THEY MUST NOT SHARE A LATTICE. `a` is
+ *   the grain of the ground and `b` is how vigorous the growth is. Sampling both
+ *   from the same offsets correlates them, and two correlated biome fields are
+ *   one biome field with a longer comment. `offsets()` below hands every land
+ *   the same four decorrelated per-seed numbers; what a land chooses is what to
+ *   DO with them.
+ *
+ * AND THE ONE PIECE OF DESIGN ADVICE THAT SURVIVES THE MOVE, because it was
+ * learnt the expensive way and applies to any land anybody writes:
+ *
+ *   THE WEIGHTS MUST BE COMPETITIVE RATHER THAN INDEPENDENT. In the rainforest
+ *   `bramble` is multiplied by `1 - meadow`, `meadow` by `1 - damp`, and
+ *   `litter` reads the OPPOSITE end of `a` from `meadow`. Independent weights
+ *   produce a place that is 40% meadow and 40% thicket and 40% litter, which on
+ *   the ground is a mess with no character at all — the eye reads mixture as
+ *   noise. Making them exclude one another is what lets a region commit to
+ *   being one thing.
+ *
+ *   AND EVERY PLACEMENT RULE MUST READ A WEIGHT RATHER THAN RE-DERIVING ONE.
+ *   This function once went to real trouble to make three weights exclusive and
+ *   then SEVEN layers read `out.canopy` raw and ignored all of it — sticks
+ *   `0.1 + canopy*0.42`, saplings the same, bigleaf the same, palms
+ *   `0.14 + canopy*0.5`, bushes a hand-rolled copy of the `edge` term, and so on
+ *   — so every one of them peaked on the same ground and the closed-canopy floor
+ *   came out as one uniform mat of everything at once. Roughly a hundred objects
+ *   per 100 m², ninety-six of them under 3 m, against the 5-20% projected cover
+ *   a real terra firme understorey has. A rule that copies a biome instead of
+ *   reading one is a biome that has quietly forked.
+ *
+ * REBUILT ON A LAND CHANGE, not on every call. `setLand` runs once per realm
+ * before anything samples this, so in practice the guard below is one identity
+ * compare per candidate and the factory runs once in the life of the process.
  */
-export function character(x, z, out = _ch) {
-  const o = offsets();
-  // ~80 m per feature: you cross one in about a minute of walking.
-  const a = fbm2(x * 0.0125 + o.ax, z * 0.0125 + o.az, 3) * 0.5 + 0.5;
-  // ~110 m, and offset a long way off `a`'s lattice.
-  const b = fbm2(x * 0.0091 + o.bx, z * 0.0091 + o.bz, 2) * 0.5 + 0.5;
-  const canopy = forestDensity(x, z);
-  const wet = wetness(x, z);
-
-  out.canopy = canopy;
-  out.wet = wet;
-  // The damp ground is the stream's flood plain, not the stream: `wetness`
-  // reaches 1 in the channel itself, and 0.28 is roughly the top of the bank.
-  out.damp = smoothstep(clamp01((wet - 0.26) / 0.42));
-
-  /**
-   * MEADOW WANTS LIGHT. `1 - canopy * 1.22` is near zero under a closed canopy
-   * and near one in a glade, which is not a stylistic choice — long grass is
-   * what grows where the trees are not, and putting a hay meadow under a dense
-   * stand of pine is the kind of detail that reads as wrong without the viewer
-   * being able to say why.
-   *
-   *
-   * IT WAS 1.45 AND THAT PUT THE MEADOW OUT OF REACH OF THE PLAYER.
-   *
-   * The complaint was "I don't see any tall grass", and this coefficient is one
-   * of the three reasons — the one that decides not how tall the grass is but
-   * whether there is any. At 1.45 the term is zero above a canopy of 0.69, and
-   * this wood runs at a MEAN canopy of 0.586 with 72–76% of its ground above
-   * 0.5: the term was 0.15 at the average point in the forest, so meadow was
-   * 30% of the authored understorey and 1–8% of the streamed one. Counted
-   * within 40 m of the player on the shipped build: 626 clumps at spawn, 321 at
-   * 200 m, and ZERO at both 700 m and 1500 m. A player who walks a kilometre in
-   * a straight line and meets no long grass is right to say there is none.
-   *
-   * 1.22 moves the cut-off from canopy 0.69 to 0.82 and roughly doubles the
-   * term at the mean, which is the difference between "meadow lives in glades"
-   * and "meadow lives in glades and anywhere the canopy is broken" — the second
-   * being both truer of a real wood and the thing that makes it findable.
-   * Measured over a 3 km box on a 24 m tile grid: the fraction of tiles that
-   * grow any meadow at all goes from 38% to 54%.
-   *
-   * IT IS NOT A DENSITY CHANGE. Widening the biome and then leaving the
-   * acceptance alone would have added instances, which is the opposite of what
-   * that pass was for; the meadow's spacing went from 0.9 m to 1.8 m in the same
-   * change and its acceptance lost its floor, for a net cut over MORE of the
-   * world.
-   *
-   * WHAT ELSE MOVES. `out.bramble` reads `1 - meadow * 0.9`, so a wider meadow
-   * is a slightly narrower thicket, which is the exclusion working as designed.
-   * Nothing else reads `meadow`, and in particular `litter` does not — which
-   * matters because the sward's acceptance is gated on `1 - litter * 0.8`, so
-   * changing this line cannot move a blade of it.
-   */
-  out.meadow =
-    clamp01(1 - canopy * 1.22) *
-    smoothstep(clamp01((a - 0.44) / 0.22)) *
-    (1 - out.damp);
-
-  /**
-   * BRAMBLE WANTS THE EDGE. Not the deep shade and not the open glade, but the
-   * broken canopy in between, which is where a thicket actually forms — so the
-   * canopy term is a band rather than a ramp. Excluded from the meadow so the
-   * two do not interleave into scrub.
-   */
-  const edge = 1 - Math.abs(canopy - 0.52) * 2.6;
-  out.bramble =
-    clamp01(edge) * smoothstep(clamp01((b - 0.5) / 0.2)) * (1 - out.damp) * (1 - out.meadow * 0.9);
-
-  /**
-   * LITTER IS THE ABSENCE. The far end of `a` from the meadow, under a closed
-   * canopy: dry ground, deep shade, and nothing growing on it. Every layer that
-   * can be suppressed tests `1 - litter` somewhere — the sward included, as of
-   * the streaming pass — so raising this weight is how a region gets emptied.
-   */
-  out.litter = smoothstep(clamp01((0.44 - a) / 0.2)) * clamp01(canopy * 1.35) * (1 - out.damp);
-
-  /**
-   * FLOWERS ARE A SEPARATE ROLL, not a property of the meadow.
-   *
-   * Tying them to the meadow weight makes every meadow a flower meadow, and
-   * then the flowers stop being a thing you come across. Keyed to `b` LOW where
-   * bramble is keyed to `b` high, so a region is either flowery or rank, and
-   * both of those are found in the same open ground.
-   *
-   * Keyed to `b` only, and NOT also to `a`. Three conditions at once is one
-   * condition too many: gating on open ground AND low `b` AND high `a` left
-   * flowers on 0.9% of the disc and produced 334 of them in the whole world,
-   * which is not a wildflower patch, it is a rounding error. Two fields is
-   * enough to make a region mean something.
-   */
-  out.flower = clamp01(1 - canopy * 0.8) * smoothstep(clamp01((0.56 - b) / 0.3)) * (1 - out.damp * 0.8);
-
-  return out;
+export function character(x, z, out) {
+  const land = currentLand();
+  if (land !== _chLand) {
+    _chLand = land;
+    _chFn = land.makeCharacter(_chKit);
+    _ch = {};
+    for (const k of land.weights) _ch[k] = 0;
+  }
+  return _chFn(x, z, out ?? _ch);
 }
 
 /**
- * The five hues a wildflower patch can be.
+ * How much forest wants to be at this point, 0..1.
  *
- * Named rather than inlined because the flower texture is drawn almost white so
- * that the instance colour decides what colour a patch is — the palette is the
- * layer's whole identity and it should be findable from the top of the file
- * rather than buried in the middle of a scatter rule.
+ * SEVEN TERMS, MULTIPLIED, AND THE PRODUCT IS NOT THE LAND'S TO CHANGE.
  *
- * THE FIVE VALUES ARE UNCHANGED FROM THE TEMPERATE ROSTER AND DID NOT NEED TO
- * MOVE. They used to be named for buttercup, campion, harebell, poppy and
- * bluebell; the same five hues are gold Calathea, pink Costus, blue Dichorisandra,
- * scarlet Psychotria and violet Tradescantia, all of which are understorey
- * plants of this forest. A hue is not a latitude — what said "meadow" was the
- * SHAPE the colour arrived in, and that is fixed in `flowerTexture`.
+ * Only the coefficients come from `land.density`. The SHAPE of this expression
+ * stays here because three of its terms are world FEATURES rather than tuning,
+ * and a land that could switch one off would be a land with a bug in it:
+ *
+ *   the clearing hole, because you have to be able to see where you are;
+ *   the cave-mouth hole, because the one feature that must be legible from a
+ *     distance was the one thing being screened;
+ *   the gathering-place hole, because a fourteen-metre screen with four trees in
+ *     front of it is not a cinema.
+ *
+ * Every land gets all three. What a land chooses is how coarse its stands are
+ * (`grove*`), how hard water and slope bite, and how tight the ring of trees
+ * around the spawn glade is (`rim*`).
  */
-export const FLOWER_HUES = [0.14, 0.92, 0.62, 0.1, 0.78];
+/**
+ * How much of the tree field a path takes out at its centre.
+ *
+ * Not 1.0, and the difference is the whole reading of the feature. See the
+ * block at the bottom of `forestDensity`.
+ */
+const PATH_TREE_GAIN = 0.85;
 
-/** How much forest wants to be at this point, 0..1. */
 export function forestDensity(x, z) {
+  const D = currentLand().density;
   const d = Math.hypot(x, z);
   // Groves and glades.
-  let k = grove(x, z) * 0.55 + 0.62;
+  let k = grove(x, z) * D.groveGain + D.groveBase;
   // The clearing is a hole in the field, with a soft rim so the edge of the
   // wood is ragged rather than a circle drawn on the ground.
-  k *= smoothstep(clamp01((d - CLEARING_RADIUS) / 7));
+  k *= smoothstep(clamp01((d - D.clearingRadius) / D.clearingRim));
   // Nothing grows in the stream.
-  k *= 1 - clamp01(wetness(x, z) * 1.6);
+  k *= 1 - clamp01(wetness(x, z) * D.wet);
   // Nothing grows on a cliff.
-  k *= 1 - clamp01(slopeAt(x, z) * 2.4);
+  k *= 1 - clamp01(slopeAt(x, z) * D.slope);
   // A dense band around the clearing, so the space you spawn in feels enclosed.
-  k *= 1 + 1.1 * Math.exp(-Math.pow((d - CLEARING_RADIUS - 6) / 10, 2));
+  k *= 1 + D.rimGain * Math.exp(-Math.pow((d - D.clearingRadius - D.rimOffset) / D.rimWidth, 2));
   /**
    * Nothing grows in a cave mouth, and the slope test above is why this is
    * needed rather than redundant.
@@ -399,19 +391,13 @@ export function forestDensity(x, z) {
    * …and nothing grows where somebody has built something.
    *
    * The third hole in this field, and it exists for the same reason as the other
-   * two. The spawn clearing is a hole because you have to be able to see where
-   * you are; a cave mouth is a hole because the one feature that must be legible
-   * from a distance was the one thing being screened. A gathering place is a hole
-   * because a fourteen-metre screen with four oaks in front of it is not a
-   * cinema, and a ring of benches you cannot walk between is not somewhere to sit
-   * down.
-   *
-   * It is worse than it sounds without this, and in a way that is worth writing
-   * down: the site chooser looks for the FLATTEST ground within 185 m, and this
-   * very function scales density by `1 - slope * 2.4`. So "the best place to put
-   * a clearing" and "the place the forest most wants to be" are the same
-   * question with the same answer, and a build that skipped this step planted
-   * every single site it had just chosen. The photographs were unambiguous.
+   * two. It is worse than it sounds without this, and in a way that is worth
+   * writing down: the site chooser looks for the FLATTEST ground within 185 m,
+   * and this very function scales density by `1 - slope * 2.4`. So "the best
+   * place to put a clearing" and "the place the forest most wants to be" are the
+   * same question with the same answer, and a build that skipped this step
+   * planted every single site it had just chosen. The photographs were
+   * unambiguous.
    *
    * `siteClearance` reads the same table `gathering.js` builds the props from —
    * hence it living in `sites.js`, which is the one module both a worker and the
@@ -419,7 +405,184 @@ export function forestDensity(x, z) {
    * drift apart.
    */
   k *= 1 - siteClearance(x, z);
+  /**
+   * …and thinner, but not empty, where people have WALKED.
+   *
+   * The fourth hole, and the only one that is deliberately not a hole. The
+   * other three are places where a tree would be standing inside something, so
+   * they take the density to zero; this one is a line between two of them, and
+   * a corridor with no stems in it at all for four hundred metres is a forestry
+   * ride. 0.85 leaves roughly one stem in seven standing in the line, which is
+   * the difference between a path you follow and a road somebody cut.
+   *
+   * `pathTrees` is the NARROWER of the two path profiles — see the two-widths
+   * block in sites.js. It is behind a 24 m spatial hash rather than a linear
+   * scan, because there are eighty-odd segments against `siteClearance`'s nine
+   * circles and this function is called a few hundred thousand times a sector.
+   */
+  k *= 1 - PATH_TREE_GAIN * pathTrees(x, z);
   return clamp01(k);
+}
+
+/* -------------------------------------------------------------------------- */
+/* trodden ground                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * HOW WORN THE FLOOR IS AT THIS POINT: 0 where people stand, 1 in ordinary wood.
+ *
+ *
+ * ==== `siteClearance` GATES TREES AND NOTHING ELSE, AND THAT WAS THE BUG ====
+ *
+ * `forestDensity` above carries `1 - siteClearance`, so a gathering place is a
+ * hole in the TREE field — and every layer that reads `forestDensity` (directly
+ * or through `character`) inherits the hole for free. That covers the trunks,
+ * the logs, and every shade-loving layer whose weight is keyed to `canopy` or
+ * `understorey`.
+ *
+ * It does the exact OPPOSITE for the sunlit ones, and that is not a detail. A
+ * site is a hole in the canopy, `character` reads a hole in the canopy as LIGHT
+ * (`meadow = 1 - canopy * 1.22`, `litter` floors out at 0.35), and the sward's
+ * acceptance is `patch * (1 - litter)`. So the commons — a 23 m disc chosen for
+ * being the flattest, driest ground within 185 m — scored the HIGHEST sward
+ * weight in the world, and came out as a uniform lawn running up to and around
+ * the fire and the speakers. Same mechanism, same failure, as the cave mouths:
+ * clearing the canopy is a licence for the ground layer unless something says
+ * otherwise. This is the thing that says otherwise.
+ *
+ * It is the most important place in the app. People stand in it and talk; it has
+ * a screen, benches at 17.2 m and four fires in it. Trodden ground is what a
+ * gathering place looks like, it is cheaper than a lawn, and the lighting
+ * rebuild means the floor no longer has to be busy to be interesting.
+ *
+ *
+ * ==== WHY THIS IS NOT JUST `1 - siteClearance(x, z)` ====
+ *
+ * Because that function is flat at 1 across the whole of `SITE_RADIUS` and only
+ * fades over `SITE_RIM` — the right profile for trees, which have to be gone
+ * from every square metre a bench might stand on, and the wrong one for grass.
+ * Cover should come back sooner than the wood does: bare where the boots are,
+ * thin through the seating, ordinary understorey by the time you reach the tree
+ * line. So the profile here is built from the same table but with its own two
+ * radii, and it reaches full cover at the same place the trees do rather than
+ * inside them — an inner edge of bare ground and an outer edge of wood with a
+ * graded band between is a clearing; two concentric circles a metre apart is a
+ * stencil.
+ *
+ * `SITE_RIM` is not exported (and `sites.js` is not this pass's to edit), hence
+ * the two factors below rather than reading it. Against the real table:
+ *
+ *   commons   r 23   bare to 12.6 m, ordinary by 34.5 m
+ *   viewpoint r 8.5  bare to  4.7 m, ordinary by 12.8 m
+ *   jetty     r 6.5  bare to  3.6 m, ordinary by  9.8 m
+ *   hearth    r 6.2  bare to  3.4 m, ordinary by  9.3 m
+ *
+ * REJECTED: a flat multiplier on the whole disc (0.3x cover everywhere inside
+ * the site). It reads as a texture change rather than as a place — the eye needs
+ * the gradient to understand that the middle is where people are. Also rejected:
+ * doing this inside `forestDensity`, which would have taken the trees with it
+ * and undone the clearing.
+ *
+ *
+ * ==== THE SPAWN DISC LIVES HERE TOO, AND IT USED TO LIVE IN ONE LAYER ====
+ *
+ * The meadow rule carried a hand-rolled `feet` term — 4.5 m of nothing ramping
+ * to full over the next 5.5 — with a comment calling it "the one
+ * distance-from-origin term left in the understorey". It was, and it was in one
+ * layer of nine, which is why the sward and the giant leaves grew straight
+ * through it. Same radii, same shape, now applied to every layer that reads
+ * this: the spawn clearing is the ninth gathering place and it is the one you
+ * are guaranteed to see first.
+ */
+const TROD_INNER = 0.55;
+const TROD_OUTER = 1.5;
+/** The spawn glade's own worn patch. The meadow rule's old `feet` numbers. */
+const TROD_SPAWN_R = 4.5;
+const TROD_SPAWN_RIM = 5.5;
+
+let _trodSeed = -1;
+/** @type {{x: number, z: number, r0: number, span: number, out: number}[]} */
+let _trodSites = [];
+
+/**
+ * Memoised on the world seed for the reason `sites.js` and `grove()` both give:
+ * this module is imported by the worker BEFORE its init message arrives, so at
+ * import time the realm's seed is still 0 and anything computed at module scope
+ * would describe the wrong world. `sitePlan()` is itself memoised, so the guard
+ * below is one integer compare on the hot path.
+ */
+function troddenSites() {
+  const s = getWorldSeed();
+  if (s === _trodSeed) return _trodSites;
+  _trodSeed = s;
+  const plan = sitePlan();
+  _trodSites = [];
+  const add = (site, kind) => {
+    if (!site) return;
+    const r0 = SITE_RADIUS[kind] * TROD_INNER;
+    const out = SITE_RADIUS[kind] * TROD_OUTER;
+    _trodSites.push({ x: site.x, z: site.z, r0, span: out - r0, out });
+  };
+  add(plan.commons, 'commons');
+  for (const h of plan.hearths) add(h, 'hearth');
+  for (const v of plan.viewpoints) add(v, 'viewpoint');
+  for (const j of plan.jetties) add(j, 'jetty');
+  return _trodSites;
+}
+
+/**
+ * 0 on worn ground, 1 in ordinary wood.
+ *
+ * The bounding-box bail before the hypot is worth having for the same reason
+ * `siteClearance` has one: this runs on every candidate of six layers and misses
+ * on almost all of them.
+ */
+export function trodden(x, z) {
+  const d = Math.hypot(x, z);
+  let k = smoothstep(clamp01((d - TROD_SPAWN_R) / TROD_SPAWN_RIM));
+  /**
+   * ==== AND THIS IS THE LINE BETWEEN THEM. ================================
+   *
+   * THIS FOLD IS WHAT ACTUALLY DRAWS A PATH, and it is worth being explicit
+   * about why the mark has to arrive here of all places.
+   *
+   * The obvious way to draw a trodden line is to darken the ground under it.
+   * The ground's vertex colour is computed in terrain.js; terrain.js cannot
+   * import sites.js without a cycle (sites.js imports terrain.js for the height
+   * field it measures its places on), so the ground literally cannot be told
+   * where the paths are. What CAN be told is the scatter, because `trodden` is
+   * already threaded into every land layer's `make()` — so the path is drawn by
+   * the ABSENCE of sward, ferns and litter along it, which is what a worn line
+   * through a wood is anyway. Nothing is painted, nothing is added, and the
+   * cost is one hashed lookup per candidate.
+   *
+   * `pathClearance` is the WIDER of the two profiles — bare where the boots go,
+   * against `pathTrees`'s narrower stand-off for the trunks. The two are folded
+   * with `min` rather than multiplied for the same reason the site loop below
+   * uses `min`: overlapping worn ground is not more worn than the worst of it,
+   * and a product would make the junction where a path meets a clearing darker
+   * than either, which is the one place it should be least distinct.
+   */
+  const way = pathClearance(x, z);
+  if (way > 0) {
+    const w = 1 - way;
+    if (w < k) k = w;
+    if (k <= 0) return 0;
+  }
+  const sites = troddenSites();
+  for (let i = 0; i < sites.length; i++) {
+    const c = sites[i];
+    const dx = x - c.x;
+    if (dx > c.out || dx < -c.out) continue;
+    const dz = z - c.z;
+    if (dz > c.out || dz < -c.out) continue;
+    const dd = Math.hypot(dx, dz);
+    if (dd >= c.out) continue;
+    const w = smoothstep(clamp01((dd - c.r0) / c.span));
+    if (w < k) k = w;
+    if (k <= 0) return 0;
+  }
+  return k;
 }
 
 /**
@@ -436,82 +599,20 @@ export function submerged(x, z) {
 }
 
 /**
- * Which species wants this spot.
+ * Which species wants this spot. The ladder itself is the land's — see
+ * `speciesAt` in `lands/rainforest.js`, where every threshold and the reason
+ * for each of them lives.
  *
- * Conifers take the high ground, willows hug the water, birch likes the light
- * near the clearing edge. Written as a function of (altitude, wetness, roll)
- * rather than inline in `treeSector` because the argument order of the tests is
- * load-bearing — `roll` is one draw, compared against five thresholds in
- * sequence — and that is the kind of thing that gets "tidied" into five draws
- * by somebody who does not realise it reseeds the wood.
- *
- *
- * THE ROWAN IS KEYED TO LIGHT, AND `density` COSTS NOTHING TO PASS.
- *
- * It is the only species here that reads the canopy field, and there are two
- * reasons, one ecological and one about where a flowering tree is worth putting.
- *
- * A rowan is a pioneer. It comes up on the edge of a glade, in a gap, along a
- * ride — anywhere the canopy is broken — and it does not grow under a closed
- * one, so a flat share of the wood would have put white blossom in the darkest
- * places in it. And a tree in flower is worth the paint only where it can be
- * seen: gating on light puts every rowan at the edge of an opening, with sky
- * behind it, which is the one place in this forest where a pale crown reads at
- * thirty metres instead of dissolving into the green.
- *
- * `density` is `forestDensity(x, z)`, which `treeSector` has ALREADY computed
- * for its rejection test one line earlier, so this is a free argument rather
- * than a fifth field evaluation. No extra `rng()` is drawn — the roll is still
- * one draw against a ladder of thresholds — so the world stays a pure function
- * of its seed and the draw ORDER is untouched.
- *
- * THE SHARE WAS TUNED BY COUNTING, and the first guess was half of what it
- * needed to be. Oak gives up 0.42..0.62 of the roll wherever the canopy is under
- * 0.70. At the first values — under 0.62 canopy and 0.42..0.58 of the roll — the
- * rowan came out at 5.1% of 15 084 trees over a 640 m box, which sounds like a
- * tenth of the wood and is not: trees are placed BY rejection against the same
- * density field, so the trees that exist are already weighted toward the dense
- * places, and a threshold that covers 40% of the ground covers far less than
- * 40% of the trees standing on it. At 0.70 / 0.62 it measures 10.3% — 1551 of
- * 15 084 — against oak's 18.5%, birch's 33.1% and pine's 38.0%.
- *
- * Two thirds of those carry flower (archetypes 0 and 2), so about one tree in
- * fifteen in the whole wood is in blossom, concentrated where the canopy opens.
- * From inside a thicket you see none, from the edge of a glade you see three.
- * That is the distribution the species should have and it is also the one that
- * makes the blossom worth having: a flowering tree everywhere is wallpaper.
- */
-/**
- * THE THRESHOLDS BELOW ARE UNCHANGED FROM THE TEMPERATE ROSTER, DELIBERATELY.
- *
- * `trees.js` swapped pine/birch/oak/willow/rowan for palm/cecropia/kapok/fig/
- * brownea by reshaping the five entries in place rather than adding to them —
- * see the roster block at the top of that file. This function is the reason
- * that was free: it still returns five labels off ONE roll against the same
- * ladder of numbers, so the draw stream is untouched, every trunk in the world
- * is bit-for-bit where it was, and the per-layer instance counts do not move.
- * Only the labels changed, and each new label was chosen for the old one whose
- * shape and habitat it already had:
- *
- *   wet ground        -> fig, where the willow stood. A strangler on a bank.
- *   high ground       -> palm, where the pine stood. It is 38% of the wood,
- *                        which is close to the real share of palm stems in
- *                        Amazonia and was not tuned to get there.
- *   the common tree   -> cecropia, where the birch stood. Pale trunk, pioneer.
- *   broken canopy     -> brownea, where the rowan stood. Small, in flower, in
- *                        a light gap — the whole of that block below still
- *                        applies word for word, including why it is keyed to
- *                        `density` and why the share had to be counted rather
- *                        than guessed.
- *   everything else   -> kapok, where the oak stood. The emergent.
+ * WHAT STAYS HERE IS THE CALLING CONVENTION, and it is the load-bearing part:
+ * `roll` is ONE draw compared against a ladder of thresholds in sequence, not
+ * one draw per species. That is the kind of thing that gets "tidied" into five
+ * draws by somebody who does not realise it reseeds the wood, and no land may
+ * take a second draw here. `density` is `forestDensity(x, z)`, which
+ * `treeSector` has already computed one line earlier, so it is a free argument
+ * rather than a field evaluation.
  */
 export function speciesAt(y, wet, roll, density = 1) {
-  const alt = clamp01((y + 6) / 40);
-  if (wet > 0.32 && roll < 0.75) return 'fig';
-  if (alt > 0.5 && roll < 0.78) return 'palm';
-  if (roll < 0.42) return 'cecropia';
-  if (density < 0.7 && roll < 0.62) return 'brownea';
-  return roll < 0.78 ? 'kapok' : 'palm';
+  return currentLand().speciesAt(y, wet, roll, density);
 }
 
 /**
@@ -648,6 +749,32 @@ function tiltMatrix(out, x, y, z, rx, ry, rz, sx, sy, sz) {
   return out;
 }
 
+/**
+ * A stable pseudo-random 0..1 from two integers, TAKING NO `rng()` DRAW.
+ *
+ * This exists because of the draw-order invariant documented on the sward's
+ * tint block: a sector's whole contents come off one seeded stream in one
+ * order, so anything that wants a per-instance random number and is not willing
+ * to move every plant placed after it cannot ask the generator for one. An fbm
+ * lookup is the usual escape hatch (the fern and meadow patch fields are both
+ * that) but fbm is smooth, and what the sward needs here is the opposite — a
+ * value that is INDEPENDENT between neighbouring tufts, because the whole
+ * complaint is that adjacent plants are the same object.
+ *
+ * So: an integer avalanche over the GLOBAL lattice cell, which every layer
+ * already has in `(sx, i)` and `(sz, j)`. It is a pure function of world
+ * position, identical in both realms, costs four multiplies, and is invisible to
+ * the seeded stream. `Math.imul` keeps everything in int32; the constants are
+ * the usual xxhash/murmur finalisers.
+ */
+function latticeHash(a, b) {
+  let h = (Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1)) | 0;
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
 function push(layer, matrix, color, cx, cy, cz, r) {
   for (let i = 0; i < 16; i++) layer.matrix.push(matrix[i]);
   if (color) for (let i = 0; i < 3; i++) layer.color.push(color[i]);
@@ -659,26 +786,6 @@ function push(layer, matrix, color, cx, cy, cz, r) {
 
 const _mat = new Float64Array(16);
 const _col = new Float64Array(3);
-
-/**
- * The two ends of the sward, in LINEAR light.
- *
- * See the long block in the grass loop for the field that picks between them
- * and for the luma arithmetic that fixed the values. In short: the texture is
- * near-neutral now and the material colour is white, so these two triples are
- * the ONLY colour the commonest card in the world has, which is why they are
- * up here as named data rather than buried in the loop as literals.
- *
- * Linear, not hex, because an instanceColor is multiplied into diffuseColor
- * with no conversion — writing them as hex would put two of the three factors
- * in sRGB and one in linear, which is the exact confusion this layer's history
- * is made of. For anyone who wants to see them: WET is about #7ACC7D and DRY
- * about #A08E61 once encoded.
- *
- * Rec.709 luma 0.4839 and 0.2762, a 1.75x range.
- */
-const SWARD_WET = [0.19, 0.6, 0.2];
-const SWARD_DRY = [0.35, 0.27, 0.12];
 
 /**
  * Every tree in one 128 m sector — which, since the protected disc went, means
@@ -702,8 +809,31 @@ const SWARD_DRY = [0.35, 0.27, 0.12];
  * Anchoring the grid globally would have been equivalent today; seeding per
  * sector is what makes the property survive somebody changing the sector size.
  */
+/**
+ * How many accepted trees are dead standing timber.
+ *
+ * 2% rather than the fifth of the stems a real closed forest carries, and the
+ * gap is deliberate: this is not an ecology model, it is a landmark rate. Dead
+ * wood is only interesting while it is rare enough that meeting one is an
+ * event, and at a fifth of the wood a snag is wallpaper with the additional
+ * property of being bald.
+ *
+ * MEASURED as the difference between the trunk and canopy instance counts over
+ * a 7×7 block of 128 m sectors in node, which is exactly what a snag is here:
+ * 590 of 29 928 on `grove-01` (1.97%), 545 of 27 905 on `taiga:grove-01`,
+ * 531 of 27 509 on `ash-hollow-4471`. That is twelve standing dead trees in a
+ * 128 m square — one in sight most of the time, two together occasionally.
+ */
+const SNAG_CHANCE = 0.02;
+
 export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
   const rng = makeRng(`${seed}:tree:${sx}:${sz}`);
+  const land = currentLand();
+  const treeScale = land.treeScale;
+  const substitute = land.substitute;
+  // The first species this build actually grew. Only read when a substitution
+  // is needed, i.e. never in a land whose roster is complete.
+  const grown0 = land.roster.find((n) => tints[n]) ?? Object.keys(tints)[0];
   const ox = sx * size;
   const oz = sz * size;
   const spacing = 4.0;
@@ -711,6 +841,99 @@ export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
 
   const layers = new Map();
   const collide = [];
+  /**
+   * STANDING DEAD TIMBER, IN ITS OWN LIST, AND THE REASON IS A BIRD.
+   *
+   * The dead-wood block below says why the snag collider deliberately stays in
+   * the "this is a tree" band — the whole point is that fauna.js keeps treating
+   * it as one — and it says what that is FOR: a snag is the one place in this
+   * canopy where a perched bird is against the sky instead of behind two metres
+   * of alpha-tested leaf card. Cashing that needs the picker to be able to
+   * PREFER one, and it cannot, because a snag's collider radius is
+   * `0.28*scale + 0.34`, which is exactly a live trunk's. There is nothing in
+   * the triple to read.
+   *
+   * A SECOND FLAT ARRAY RATHER THAN A FOURTH CHANNEL, which is the same answer
+   * `rustle` gave to the same question. Widening `collide` to a stride of four
+   * would touch every `collide.push` in this file and `ColliderGrid.addSector`
+   * for one bit; a parallel list rides the worker payload beside `rustle`, lands
+   * in a `ColliderGrid` of its own, and is invisible to everything that does not
+   * ask for it. Same triples, same machinery, no new concept.
+   *
+   * It costs SNAG_CHANCE of the stems — about one in fifty — so this array is
+   * roughly a fiftieth the length of `collide`.
+   */
+  const snags = [];
+
+  /**
+   * ==== THE EMERGENT GIANT: "MEET ME AT THE BIG TREE" ======================
+   *
+   * There was no big tree. `treeScale` is 0.50–1.48, so the largest trunk in
+   * the wood is three times the smallest and — because the eye judges a tree
+   * against the ones beside it rather than against a metre rule — every stand
+   * read as one size. A landmark you can arrange to meet at has to be
+   * unmistakable from inside the stand it is in, and 1.48 never was.
+   *
+   * A SECOND SEEDED GENERATOR, NOT A DRAW FROM THE SECTOR'S STREAM. Everything
+   * below is decided per SECTOR, and taking those decisions off `rng` would
+   * shift every tree in the world by the number of draws taken — which is
+   * survivable but pointless. `${seed}:big:${sx}:${sz}` is the same purity
+   * argument the sector stream makes (a pure function of the seed and the
+   * sector's own coordinates, independent of build order and of how many
+   * workers there are) and it costs one mulberry32 construction per sector.
+   *
+   * WHICH SPECIES IS READ OFF THE LAND. `land.giant` names the row with the
+   * widest bole — kapok at `trunkRadius: 0.7` in the rainforest, three times
+   * the palm beside it — because "which of our trees is the emergent" is a fact
+   * about a land and not about this file. A land that does not declare one gets
+   * no giants and nothing reports a problem: this is scenery, and a land layer
+   * that throws because it has not been told about a feature is a land layer
+   * nobody can develop against, which is the posture the `substitute` block
+   * below already takes.
+   *
+   * WHERE, rather than which-th. The promotion needs a target BEFORE the
+   * acceptance loop runs, because a candidate is pushed the moment it is
+   * accepted and rewriting a matrix after the fact would mean buffering every
+   * tree in the sector. So a uniform point in the sector is drawn up front and
+   * the first eligible accepted candidate within 16 m of it is promoted. The
+   * point is uniform, so there is no raster-order bias worth the name (the disc
+   * is 32 m across in a 128 m sector); and where the wood happens to be thin
+   * around the point no giant appears at all, which is the right answer —
+   * an emergent stands in closed forest.
+   */
+  const meta = makeRng(`${seed}:big:${sx}:${sz}`);
+  /**
+   * At most one per four sectors.
+   *
+   * MEASURED over a 7×7 block of 128 m sectors in node, counting the offset
+   * collider circles: 11 giants in 49 sectors on `grove-01`, 13 on
+   * `taiga:grove-01`, 7 on `ash-hollow-4471` — so 14–27% of sectors get one
+   * against the 25% asked for here, the shortfall being sectors whose target
+   * point landed on ground too thin to grow the right species. That works out
+   * at roughly one giant per 75 000 m², i.e. one within about 150 m of
+   * wherever you are standing. Rarer than that and "meet me at the big tree"
+   * stops being a thing two people can both find.
+   */
+  const wantGiant = land.giant && tints[land.giant] && meta() < 0.25;
+  const giantX = ox + meta() * size;
+  const giantZ = oz + meta() * size;
+  /**
+   * 2.2–2.8, which is roughly 1.5–1.9 times the biggest ordinary tree.
+   *
+   * The floor is a judgement: below about 2.1 a kapok among kapoks reads as a
+   * lucky tree rather than as THE tree, because the eye judges it against its
+   * neighbours and 1.48 already exists. The ceiling is a caution about burial
+   * rather than a measurement, and it is the honest statement of what is known:
+   * the scale block below records that the root flare is in OBJECT space and so
+   * scales with the tree, while the 0.25 m sink is absolute — so a LARGE tree
+   * gets proportionally less of it and is the direction in which exposure gets
+   * worse. That block measured 0.07% exposure across 15 084 trunks at scales up
+   * to 1.48; nothing has measured this range, and 2.8 is where the sink is
+   * still a tenth of the 2.5 m bottom-ring radius rather than a fortieth.
+   * Somebody adding a bigger one should run that census first.
+   */
+  const giantScale = 2.2 + meta() * 0.6;
+  let giantLeft = wantGiant;
 
   for (let j = 0; j < steps; j++) {
     for (let i = 0; i < steps; i++) {
@@ -720,7 +943,31 @@ export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
       if (rng() > density) continue;
       if (submerged(x, z)) continue;
       const y = heightAt(x, z);
-      const name = speciesAt(y, wetness(x, z), rng(), density);
+      /**
+       * A SPECIES THE BUILD DID NOT GROW FALLS BACK, RATHER THAN THROWING.
+       *
+       * `tints` holds exactly the species `forest.js` grew, so this test is
+       * "did the roster this land asked for actually exist in `SPECIES`". A
+       * roster is a land's wish and `SPECIES` is what exists, they are edited
+       * in different files, and a land that throws on a missing row is a land
+       * nobody can develop against. It is not hypothetical: the taiga's five
+       * conifers were a wish for one release before they landed.
+       *
+       * NO LAND SHIPS A `substitute` TABLE TODAY. The taiga had one — spruce
+       * and fir and larch all onto `palm` — and it was deleted when the
+       * conifers landed, because the only way it could ever fire again is if
+       * somebody DELETED a conifer from `SPECIES`, and what it would do then is
+       * put palm trees in the snow. `?? grown0` gives that land spruce instead,
+       * which is the right answer to "we lost a species here" and needs no
+       * table. The mechanism stays because "nearest tree we do have" is a
+       * judgement about silhouette that only a land can make.
+       *
+       * IT COSTS ONE PROPERTY TEST ON AN ACCEPTED CANDIDATE and takes no draw,
+       * so the stream is untouched and the rainforest — whose roster is
+       * complete — never takes the branch.
+       */
+      let name = speciesAt(y, wetness(x, z), rng(), density);
+      if (!tints[name]) name = (substitute && substitute[name]) || grown0;
       const a = Math.floor(rng() * archetypes) % archetypes;
       /**
        * SIZE: 0.50 TO 1.48, AND THE TWO ENDS WERE CHOSEN AGAINST DIFFERENT
@@ -767,8 +1014,67 @@ export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
        * is 44 cm on a tree the old range would have produced as well. The small
        * trees are not the problem and were never going to be.
        */
-      const scale = rngRange(rng, 0.5, 1.48);
+      const scale = rngRange(rng, treeScale[0], treeScale[1]);
       const yaw = rng() * TAU;
+
+      /**
+       * ==== DEAD WOOD ======================================================
+       *
+       * A SNAG IS THE CANOPY PUSH NOT HAPPENING. `treeSector` pushes the trunk
+       * and the canopy as two INDEPENDENT instances that happen to share one
+       * matrix, so a standing dead tree costs nothing to express: skip the leaf
+       * push, keep the trunk. That is the whole mechanism, and it is why this
+       * is six lines rather than an archetype.
+       *
+       * WHY IT IS WORTH HAVING TWICE OVER. A wood in which every tree is alive
+       * and healthy is a wood nobody has ever walked in — dead standing timber
+       * is a fifth of the stems in real closed forest — and it is the SECOND
+       * effect that decided it: a snag is the one place in this canopy where
+       * you can actually see a bird. The perchers are seated off `colliderGrid`
+       * (see the 0.82 m contract at `stumpCollider`) and they sit on branches
+       * that are, in a living tree, inside two metres of alpha-tested leaf
+       * card. On a snag the branch is bare against the sky. So the collider
+       * stays squarely in the "this is a tree" band — the whole point is that
+       * fauna keeps treating it as one.
+       *
+       * BLEACHED, NEVER DARKENED, and there is a mechanical reason as well as
+       * the tree-adorn luma rule. The trunk tint is WHITE with a lightness
+       * offset, multiplied over the bark texel, and `Color.setHSL` clamps
+       * lightness to 1 — so the positive half of the ordinary `-0.13..0.06`
+       * jitter is already a no-op and the only thing this tint can do is
+       * darken. A snag therefore cannot be made greyer than the bark; what it
+       * can be is the palest trunk in the wood, which is what `-0.03..0.06`
+       * below does. Dead wood in this forest silvers; it does not char.
+       *
+       * SQUASHED, so it reads as BROKEN rather than merely bare. A bare tree at
+       * full height is a tree in winter. Taking a third to a half off the
+       * vertical scale foreshortens the crown branches into stubs and thickens
+       * the bole against its own height, which is what a snapped-off trunk
+       * looks like. Non-uniform scale is free here — `yawMatrix` already takes
+       * three of them and only ever got the same number three times.
+       *
+       * ONE KNOWN SEAM, AND IT IS 384 m AWAY. `forest.js` builds the impostor
+       * billboard as a `mirrorOf` the TRUNK payload — one worker result feeding
+       * two slabs — so a snag past `IMPOSTOR_REACH` is drawn as a whole leafy
+       * tree, and pops bare when the real geometry takes over. Fixing it needs
+       * a third payload channel in a file this pass does not own, and 384 m in
+       * this wood is past the range at which a canopy hides everything: the
+       * recorded finding is that cutting draw distance is invisible at eye
+       * level. Worth knowing about if anybody ever puts a snag on a ridge.
+       *
+       * ONE DRAW, USED TWICE. `deadRoll` decides both whether this is dead wood
+       * and, through its position inside the accepting band, how squashed and
+       * how far it leans. Deriving the shape from the roll rather than drawing
+       * again keeps the stream cost of the whole feature at one draw per
+       * accepted candidate instead of three, and the low bits of a mulberry32
+       * output are as good as the high ones.
+       */
+      const deadRoll = rng();
+      const snag = deadRoll < SNAG_CHANCE;
+      /** 0..1 across the accepting band — the free shape parameter. See above. */
+      const deadShape = snag ? deadRoll / SNAG_CHANCE : 0;
+      /** Half of them lean. A leaner is a snag that lost the argument. */
+      const lean = snag && deadShape > 0.5 ? (deadShape - 0.5) * 0.9 : 0;
 
       /**
        * ONE PALETTE PER ARCHETYPE, because the archetype is which sub-population
@@ -797,33 +1103,158 @@ export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
       const lr = _tint.r;
       const lg = _tint.g;
       const lb = _tint.b;
-      _tint.setHex(0xffffff).offsetHSL(0, 0, rngRange(rng, -0.13, 0.06));
+      // Bleached, never darkened. See the dead-wood block above for why the
+      // positive half of the ordinary range is a no-op and this range is not.
+      _tint
+        .setHex(0xffffff)
+        .offsetHSL(0, 0, snag ? rngRange(rng, -0.03, 0.06) : rngRange(rng, -0.13, 0.06));
+
+      /**
+       * The promotion. `giantLeft` is cleared on the first taker, so a sector
+       * that draws a giant gets exactly one however many kapoks stand near the
+       * target point. 16 m of radius against the sector's 128 puts ~4 eligible
+       * candidates inside the disc in closed forest and none at all in a glade.
+       */
+      let big = false;
+      if (
+        giantLeft &&
+        name === land.giant &&
+        (x - giantX) * (x - giantX) + (z - giantZ) * (z - giantZ) < 256
+      ) {
+        big = true;
+        giantLeft = false;
+      }
+      /**
+       * Girth and height are the same number for everything but a snag.
+       *
+       * The squash runs 0.50–0.94 of full height across the accepting band, and
+       * because `lean` is keyed to the SAME `deadShape`, the two sort
+       * themselves out: the upright half of the band (deadShape < 0.5) gets the
+       * hard squash and is a broken-off stump, and the leaning half is barely
+       * squashed and is a whole tree that has come over. That coupling was not
+       * designed, it fell out of reusing one roll — and it is the right way
+       * round, so it stays.
+       */
+      const wide = big ? giantScale : scale;
+      const tall = big ? giantScale : snag ? scale * (0.5 + deadShape * 0.44) : scale;
 
       const base = y - 0.25;
-      yawMatrix(_mat, x, base, z, yaw, scale, scale, scale);
+      if (lean !== 0) {
+        // A leaner rotates about its own FOOT, because `compose` rotates about
+        // the object origin and the trunk geometry's origin is the root plate.
+        // Tipping about the middle would put the butt underground and the roots
+        // in the air.
+        tiltMatrix(_mat, x, base, z, Math.cos(yaw) * lean, yaw, Math.sin(yaw) * lean, wide, tall, wide);
+      } else {
+        yawMatrix(_mat, x, base, z, yaw, wide, tall, wide);
+      }
 
       const trunkId = `trunk:${name}:${a}`;
       const leafId = `leaf:${name}:${a}`;
       let trunk = layers.get(trunkId);
       if (!trunk) layers.set(trunkId, (trunk = new Layer(trunkId)));
-      let leaf = layers.get(leafId);
-      if (!leaf) layers.set(leafId, (leaf = new Layer(leafId)));
 
       const tb = bounds[trunkId];
-      const lb2 = bounds[leafId];
       _col[0] = _tint.r;
       _col[1] = _tint.g;
       _col[2] = _tint.b;
-      push(trunk, _mat, _col, x, base + tb.cy * scale, z, tb.r * scale);
-      _col[0] = lr;
-      _col[1] = lg;
-      _col[2] = lb;
-      push(leaf, _mat, _col, x, base + lb2.cy * scale, z, lb2.r * scale);
+      /**
+       * THE WIDER BOUND IS THE PART OF A LEANER THAT MUST NOT BE SKIPPED.
+       *
+       * The culler tests this sphere and nothing else. A tilted instance keeps
+       * its foot but swings its crown up to `cy * tall * sin(lean)` sideways —
+       * 3.6 m on a twenty-metre trunk at 26° — and a bound that did not follow
+       * would pop the tree out of existence when the sphere left the frustum
+       * while the wood was still on screen. Inflating the radius rather than
+       * moving the centre is deliberately conservative: it costs a few pixels
+       * of overdraw on one instance in fifty and cannot be wrong in the
+       * direction that deletes geometry.
+       */
+      const swing = lean !== 0 ? tb.cy * tall * Math.abs(Math.sin(lean)) : 0;
+      push(trunk, _mat, _col, x, base + tb.cy * tall, z, tb.r * wide + swing);
+      /**
+       * A SNAG HAS NO CANOPY, and that is the whole of the mechanism: the two
+       * instances were always independent and this one simply does not happen.
+       * Note the layer is not created either — an empty layer is dropped by
+       * forest-worker.js anyway, but not making it says what is meant.
+       */
+      if (!snag) {
+        let leaf = layers.get(leafId);
+        if (!leaf) layers.set(leafId, (leaf = new Layer(leafId)));
+        const lb2 = bounds[leafId];
+        _col[0] = lr;
+        _col[1] = lg;
+        _col[2] = lb;
+        push(leaf, _mat, _col, x, base + lb2.cy * tall, z, lb2.r * wide + swing);
+      }
 
-      collide.push(x, z, 0.28 * scale + 0.34);
+      if (big) {
+        /**
+         * ==== TWO MEANINGS IN ONE NUMBER, PRISED APART ====================
+         *
+         * `collide` entries carry a radius that is BOTH "how wide is this to
+         * walk into" and "what kind of thing is this". fauna.js reads the
+         * second meaning off the first — "anything under 0.8 is a tree and
+         * nothing else can be" — and it is the reason `treeScale` stops at
+         * 1.48: 0.28·s + 0.34 crosses 0.8 at s = 1.643, and past that the
+         * biggest trees in the wood stop being indexed as trees. A 2.5× tree
+         * pushed as one circle would be r = 1.04, which fauna would silently
+         * file as a fallen log. Nothing would report it. The symptom would be
+         * that no bird ever perches in the one tree everybody meets at, and it
+         * would present as ornithology six weeks later.
+         *
+         * So the two meanings become two kinds of entry, which is exactly the
+         * shape this list already supports:
+         *
+         *   ONE CENTRE CIRCLE AT 0.75, a deliberate understatement of girth.
+         *   This is the INDEX entry — under 0.8, so fauna calls it a tree, and
+         *   `trunkIndex` hands the birds `r - 0.34 = 0.41` as the bark radius
+         *   to sit on. It is smaller than the real bole, so a bird sits a
+         *   little inside the trunk rather than a long way outside it, which is
+         *   the direction to be wrong in.
+         *
+         *   FOUR OFFSET CIRCLES that do the actual blocking, sized to land
+         *   BETWEEN fauna's tree threshold (0.8) and the fallen-log radius
+         *   (1.1). Nothing in the app reads that band — the hearth colliders
+         *   are already at 0.95 — so they stop the body and are invisible to
+         *   every classifier. Their union reaches the true collision radius on
+         *   the four axes and comes within about five centimetres of it on the
+         *   diagonals, which is the thickness of a bark texture.
+         *
+         * CHECKED BY COUNTING, over a 7×7 block of sectors in node: the number
+         * of collider entries under 0.8 is EXACTLY the number of trunk
+         * instances in all three worlds tested (29 928 on grove-01, 27 905 on
+         * taiga:grove-01, 27 509 on ash-hollow-4471), the offset circles all
+         * land in 0.84–0.966, and nothing at all comes out at 1.1 or above. So
+         * every tree in the wood — giant, snag and ordinary — contributes one
+         * perch and one only, and the blockers are invisible to the filter.
+         */
+        const wall = 0.28 * giantScale + 0.34;
+        const sat = Math.min(1.02, Math.max(0.84, wall * 0.86));
+        const off = Math.max(0, wall - sat);
+        collide.push(x, z, 0.75);
+        for (let q = 0; q < 4; q++) {
+          const qa = yaw + q * (Math.PI / 2);
+          collide.push(x + Math.cos(qa) * off, z + Math.sin(qa) * off, sat);
+        }
+      } else {
+        // Unchanged, snags included: a snag has to stay in the tree band or the
+        // birds stop perching on the one thing you can see them on.
+        collide.push(x, z, 0.28 * scale + 0.34);
+      }
+      /**
+       * AND ONCE MORE INTO THE SNAG LIST, if it is one. See `snags` above.
+       *
+       * After the branch rather than inside either arm, because `snag` and `big`
+       * are independent rolls and a tree can be both — an emergent giant that
+       * died standing is the single best perch in this wood and would have been
+       * the one case a push inside the `else` missed. The radius is whichever
+       * circle that branch just used, so the two grids agree to the metre.
+       */
+      if (snag) snags.push(x, z, big ? 0.75 : 0.28 * scale + 0.34);
     }
   }
-  return { layers, collide, rustle: [], patches: [], glow: [] };
+  return { layers, collide, rustle: [], snags, patches: [], glow: [] };
 }
 
 /**
@@ -836,6 +1267,7 @@ export function treeSector({ seed, sx, sz, size, archetypes, bounds, tints }) {
  */
 export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
   const rng = makeRng(`${seed}:under:${sx}:${sz}`);
+  const land = currentLand();
   const ox = sx * size;
   const oz = sz * size;
   const layers = new Map();
@@ -849,429 +1281,78 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
     return l;
   };
 
-  // ---- grass --------------------------------------------------------------
   /**
-   * THE RAINFOREST FLOOR IS BARE, AND THAT IS BOTH THE LOOK AND THE SAVING.
+   * THE KIT, and why it is one object built once per sector rather than a long
+   * argument list or a set of module imports.
    *
-   * This is the most expensive layer in the world — `.perf/baseline.json` had
-   * it at 24 191 submitted instances against the next-biggest layer's 7 188 —
-   * and under the temperate roster it grew a bright meadow sward everywhere the
-   * canopy was not completely shut. That is exactly wrong for this biome. Under
-   * a closed tropical canopy something like 1-2% of the light reaches the
-   * ground; there is no turf down there, there is leaf litter, roots, seedlings
-   * and bare mud. The open colonnade under a high canopy is the single most
-   * characteristic thing about the inside of a rainforest and a lawn destroys
-   * it.
+   * A land's rules need the terrain (`heightAt`, `slopeAt`, `wetness`,
+   * `caveClearance`), this file's own fields (`character`, `trodden`,
+   * `submerged`, `forestDensity`), its matrix and push helpers, and its three
+   * scratch objects. Importing them from a land module would be a cycle —
+   * `terrain.js` imports the land layer for its ground palette — so they are
+   * INJECTED instead, and the injection point is here because this is where the
+   * per-sector state (`rng`, `ox`, `oz`, the layer map) already lives.
    *
-   * SO THE TWO CHANGES PULL THE SAME WAY, which is the whole reason this was
-   * the first thing touched after the trees:
-   *
-   *   `spacing` 0.6 -> 0.82 is 1.87x fewer candidates before any acceptance
-   *   runs, i.e. a 47% cut to the layer, applied uniformly.
-   *
-   *   The acceptance below went from `1 - litter * 0.8` to a full `1 - litter`,
-   *   so a closed canopy now takes the sward to ZERO instead of to a fifth. The
-   *   comment on `out.litter` in `character` says raising that weight is how a
-   *   region gets emptied; this is the layer taking it at its word. Deep wood
-   *   goes properly bald, glades and the stream bank keep their grass, and the
-   *   contrast between the two is far stronger than the flat cover it replaces.
-   *
-   * Measured effect is in the layer census: see the note in `underSector`'s
-   * caller. Nothing else reads `bounds.grass`, and the tint below is the only
-   * other thing in this block that moved.
+   * IT IS PASSED TO A FACTORY, NOT TO A BODY, and that is the whole performance
+   * story. Every rule below is `make(K)` returning the per-candidate closure, so
+   * a rule's body reads `rng()` and `heightAt(x, z)` as free variables captured
+   * once per sector — exactly what they were when this code was welded into this
+   * file — rather than as property loads on ninety thousand candidates. Twelve
+   * closure allocations per sector against roughly a million property reads
+   * saved; it is also what made the extraction a copy rather than a rewrite, and
+   * why the identity hash held on the first run.
    */
-  {
-    const spacing = 0.82;
-    const steps = Math.round(size / spacing);
-    const bound = bounds.grass;
-    const l = layer('grass');
-    for (let j = 0; j < steps; j++) {
-      for (let i = 0; i < steps; i++) {
-        const x = ox + (i + rng()) * spacing;
-        const z = oz + (j + rng()) * spacing;
-        if (slopeAt(x, z) > 0.46) continue;
-        if (submerged(x, z)) continue;
-        const patch = fbm2(x * 0.06 + 3, z * 0.06 + 12, 2) * 0.5 + 0.62;
-        /**
-         * ONE ACCEPTANCE, NO DISTANCE TERM AT ALL, and that is the change.
-         *
-         * There were two of them and both were about the origin. The authored
-         * sward thinned with `near = 1 - d/96` and then stopped dead at 72 m,
-         * and this one ramped back up from 0.35 over the 50 m past the
-         * protected radius so the two would meet without a step. Between them
-         * they made the ground round the spawn point the thinnest in the world:
-         * 0.31 cover instances per m² at 80–100 m against 1.97 out at 700 m,
-         * where only this sampler had ever run.
-         *
-         * The ramp's own argument was sound and is simply spent. It existed
-         * because the sward "has to begin SOMEWHERE, and a step from bare
-         * ground to 0.95 acceptance on a circle centred on the spawn point is
-         * the most conspicuous shape a boundary can have". It does not begin
-         * anywhere now. There is no circle to soften.
-         *
-         * THE SWARD READS THE BIOME, which is the one factor here that is not a
-         * constant: under a closed dry canopy every other weight collapses, so
-         * the ground gets sticks and leaf drift and NOTHING ELSE — and until
-         * this factor existed, short grass grew there anyway and no biome could
-         * ever go properly bald. Emptiness is variety, and it renders free.
-         */
-        if (rng() > patch * (1 - character(x, z).litter)) continue;
-        /**
-         * AND THE SWARD HAS TO KNOW ABOUT CAVES, WHICH IT DID NOT.
-         *
-         * Every other layer in this file is gated by `forestDensity`, which
-         * carries `caveClearance` — so the trees, the bushes, the stumps and the
-         * cover all stayed out of a gully, and the grass, which is sampled
-         * directly and has its own acceptance, walked straight into it. It is
-         * 0.6 m spacing and half a metre tall, so the last twenty metres of the
-         * approach came out as a wall of it, and `.shots/crag/a4-mouth.png` was
-         * a photograph of a cave mouth with no cave mouth visible in it. The
-         * OTHER half of "the entrance is blocked" — the terrain half is the
-         * portal, over in terrain.js.
-         *
-         * Last, after the acceptance, so the lookup runs on the candidates that
-         * survived rather than on all 180 000 of them.
-         */
-        if (caveClearance(x, z) > 0.35) continue;
-        const y = heightAt(x, z);
-        const gx = rngRange(rng, 0.7, 1.5);
-        const gy = rngRange(rng, 0.6, 1.7);
-        const gz = rngRange(rng, 0.7, 1.5);
-        yawMatrix(_mat, x, y - 0.04, z, rng() * TAU, gx, gy, gz);
-        /**
-         * ==== THE SWARD'S COLOUR COMES OUT OF A FIELD, NOT OUT OF A DIE ====
-         *
-         * The tint before this was three independent uniform draws per tuft —
-         * hue, saturation and lightness, each rolled fresh. That is a correct
-         * description of "varied" and the wrong description of a MEADOW,
-         * because the variation had no spatial extent: every tuft was
-         * statistically independent of the one beside it, so the layer read as
-         * a uniform green with salt-and-pepper noise on it, and the noise
-         * averaged out to a single colour at any distance past a few metres.
-         * The one thing a real sward has that this did not is PATCHES — a
-         * damp hollow that is a different green from the dry rise ten paces
-         * away, big enough to see as a shape.
-         *
-         * So the colour is now a lerp between two authored ends, driven by a
-         * value-noise field of the world position. x0.03 per metre over two
-         * octaves puts the coarse features at about 33 m and the fine at 16 m,
-         * which is the scale at which a difference is a PLACE rather than a
-         * texture. Sampled at 160 000 points on a 1.6 km square the remapped
-         * field has mean 0.491 and its 10th and 90th percentiles sit at 0.01
-         * and 0.98 — so the x1.5 gain is what makes the two ends actually get
-         * reached instead of everything hugging the middle. It costs two
-         * hash-lattice taps on a candidate that has already survived the
-         * acceptance test, in a worker, once per sector.
-         *
-         *
-         * ==== THE LUMA ARITHMETIC, BECAUSE THIS IS THE FOUR-PER-CENT TRAP ==
-         *
-         * A card's screen colour is texture x material colour x instance tint,
-         * and the note at forest.js:580 and the bramble block in
-         * undergrowth.js both record what happens when those are chosen one at
-         * a time by eye. All three of them moved in this change, so all three
-         * were measured. Every number below is LINEAR light, alpha-weighted
-         * over the texels that survive alphaTest 0.4, Rec.709 luma
-         * 0.2126R + 0.7152G + 0.0722B:
-         *
-         *   BEFORE
-         *     texture  herbTuft sat 42   (0.0540, 0.3726, 0.0809)
-         *     material 0x9ecc94          (0.3419, 0.6038, 0.2961)
-         *     tint     mean of the HSL   (0.2806, 0.4511, 0.1888)
-         *     product                    (0.00518, 0.10149, 0.00452)
-         *     LUMA                        0.07401
-         *
-         *   AFTER
-         *     texture  herbTuft sat 10   (0.1286, 0.2195, 0.1411)
-         *     material 0xffffff          (1, 1, 1)
-         *     tint     mean at m=0.491   (0.2714, 0.4322, 0.1593)
-         *     product                    (0.03490, 0.09489, 0.02249)
-         *     LUMA                        0.07691
-         *
-         * +3.9%, which satisfies "at or above" without turning the floor into
-         * a lawn — the sward has to stay BELOW the litter it grows out of.
-         *
-         * WHY DESATURATING THE TEXTURE IS THE POINT AND NOT A SIDE EFFECT. The
-         * old texture's red channel is 0.054. Multiply anything by that and it
-         * is gone: a dry, straw-coloured tint could not render as dry, because
-         * the factor that was supposed to carry the red had already deleted
-         * it, and the same for blue at 0.081. That is why every tuft in the
-         * world came out the same green whatever the die said. A near-neutral
-         * texture carries the SHAPE and the within-blade shading and leaves
-         * the hue entirely to the tint, which is the only arrangement in which
-         * a two-ended colour ramp can actually reach both of its ends.
-         *
-         * Note that desaturating at constant HSL lightness LOWERS luma — green
-         * carries 0.7152 of it, so pulling G toward the grey point costs more
-         * than raising R and B pays back: 0.2838 to 0.1945 on the texture
-         * alone, a 31% drop. Dropping the material colour, whose own luma is
-         * 0.5259, is what pays for that and for the wider tint range.
-         *
-         * THE TWO ENDS. Healthy is a wet lush green and dry is a straw olive;
-         * their lumas are 0.4839 and 0.2762, a 1.75x range, which is what
-         * makes a patch legible as a patch. They are written in linear light
-         * because that is what an instanceColor IS — three multiplies it into
-         * diffuseColor with no conversion — and authoring them as hex would
-         * mean two of the three factors here were sRGB and one was not.
-         *
-         * EXACTLY THREE rng DRAWS, as before, and that is not tidiness. This
-         * generator is shared by every layer in the sector and consumed in
-         * order, so taking a different number of values here would re-roll
-         * every fern, stone, log and mushroom placed after it — the whole
-         * world would move, and the before/after screenshots this change was
-         * judged on would be of two different forests.
-         */
-        const patchy = clamp01(fbm2(x * 0.03 + 61.3, z * 0.03 + 17.7, 2) * 1.5 + 0.5);
-        // Per-tuft jitter ON TOP of the field, so neighbours inside one patch
-        // are not identical. Zero-mean, so it cannot move the luma above.
-        const wet = clamp01(patchy + rngRange(rng, -0.13, 0.13));
-        const lift = rngRange(rng, 0.86, 1.14);
-        const warm = rngRange(rng, -0.03, 0.03);
-        _col[0] = (SWARD_DRY[0] + (SWARD_WET[0] - SWARD_DRY[0]) * wet + warm) * lift;
-        _col[1] = (SWARD_DRY[1] + (SWARD_WET[1] - SWARD_DRY[1]) * wet) * lift;
-        _col[2] = (SWARD_DRY[2] + (SWARD_WET[2] - SWARD_DRY[2]) * wet - warm) * lift;
-        const grow = Math.max(gx, gy, gz);
-        push(l, _mat, _col, x, y - 0.04 + bound.cy * grow, z, bound.r * grow);
-      }
-    }
-  }
+  const K = {
+    rng,
+    ox,
+    oz,
+    size,
+    sx,
+    sz,
+    bounds,
+    rockSizes,
+    layers,
+    layer,
+    collide,
+    rustle,
+    patches,
+    glow,
+    push,
+    yawMatrix,
+    tiltMatrix,
+    latticeHash,
+    _mat,
+    _col,
+    _tint,
+    character,
+    trodden,
+    submerged,
+    forestDensity,
+    stumpCollider,
+    bushCue,
+    slopeAt,
+    wetness,
+    heightAt,
+    groundUnder,
+    caveClearance,
+    WATER_LEVEL,
+    fbm2,
+  };
 
-  // ---- ferns --------------------------------------------------------------
   /**
-   * THIS LAYER GREW INTO THE UNDERSTORY GIANTS, RATHER THAN A LAYER BEING ADDED
-   * FOR THEM.
+   * The coarse half — sward, ferns, stones, deadfall, fungi in the rainforest,
+   * and whatever a land's own equivalents are. See `makeCoarse` in the land
+   * module for why these five are a function and the twelve below are a table.
    *
-   * The brief wanted heliconia and philodendron — the big paddle leaves at head
-   * height that are most of what "jungle" means at eye level. A new scatter
-   * layer is a new streamed InstancedMesh in every resident sector and a draw
-   * call per sector, which is the one cost this project does not pay casually.
-   * It is also unnecessary: a fern here is already a shade-and-damp-loving
-   * frond card that grows exactly where a heliconia grows, so the giants are
-   * the SAME LAYER with its size range opened up. Zero new meshes, zero new
-   * draws, zero new geometry.
-   *
-   * `grow` 0.62-1.5 became 0.7-2.6, and the distribution is deliberately
-   * skewed rather than uniform: `pow(rng(), 1.7)` keeps most plants near the
-   * bottom of the range and lets a few reach the top, so what comes out is an
-   * understory of ordinary ferns with occasional two-metre paddles standing
-   * over them. A uniform range gives every plant a middling size and reads as
-   * one shrub repeated, which is what the layer looked like before.
-   *
-   * IT IS NOT FREE AND IT WAS PAID FOR IN THE SAME COMMIT. A 2.6x card is 2.6x
-   * the rasterised area, and this is a NEAR-CAMERA layer, which is the worst
-   * place to spend fill. The grass block above gave back far more than this
-   * takes — 47% of the single biggest layer in the world — and the two changes
-   * were made together for that reason. Spacing is untouched at 2.2 m, so the
-   * instance COUNT does not move; only the size distribution does.
+   * IT RUNS FIRST AND ITS ORDER IS THE LAND'S TO FREEZE. The whole sector comes
+   * off one seeded stream in one order.
    */
-  {
-    const spacing = 2.2;
-    const steps = Math.round(size / spacing);
-    const bound = bounds.ferns;
-    const l = layer('ferns');
-    for (let j = 0; j < steps; j++) {
-      for (let i = 0; i < steps; i++) {
-        const x = ox + (i + rng()) * spacing;
-        const z = oz + (j + rng()) * spacing;
-        if (slopeAt(x, z) > 0.5) continue;
-        if (submerged(x, z)) continue;
-        const shade = forestDensity(x, z);
-        const damp = clamp01(wetness(x, z) * 1.2 + 0.25);
-        // No radial fade and no radial cut-off: a fern grows where there is
-        // shade and damp, at 20 m and at 20 km, and nowhere else.
-        if (rng() > shade * 0.7 + damp * 0.35) continue;
-        const y = heightAt(x, z);
-        const grow = 0.7 + Math.pow(rng(), 1.7) * 1.9;
-        yawMatrix(_mat, x, y - 0.06, z, rng() * TAU, grow, grow, grow);
-        /**
-         * Deeper and much less bright, for the same reason the sward moved: at
-         * a lightness of 0.74 these were pale mint cards glowing in the darkest
-         * part of the frame. A heliconia leaf is a heavy saturated green with a
-         * wax sheen, so saturation goes UP as lightness comes down — which is
-         * the pairing that reads as glossy rather than as dusty.
-         */
-        _tint.setHSL(
-          0.29 + rngRange(rng, -0.045, 0.03),
-          rngRange(rng, 0.34, 0.58),
-          rngRange(rng, 0.22, 0.46)
-        );
-        _col[0] = _tint.r;
-        _col[1] = _tint.g;
-        _col[2] = _tint.b;
-        push(l, _mat, _col, x, y - 0.06 + bound.cy * grow, z, bound.r * grow);
-      }
-    }
-  }
-
-  // ---- rocks --------------------------------------------------------------
-  {
-    for (let gi = 0; gi < rockSizes; gi++) {
-      const spacing = 9 + gi * 5;
-      const steps = Math.round(size / spacing);
-      const id = `rocks:${gi}`;
-      const bound = bounds[id];
-      const l = layer(id);
-      for (let j = 0; j < steps; j++) {
-        for (let i = 0; i < steps; i++) {
-          const x = ox + (i + rng()) * spacing;
-          const z = oz + (j + rng()) * spacing;
-          const slope = slopeAt(x, z);
-          const wet = wetness(x, z);
-          if (rng() > 0.1 + slope * 0.85 + wet * 0.45) continue;
-          const y = heightAt(x, z);
-          const grow = rngRange(rng, 0.6, 1.5);
-          tiltMatrix(
-            _mat,
-            x,
-            y - 0.2 - gi * 0.1,
-            z,
-            rngRange(rng, -0.3, 0.3),
-            rng() * TAU,
-            rngRange(rng, -0.3, 0.3),
-            grow,
-            grow,
-            grow
-          );
-          _tint.setHSL(0.1, rngRange(rng, 0.02, 0.1), rngRange(rng, 0.44, 0.68));
-          _col[0] = _tint.r;
-          _col[1] = _tint.g;
-          _col[2] = _tint.b;
-          push(l, _mat, _col, x, y - 0.2 - gi * 0.1 + bound.cy * grow, z, bound.r * grow);
-          if (gi === rockSizes - 1) collide.push(x, z, 1.5);
-        }
-      }
-    }
-  }
-
-  // ---- fallen wood --------------------------------------------------------
-  {
-    const spacing = 16;
-    const steps = Math.round(size / spacing);
-    const bound = bounds.logs;
-    const l = layer('logs');
-    for (let j = 0; j < steps; j++) {
-      for (let i = 0; i < steps; i++) {
-        const x = ox + (i + rng()) * spacing;
-        const z = oz + (j + rng()) * spacing;
-        if (slopeAt(x, z) > 0.3) continue;
-        if (submerged(x, z)) continue;
-        if (rng() > forestDensity(x, z) * 0.7 + 0.05) continue;
-        const y = heightAt(x, z);
-        const gx = rngRange(rng, 0.7, 1.3);
-        const gy = rngRange(rng, 0.8, 1.2);
-        const gz = rngRange(rng, 0.8, 1.2);
-        tiltMatrix(
-          _mat,
-          x,
-          y + 0.26,
-          z,
-          rngRange(rng, -0.12, 0.12),
-          rng() * TAU,
-          rngRange(rng, -0.08, 0.08),
-          gx,
-          gy,
-          gz
-        );
-        _tint.setHSL(0.09, rngRange(rng, 0.1, 0.24), rngRange(rng, 0.26, 0.42));
-        _col[0] = _tint.r;
-        _col[1] = _tint.g;
-        _col[2] = _tint.b;
-        const grow = Math.max(gx, gy, gz);
-        push(l, _mat, _col, x, y + 0.26 + bound.cy * grow, z, bound.r * grow);
-        collide.push(x, z, 1.1);
-      }
-    }
-  }
-
-  // ---- mushrooms ----------------------------------------------------------
-  /**
-   * A reason to keep walking.
-   *
-   * The authored world puts fifteen patches inside 114 m and one of them right
-   * at the edge of the glade, on the argument that a player who searches for
-   * four minutes and finds nothing concludes there is nothing to find. That
-   * argument does not stop at 114 m. An endless forest with all its mushrooms
-   * in the first two hundred metres is an endless forest with nothing in it,
-   * and the mushrooms are the only thing out there that rewards going anywhere.
-   *
-   * The density is copied from the authored world rather than picked: fifteen
-   * patches inside 114 m is one per 2720 m², so a 32 m sector wants one patch
-   * 38% of the time. Getting this wrong is worse in the generous direction —
-   * one patch per sector measured at 62 of them inside the ring, which is a
-   * mushroom every twenty metres, and a thing you trip over on the way
-   * somewhere else is not a thing you find.
-   *
-   * THE FIRST PATCH IS NO LONGER GUARANTEED TO BE NEAR THE GLADE, and that is
-   * the one thing this rule lost when the authored scatter went. That scatter
-   * placed patch zero at 17–23 m from the origin deliberately, "because a
-   * player who walks for four minutes without finding the thing the world is
-   * named after concludes there is nothing to find". The same density arrived
-   * at from the other end says roughly the same thing without promising it:
-   * five sectors of ground lie inside 40 m of the spawn point, so the chance of
-   * meeting nothing within a forty-metre stroll is 0.62⁵ ≈ 9%. Counted on the
-   * resident ring at the spawn point, `forest.patches` holds a dozen or more.
-   *
-   * Re-adding the guarantee would mean a distance-from-origin special case in
-   * the one file whose whole argument is now that there are none, to buy a
-   * one-in-eleven case where the player walks eighty metres instead of forty.
-   * It is not worth the exception; if it ever turns out to be, the honest fix
-   * is to raise the density everywhere rather than to bless the origin.
-   */
-  {
-    const stems = layer('shroom-stem');
-    const caps = layer('shroom-cap');
-    const stemBound = bounds['shroom-stem'];
-    const capBound = bounds['shroom-cap'];
-    const wanted = rng() < 0.38 ? 1 : 0;
-    for (let p = 0; p < wanted; p++) {
-      let px = 0;
-      let pz = 0;
-      let ok = false;
-      for (let attempt = 0; attempt < 24; attempt++) {
-        px = ox + rng() * size;
-        pz = oz + rng() * size;
-        if (!submerged(px, pz) && slopeAt(px, pz) < 0.34) {
-          ok = true;
-          break;
-        }
-      }
-      if (!ok) continue;
-      const n = 3 + Math.floor(rng() * 5);
-      patches.push(px, groundUnder(px, pz), pz);
-      for (let i = 0; i < n; i++) {
-        const a = rng() * TAU;
-        const r = Math.pow(rng(), 0.6) * 1.5;
-        const x = px + Math.cos(a) * r;
-        const z = pz + Math.sin(a) * r;
-        const y = groundUnder(x, z);
-        const grow = rngRange(rng, 0.75, 1.7);
-        tiltMatrix(
-          _mat,
-          x,
-          y - 0.03,
-          z,
-          rngRange(rng, -0.16, 0.16),
-          rng() * TAU,
-          rngRange(rng, -0.16, 0.16),
-          grow,
-          grow,
-          grow
-        );
-        push(stems, _mat, null, x, y - 0.03 + stemBound.cy * grow, z, stemBound.r * grow);
-        _tint.setHSL(rngRange(rng, 0.72, 0.88), rngRange(rng, 0.3, 0.62), rngRange(rng, 0.34, 0.56));
-        _col[0] = _tint.r;
-        _col[1] = _tint.g;
-        _col[2] = _tint.b;
-        push(caps, _mat, _col, x, y - 0.03 + capBound.cy * grow, z, capBound.r * grow);
-        glow.push(x, y + 0.24, z);
-      }
-    }
-  }
+  land.makeCoarse(K);
 
   // ---- the understorey ----------------------------------------------------
   /**
-   * THE NINE UNDERSTOREY LAYERS — every square metre of the world, including
-   * the one you are standing on when the gate lifts.
+   * THE UNDERSTOREY LAYERS — every square metre of the world, including the one
+   * you are standing on when the gate lifts.
    *
    * These used to exist twice: once here, and once as an eager scatter in
    * forest.js covering a disc of 118–163 m around the origin, with this half
@@ -1280,9 +1361,9 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
    * and 140 m and this half could not start until 163.4 — 23 to 51 m of ground
    * that neither sampler planted, wide enough to stand in and look along.
    *
-   * There is one sampler now and it starts at r = 0. See the file header for
-   * the measurements that decided it, and note the shape of the answer: the
-   * annulus was not patched, it was made impossible to express.
+   * There is one sampler now and it starts at r = 0. See the file header for the
+   * measurements that decided it, and note the shape of the answer: the annulus
+   * was not patched, it was made impossible to express.
    *
    *
    * WHY THESE RIDE THE 32 m UNDERGROWTH GRID AND NOT THE 128 m TREE GRID.
@@ -1292,15 +1373,7 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
    * the eviction and collider plumbing already exists, and putting them on the
    * tree grid would generate bushes out to 565 m at a density nobody could
    * resolve through the fog. The price is that they arrive and leave four times
-   * as often as a tree sector does, which is the shape the frame prefers — see
-   * the note on UNDER_SECTOR in forest-field.js.
-   *
-   * That reach is now what the SPAWN POINT gets too, where it used to get an
-   * authored disc reaching 118–163 m, and the trade is the right way round:
-   * measured cover per square metre at the spawn point goes from 0.31 to
-   * roughly 2.0 over 80–100 m and from 0.28 to 0.21 over 100–120, i.e. the band
-   * a player can actually resolve gets six times the planting and the band
-   * behind the fog loses a quarter of almost nothing.
+   * as often as a tree sector does, which is the shape the frame prefers.
    */
   {
     /**
@@ -1308,26 +1381,33 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
      *
      * THE LATTICE TILES THE SECTOR EXACTLY AND THE DENSITY IS CORRECTED FOR IT.
      *
-     * `steps = round(size / spacing)` on its own is what every layer above
-     * does, and it is quietly wrong by up to a quarter at these spacings: the
-     * stumps want 20 m in a 32 m sector, which rounds to two steps of 20 m and
-     * lays candidates out to 40 m — a fifth of every stump placed in the
-     * neighbour's ground, and 56% too many of them. Rocks have the same problem
-     * in both directions and have always had it; it is survivable there because
-     * a rock is rare and unremarkable, and it is not survivable for a layer the
-     * player is standing in.
+     * `steps = round(size / spacing)` on its own is what the coarse layers do,
+     * and it is quietly wrong by up to a quarter at these spacings: the stumps
+     * want 20 m in a 32 m sector, which rounds to two steps of 20 m and lays
+     * candidates out to 40 m — a fifth of every stump placed in the neighbour's
+     * ground, and 56% too many of them. Rocks have the same problem in both
+     * directions and have always had it; it is survivable there because a rock
+     * is rare and unremarkable, and it is not survivable for a layer the player
+     * is standing in.
      *
      * So the step is `size / steps`, which tiles the sector exactly, and the
      * acceptance is multiplied by `(step / spacing)²` to put the expected
-     * instances per square metre back on the tuned figure — fewer, bigger
-     * cells accept proportionally harder. Stumps come out at 2 steps of 16 m
-     * and 0.64× acceptance, which is the density the layer was tuned at to the
-     * last decimal rather than to the nearest rounding.
+     * instances per square metre back on the tuned figure — fewer, bigger cells
+     * accept proportionally harder. Stumps come out at 2 steps of 16 m and
+     * 0.64× acceptance, which is the density the layer was tuned at to the last
+     * decimal rather than to the nearest rounding.
      *
-     * `p` handed to the body is that correction and nothing else now — the
-     * radial seam fade it used to carry went with the seam — so a body reads
+     * `p` handed to the body is that correction and nothing else — the radial
+     * seam fade it used to carry went with the seam — so a body reads
      * `if (rng() > <the layer's own probability> * p) continue` and the
      * probability is textually the tuned one.
+     *
+     * `if (!bound) return` IS HOW A LAND DROPS A LAYER. A land that does not
+     * list `bromeliads` never has the geometry built in forest.js, so `bounds`
+     * has no entry, so this returns before the grid is walked and the rule never
+     * runs. That seam predates the land layer — it is how `SWARD_FORMS` degrades
+     * when `grass-b` is absent — and it is why dropping six layers for the taiga
+     * needed no edit here at all.
      */
     const underLayer = (id, spacing, body) => {
       const bound = bounds[id];
@@ -1345,19 +1425,19 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
            * CANOPY WAS MAKING IT THE OPPOSITE.
            *
            * `caveClearance` reaches these layers only through `forestDensity`,
-           * and `character` reads that as `meadow = 1 - canopy * 1.22`: light.
-           * So a gully — which is a hole in the tree field on purpose — scored
-           * the HIGHEST meadow weight in the world, and the approach to every
-           * cave came out as chest-high hay with the doorway somewhere behind
-           * it. `.shots/crag/a4-mouth.png` was a photograph of a cave mouth with
-           * no cave mouth in it; the mound the portal deletes was only ever the
-           * second thing in the way.
+           * and the rainforest's `character` reads that as
+           * `meadow = 1 - canopy * 1.22`: light. So a gully — which is a hole in
+           * the tree field on purpose — scored the HIGHEST meadow weight in the
+           * world, and the approach to every cave came out as chest-high hay with
+           * the doorway somewhere behind it. `.shots/crag/a4-mouth.png` was a
+           * photograph of a cave mouth with no cave mouth in it; the mound the
+           * portal deletes was only ever the second thing in the way.
            *
-           * Here rather than in each body because it is true of all nine of
-           * them, and before the body rather than inside it because the two
-           * position draws above have already been taken — so the seeded stream
-           * only diverges where there is a cave, which is where the world is
-           * meant to be different.
+           * HERE RATHER THAN IN EACH BODY because it is true of every land as
+           * well as of every layer — a cave mouth has to be legible whatever is
+           * growing round it — and before the body rather than inside it because
+           * the two position draws above have already been taken, so the seeded
+           * stream only diverges where there is a cave.
            */
           if (caveClearance(x, z) > 0.35) continue;
           body(x, z, l, bound, dens);
@@ -1365,553 +1445,13 @@ export function underSector({ seed, sx, sz, size, bounds, rockSizes }) {
       }
     };
 
-    /**
-     * A note on test ORDER.
-     *
-     * The cheap rejections come first: `slopeAt` and `wetness` before
-     * `character`, and `character` before `heightAt`. `character` is two fbms,
-     * a `forestDensity` and a `wetness`, and it is called for every candidate
-     * that gets past the slope test — about ninety thousand of them per sector
-     * across the nine layers — so the ordering is worth real time. Reordering
-     * pure predicates cannot change the acceptance PROBABILITY, only which
-     * draws are taken, and since the whole sector comes off one seeded stream
-     * that is a change to the world: do not shuffle these without expecting
-     * `authored-check`'s cross-seed comparison to notice.
-     */
-
-    // ---- meadow -----------------------------------------------------------
-    underLayer('meadow', 1.3, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.42) return;
-      const c = character(x, z);
-      if (c.meadow < 0.07) return;
-      const m = c.meadow;
-      /**
-       * A 12 m gathering field, so the meadow is drifts with worn ground
-       * between them rather than an even sprinkle — the eye reads an even
-       * sprinkle as a lawn ornament, and the whole point of long grass is that
-       * some of it is over your head and some of it is not there.
-       */
-      const drift = clamp01((fbm2(x * 0.085 + 17, z * 0.085 - 41, 2) * 0.5 + 0.5) * 2.4 - 0.62);
-      /**
-       * A SMALL BALD DISC WHERE THE PLAYER'S BOOTS ARE, and it is the one
-       * distance-from-origin term left in the understorey.
-       *
-       * It is a world feature and not bookkeeping. The spawn clearing is a hole
-       * in `forestDensity`, so the canopy term that gates this layer is at its
-       * MAXIMUM there — the glade you start in is the single most meadow-y place
-       * in the world, and without this the first frame of the game is a wall of
-       * chest-high hay a metre from your face and a jukebox buried to its dial.
-       * 4.5 m of nothing ramping to full over the next 5.5 m: you start standing
-       * on short ground with the drifts five metres away, which is the whole
-       * request. The drift field does the rest — the bare ground between drifts
-       * inside the glade IS the path.
-       *
-       * It multiplies the DENSITY only. `m` reaches the height term untouched,
-       * so the drifts you can see from the spawn point are full height.
-       *
-       * This lived in the authored scatter in forest.js and had to come with it
-       * when that went. Everywhere except the glade it is identically 1, which
-       * is why it is safe to have a radius here at all: it is 10 m wide, not
-       * 163.
-       */
-      const feet = smoothstep(clamp01((Math.hypot(x, z) - 4.5) / 5.5));
-      if (rng() > clamp01(m * 3.2 - 0.3) * drift * feet * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const gx = rngRange(rng, 0.85, 1.3);
-      const gz = rngRange(rng, 0.85, 1.3);
-      // Height tracks the biome weight, so a meadow is deepest in its middle
-      // and shortens toward the trees instead of ending in a wall of hay. On
-      // the 1.95 m card 0.62 at the gate is 1.09–1.45 m after the jitter, which
-      // is waist to chest, and the deepest drift in the world is 2.4 m.
-      const tall = (0.62 + m * 0.46) * rngRange(rng, 0.86, 1.14);
-      yawMatrix(_mat, x, y - 0.05, z, rng() * TAU, gx, tall, gz);
-      _tint.setHSL(
-        0.19 + rngRange(rng, -0.028, 0.05),
-        rngRange(rng, 0.24, 0.46),
-        rngRange(rng, 0.44, 0.72)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(gx, tall, gz);
-      push(l, _mat, _col, x, y - 0.05 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- bramble ----------------------------------------------------------
-    underLayer('bramble', 2.5, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.46) return;
-      const c = character(x, z);
-      if (c.bramble < 0.12) return;
-      if (rng() > c.bramble * 1.05 * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const g = rngRange(rng, 0.7, 1.45);
-      const gy = g * rngRange(rng, 0.75, 1.25);
-      yawMatrix(_mat, x, y - 0.08, z, rng() * TAU, g, gy, g);
-      _tint.setHSL(
-        0.27 + rngRange(rng, -0.05, 0.03),
-        rngRange(rng, 0.18, 0.36),
-        rngRange(rng, 0.5, 0.74)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.08 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- bushes -----------------------------------------------------------
-    underLayer('bushes', 5.4, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.44) return;
-      const c = character(x, z);
-      // Bushes are the generalist: they grow anywhere the ground is not bare
-      // needle litter and not standing water, and they thicken on the edge.
-      const want = (1 - c.litter * 0.9) * (0.14 + (1 - Math.abs(c.canopy - 0.55) * 1.6) * 0.5);
-      if (rng() > want * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      // One size with a small wobble on each axis, not three independent
-      // ranges: three independent draws can produce a bush 1.5 wide and 0.7
-      // high, which is the flat rosette the geometry spent two attempts getting
-      // rid of, reintroduced by the instance matrix on one bush in twenty.
-      // `gx` is what `bushCue` sees.
-      const g = rngRange(rng, 0.62, 1.5);
-      const gx = g * rngRange(rng, 0.9, 1.12);
-      const gy = g * rngRange(rng, 0.88, 1.14);
-      const gz = g * rngRange(rng, 0.9, 1.12);
-      yawMatrix(_mat, x, y - 0.05, z, rng() * TAU, gx, gy, gz);
-      _tint.setHSL(
-        0.24 + rngRange(rng, -0.045, 0.04),
-        rngRange(rng, 0.2, 0.42),
-        rngRange(rng, 0.5, 0.78)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(gx, gy, gz);
-      push(l, _mat, _col, x, y - 0.05 + bound.cy * grow, z, bound.r * grow);
-      // Roughly the top third by width earns a rustle; the rest is scenery,
-      // and `bushCue` returns 0 for those. The threshold and the radius live
-      // up at the top of this file so that a shrub worth noticing and a shrub
-      // that is just leaves are one decision. This goes to `rustle`, not
-      // `collide` — bushes no longer block the body, see `bushCue`.
-      const cue = bushCue(gx);
-      if (cue) rustle.push(x, z, cue);
-    });
-
-    // ---- saplings ---------------------------------------------------------
-    underLayer('saplings', 7.2, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.4) return;
-      const c = character(x, z);
-      // Seedlings come up where there is light AND a seed source: the edge of a
-      // glade rather than its middle, which is `canopy` in a band again.
-      if (rng() > (1 - c.litter * 0.8) * (0.1 + c.canopy * 0.42) * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const g = rngRange(rng, 0.5, 1.35);
-      const gy = g * rngRange(rng, 0.85, 1.3);
-      yawMatrix(_mat, x, y - 0.05, z, rng() * TAU, g, gy, g);
-      _tint.setHSL(
-        0.25 + rngRange(rng, -0.04, 0.045),
-        rngRange(rng, 0.24, 0.44),
-        rngRange(rng, 0.5, 0.78)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.05 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- sticks -----------------------------------------------------------
-    underLayer('sticks', 3.0, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.5) return;
-      const c = character(x, z);
-      if (rng() > (0.1 + c.canopy * 0.42 + c.damp * 0.3 + c.litter * 0.22) * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      // One geometry, length varied by the instance: 0.35 to 1.8 turns a single
-      // 1.7 m stick into everything from a twig to a three-metre fallen bough.
-      // Named rather than `sx`/`sz`, which are this function's SECTOR
-      // coordinates.
-      const long = rngRange(rng, 0.35, 1.8);
-      const thickY = rngRange(rng, 0.7, 1.35);
-      const thickZ = rngRange(rng, 0.7, 1.35);
-      // Lying down, and only just: a couple of degrees of pitch and roll is
-      // what keeps a field of these from looking like a printed pattern.
-      tiltMatrix(
-        _mat,
-        x,
-        y + 0.03,
-        z,
-        rngRange(rng, -0.14, 0.14),
-        rng() * TAU,
-        rngRange(rng, -0.1, 0.1),
-        long,
-        thickY,
-        thickZ
-      );
-      _tint.setHSL(
-        0.07 + rngRange(rng, -0.02, 0.02),
-        rngRange(rng, 0.03, 0.17),
-        rngRange(rng, 0.4, 0.85)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(long, thickY, thickZ);
-      push(l, _mat, _col, x, y + 0.03 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- wildflowers ------------------------------------------------------
-    underLayer('flowers', 1.8, (x, z, l, bound, p) => {
-      const c = character(x, z);
-      if (c.flower < 0.12) return;
-      // A 1.8 m field gathers them into clumps, because flowers grow in clumps
-      // and an even sprinkle of them reads as confetti.
-      const clump = fbm2(x * 0.55 + 91, z * 0.55 - 33, 2) * 0.5 + 0.5;
-      if (rng() > c.flower * clump * clump * 1.45 * p) return;
-      if (slopeAt(x, z) > 0.42) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      // An 11 m field picks the HUE, so a whole patch is buttercup yellow and
-      // the next one along is campion pink.
-      const hue = fbm2(x * 0.09 + 500, z * 0.09 - 220, 1) * 0.5 + 0.5;
-      const h = FLOWER_HUES[Math.min(4, Math.floor(hue * 5))];
-      const g = rngRange(rng, 0.7, 1.5);
-      const gy = g * rngRange(rng, 0.8, 1.35);
-      yawMatrix(_mat, x, y - 0.02, z, rng() * TAU, g, gy, g);
-      _tint.setHSL(h + rngRange(rng, -0.02, 0.02), rngRange(rng, 0.22, 0.62), rngRange(rng, 0.6, 0.88));
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.02 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- leaf litter and moss ---------------------------------------------
-    underLayer('litter', 3.5, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.4) return;
-      const c = character(x, z);
-      if (rng() > (c.litter * 0.85 + c.damp * 0.7 + c.canopy * 0.14) * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      // `mx`/`mz`, not `sx`/`sz`: those are this function's sector coordinates.
-      const mx = rngRange(rng, 0.7, 1.7);
-      const my = rngRange(rng, 0.6, 1.3);
-      const mz = rngRange(rng, 0.7, 1.7);
-      tiltMatrix(
-        _mat,
-        x,
-        y + 0.015,
-        z,
-        rngRange(rng, -0.06, 0.06),
-        rng() * TAU,
-        rngRange(rng, -0.06, 0.06),
-        mx,
-        my,
-        mz
-      );
-      // Moss on the wet ground, dead leaves everywhere else — one card, two
-      // materials of the world, and the difference is the instance colour.
-      if (c.damp > 0.45) {
-        _tint.setHSL(
-          0.28 + rngRange(rng, -0.04, 0.03),
-          rngRange(rng, 0.24, 0.48),
-          rngRange(rng, 0.4, 0.64)
-        );
-      } else {
-        _tint.setHSL(
-          0.07 + rngRange(rng, -0.015, 0.025),
-          rngRange(rng, 0.3, 0.55),
-          rngRange(rng, 0.28, 0.48)
-        );
-      }
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(mx, my, mz);
-      push(l, _mat, _col, x, y + 0.015 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- reeds at the water -----------------------------------------------
-    /**
-     * The only layer keyed to the terrain rather than to the biome field,
-     * because the stream is not a region — it is a line, and it runs across the
-     * whole endless world. Testing wetness before
-     * anything else is a real saving rather than fussiness: this grid used to
-     * walk 1156 cells per sector to find the handful on the bank — 576 now, at
-     * the wider spacing — and `wetness` is two sines where `heightAt` is a
-     * dozen octaves of noise.
-     */
-    underLayer('reeds', 1.35, (x, z, l, bound, p) => {
-      const wet = wetness(x, z);
-      if (wet < 0.42) return;
-      const y = heightAt(x, z);
-      if (y < WATER_LEVEL - 0.55 || y > WATER_LEVEL + 1.7) return;
-      // Thickest right at the waterline and thinning up the bank.
-      const band = 1 - clamp01(Math.abs(y - WATER_LEVEL - 0.35) / 1.5);
-      if (rng() > band * (0.3 + wet * 0.7) * p) return;
-      const g = rngRange(rng, 0.68, 1.3);
-      const gy = (0.62 + band * 0.5) * rngRange(rng, 0.85, 1.25);
-      yawMatrix(_mat, x, y - 0.06, z, rng() * TAU, g, gy, g);
-      _tint.setHSL(
-        0.21 + rngRange(rng, -0.03, 0.05),
-        rngRange(rng, 0.2, 0.44),
-        rngRange(rng, 0.4, 0.7)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.06 + bound.cy * grow, z, bound.r * grow);
-    });
-
-    // ---- stumps -----------------------------------------------------------
-    underLayer('stumps', 20, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.3) return;
-      if (submerged(x, z)) return;
-      if (rng() > (forestDensity(x, z) * 0.55 + 0.06) * p) return;
-      const y = heightAt(x, z);
-      const g = rngRange(rng, 0.6, 1.6);
-      const gy = g * rngRange(rng, 0.6, 1.5);
-      tiltMatrix(
-        _mat,
-        x,
-        y - 0.12,
-        z,
-        rngRange(rng, -0.1, 0.1),
-        rng() * TAU,
-        rngRange(rng, -0.1, 0.1),
-        g,
-        gy,
-        g
-      );
-      _tint.setHSL(0.09, rngRange(rng, 0.08, 0.22), rngRange(rng, 0.3, 0.5));
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const grow = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.12 + bound.cy * grow, z, bound.r * grow);
-      collide.push(x, z, stumpCollider(g));
-    });
-
-    /**
-     * ==== THE MID-STOREY, AND WHY IT IS APPENDED HERE ======================
-     *
-     * These three are LAST, and that is the one structural fact about them.
-     * The whole sector comes off a single seeded stream, so a layer inserted
-     * anywhere above this point would re-roll every draw after it and move
-     * every plant in the world; appended here, not one existing instance
-     * changes. The same rule put them last in the table in forest.js.
-     *
-     * WHAT THEY ARE FOR, in the order the measurement asked for them:
-     *
-     *   `palms` fills 8-12 m, which is the only band `sightlines.mjs` still
-     *   reports as a hole and the one that got WORSE as the trees improved.
-     *
-     *   `bromeliads` plant the steep ground, which every other layer in this
-     *   file hard-rejects and which in a rainforest is the lushest place there
-     *   is, and they are where the saturated colour lives.
-     *
-     *   `bigleaf` is the jungle cue at eye level: very few, very large.
-     */
-
-    // ---- understorey palms and tree ferns ---------------------------------
-    /**
-     * ONE LAYER FOR TWO PLANTS, split by the instance scale — 0.58 is a five
-     * metre tree fern in deep shade and 1.42 is a twelve metre palm with its
-     * crown just under the canopy. See the header on `palmGeometry`.
-     *
-     * `pow(rng(), 0.7)` RATHER THAN A UNIFORM DRAW, and it is the only tuning
-     * number here that came straight off the instrument. A uniform range puts
-     * as much of this layer at 5-7 m — where the wood is already full — as at
-     * 9-12 m, where the hole is. The exponent skews the draw toward the top of
-     * the range (mean 0.588 of it rather than 0.5), so the crowns pile up in
-     * the band that is empty. Anything more aggressive starts to read as a
-     * plantation of identical palms, which is the failure the fern layer's own
-     * `pow(rng(), 1.7)` note describes from the other end.
-     *
-     * KEYED TO THE CANOPY, NOT AGAINST IT. Understorey palms are shade plants —
-     * that is what "understorey" means — so they thicken under a closed canopy,
-     * which is also exactly where the colonnade complaint comes from. Excluded
-     * from the meadow so that a light gap stays a light gap: a glade you cannot
-     * see across is not a glade.
-     */
-    underLayer('palms', 6.2, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.52) return;
-      const c = character(x, z);
-      const want = (0.14 + c.canopy * 0.5) * (1 - c.litter * 0.45) * (1 - c.meadow * 0.5);
-      if (rng() > want * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const grow = 0.58 + Math.pow(rng(), 0.7) * 0.84;
-      const gy = grow * rngRange(rng, 0.9, 1.12);
-      yawMatrix(_mat, x, y - 0.15, z, rng() * TAU, grow, gy, grow);
-      /**
-       * THE TINT IS CORRELATED WITH THE HEIGHT, which is what turns one
-       * geometry into two plants.
-       *
-       * A five-metre tree fern is standing in the darkest part of the wood and
-       * a twelve-metre palm has its head in the light under the canopy, so the
-       * small ones go deep and slightly blue and the tall ones go bright. It
-       * costs nothing — this is an instance colour either way — and it is worth
-       * more than any amount of geometry, because a stand in which every plant
-       * is the same value reads as one object repeated however varied its
-       * silhouette is.
-       */
-      const tallT = (grow - 0.58) / 0.84;
-      _tint.setHSL(
-        0.27 - tallT * 0.02 + rngRange(rng, -0.03, 0.035),
-        rngRange(rng, 0.28, 0.5),
-        0.46 + tallT * 0.24 + rngRange(rng, -0.06, 0.08)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const big = Math.max(grow, gy);
-      push(l, _mat, _col, x, y - 0.15 + bound.cy * big, z, bound.r * big);
-    });
-
-    // ---- bromeliads on the banks ------------------------------------------
-    /**
-     * THE ONLY LAYER IN THIS FILE WHOSE SLOPE GATE IS THE RIGHT WAY UP.
-     *
-     * Every other rule here rejects above a slope of 0.30-0.50 and the sward is
-     * separately zeroed under a closed canopy, so a steep shaded bank rejects
-     * every layer in the world except rocks and sticks and comes out bald. That
-     * is a named open problem in this project and it is backwards twice over: a
-     * bank is the one surface in a rainforest that gets light from the SIDE,
-     * and it is where the epiphytes that could not find a branch end up. A cut
-     * slope in Amazonia is a wall of bromeliads.
-     *
-     * So this rule REQUIRES slope and gets denser as the ground steepens, which
-     * is what makes it affordable at 2.6 m spacing: on the flat ground the
-     * player actually walks over it does not exist, so it adds nothing to the
-     * near field and everything to the banks you look at across a valley.
-     *
-     * The canopy term is deliberately weak (0.35 + 0.3) rather than the strong
-     * one the shade layers use. A bank grows these in the open and in the deep
-     * wood alike, and gating it on canopy would have put the wall back in the
-     * same places everything else already is.
-     */
-    underLayer('bromeliads', 2.1, (x, z, l, bound, p) => {
-      const c = character(x, z);
-      /**
-       * THE RAMP WAS MEASURED, AND THE FIRST GUESS PRODUCED EXACTLY ZERO OF
-       * THIS LAYER IN THE WHOLE WORLD.
-       *
-       * It read `clamp01((slope - 0.26) * 1.6)`, which does not reach 1 until a
-       * slope of 0.885 — and this terrain's steepest square metre inside a
-       * 440 m box measures 0.742. So the acceptance never got above 0.38
-       * anywhere, on ground that is itself rare, and the layer counted 0
-       * instances at all three stations. Nothing reported it: a layer that
-       * places nothing looks exactly like a layer that works.
-       *
-       * The distribution, sampled on a 1.7 m lattice over 440 m at the wood
-       * station, is what the numbers below are fitted to:
-       *
-       *     < 0.05  75.1%     0.15-0.20   2.0%     0.30-0.40   1.0%
-       *   0.05-0.10 13.6%     0.20-0.25   1.0%     0.40-0.60   0.9%
-       *   0.10-0.15  5.3%     0.25-0.30   0.8%     > 0.60      0.3%
-       *
-       * A gate at 0.26 therefore covers 3% of the ground before any acceptance
-       * runs. The ramp now starts at 0.08 — a bank you would notice leaning
-       * into, not a cliff — and is full by 0.24, which puts a real wall on 6.6%
-       * of the ground rather than a rounding error on 3%.
-       *
-       * AND THERE IS A FLOOR UNDER THE CLOSED CANOPY, which is the half of this
-       * rule that is not about slope at all. A steep bank is where the wall is;
-       * the deep shaded floor is where the COLOUR is missing, and this is the
-       * only layer in the file that can carry a saturated one. 0.1 x canopy is
-       * about one rosette per sixteen square metres of deep wood — a thing you
-       * keep finding, not a ground cover.
-       */
-      const bank = clamp01((slopeAt(x, z) - 0.08) * 6.25) * (0.5 + c.canopy * 0.35);
-      const want = Math.max(bank, c.canopy * 0.13) * (1 - c.damp * 0.35);
-      if (rng() > want * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const g = rngRange(rng, 0.62, 1.8);
-      const gy = g * rngRange(rng, 0.8, 1.2);
-      // Sunk proportionally rather than by a constant. On a 0.5 slope the
-      // ground falls 0.3 m across a 1.25 m card, so a rosette planted at the
-      // sampled height shows a bright sliver of daylight under its uphill edge
-      // from twenty metres away — the same artefact the litter mats' rumple
-      // exists to prevent, on ground that is steep by definition.
-      const base = y - 0.11 * g;
-      yawMatrix(_mat, x, base, z, rng() * TAU, g, gy, g);
-      /**
-       * NEARLY NEUTRAL, AND THAT IS THE WHOLE COLOUR ARGUMENT.
-       *
-       * The scarlet is in the canvas and the material colour is 0xffffff, so
-       * this tint is the last chance to destroy it. Saturation is held at
-       * 0.04-0.16 — enough for one rosette to be warmer than its neighbour, far
-       * too little to drag a red texel toward green. Every other card layer in
-       * the world does the opposite, and every other card layer in the world is
-       * green.
-       */
-      _tint.setHSL(
-        0.24 + rngRange(rng, -0.09, 0.09),
-        rngRange(rng, 0.04, 0.16),
-        rngRange(rng, 0.58, 0.94)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const big = Math.max(g, gy);
-      push(l, _mat, _col, x, base + bound.cy * big, z, bound.r * big);
-    });
-
-    // ---- giant leaves ------------------------------------------------------
-    /**
-     * ELEVEN METRE SPACING, WHICH MAKES THIS THE SPARSEST GREEN THING IN THE
-     * WORLD, AND THAT IS THE DESIGN.
-     *
-     * A door-sized perforated leaf is the strongest "jungle, not wood" cue
-     * available and it stops being one the moment there are enough of them to
-     * be a texture. About a hundred and seventy resident against the meadow's
-     * ten thousand: one every eleven metres of shaded floor, which is a thing
-     * you come across.
-     *
-     * It is also the layer with the least right to spend anything. The 0.6-4 m
-     * bands are the best-filled part of the wood already and near-field cards
-     * are the ones that cover the screen, so this exists for the colour and the
-     * silhouette rather than to stop a ray, and it is priced accordingly.
-     *
-     * Excluded from the meadow HARD (1 - meadow x 0.7), because a light gap is
-     * where the heliconia clumps are — that is what the `meadow` layer draws —
-     * and the closed shaded floor is where the aroids are. Two different plants
-     * in two different places rather than both everywhere.
-     */
-    underLayer('bigleaf', 9, (x, z, l, bound, p) => {
-      if (slopeAt(x, z) > 0.46) return;
-      const c = character(x, z);
-      const want = (0.1 + c.canopy * 0.42 + c.damp * 0.3) * (1 - c.litter * 0.5) * (1 - c.meadow * 0.7);
-      if (rng() > want * p) return;
-      if (submerged(x, z)) return;
-      const y = heightAt(x, z);
-      const g = rngRange(rng, 0.62, 1.6);
-      const gy = g * rngRange(rng, 0.85, 1.15);
-      yawMatrix(_mat, x, y - 0.06, z, rng() * TAU, g, gy, g);
-      // Neutral for the same reason the bromeliads are: the Heliconia bract on
-      // this card is the second-most saturated thing in the world and a green
-      // tint over it is a dark maroon.
-      _tint.setHSL(
-        0.26 + rngRange(rng, -0.06, 0.06),
-        rngRange(rng, 0.05, 0.18),
-        rngRange(rng, 0.56, 0.92)
-      );
-      _col[0] = _tint.r;
-      _col[1] = _tint.g;
-      _col[2] = _tint.b;
-      const big = Math.max(g, gy);
-      push(l, _mat, _col, x, y - 0.06 + bound.cy * big, z, bound.r * big);
-    });
+    for (const rule of land.understorey) underLayer(rule.id, rule.spacing, rule.make(K));
   }
 
-  return { layers, collide, rustle, patches, glow };
+  // `snags` is empty here and is returned anyway: the field reads the key on
+  // every payload, and an absent one is a crash rather than a no-op. Nothing in
+  // this sector stands up — its deadfall is already lying down.
+  return { layers, collide, rustle, snags: [], patches, glow };
 }
 
 /**

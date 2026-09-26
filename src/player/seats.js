@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, wrapAngle } from '../core/util.js';
+import { clamp, damp, wrapAngle } from '../core/util.js';
 
 /**
  * Somewhere to sit down.
@@ -46,6 +46,58 @@ const YAW_ARC = 1.92;
 
 /** Eye height sitting, measured from the seat surface. */
 const SEATED_EYE = 0.86;
+
+/**
+ * ==== WHAT CHANGES WHEN YOU ACTUALLY SIT DOWN =============================
+ *
+ * Sitting parked the body, clamped the yaw and did nothing else, which made it
+ * a position rather than a posture. Two things now follow from it, and the rule
+ * both obey is the one this project keeps: they are facts about the BODY, in the
+ * world, and neither of them is a filter, a vignette or anything the screen
+ * knows about.
+ *
+ *
+ * THE SETTLE. `SIT_RATE` is the rate the eye descends at on the frame you sit,
+ * against the 12 the horizontal snap uses, and it ramps up to that 12 as `blend`
+ * arrives. That is one expression and it does two jobs, which is why it is worth
+ * a paragraph:
+ *
+ *   SITTING DOWN BECOMES A LOWERING. At a flat 12 the eye covers 95% of the
+ *   half-metre drop in a quarter of a second, which is a body being placed on a
+ *   bench rather than one sitting on it. Ramping from 4.5 puts the same 95% at
+ *   about half a second — measurably longer, still short of anything you would
+ *   call a cutscene, and it is the difference between furniture and a menu.
+ *
+ *   A MOVING SEAT IS STILL FOLLOWED TIGHTLY. The ferry's benches are seats on a
+ *   raft that is drifting, and a permanently slow vertical follow would show as
+ *   the head lagging the deck. `blend` is at 1 within about 0.43 s of sitting
+ *   (it eases at `dt * 7`), so by the time anybody has settled the rate is back
+ *   to the one that has always followed the raft. The slow part only exists
+ *   during the sit itself.
+ *
+ * The horizontal is deliberately NOT slowed: sliding sideways onto a log over
+ * half a second reads as being dragged, and the thing a person feels when they
+ * sit down is the drop.
+ *
+ *
+ * THE BREATH. `exertion` is the controller's "how hard have you been working",
+ * read by `ambience.breath` and by nothing that moves the body. Standing still
+ * it falls with a constant of 0.87 — 23 s to come back inside 4% of rest, which
+ * is the asymmetry that makes it a state rather than a speedometer. Sitting
+ * applies a second damp on top of that, and because the two compound the
+ * effective constant is 0.87 x 0.71 = 0.618, i.e. the same 4% in 6.7 s
+ * (ln 0.04 / ln 0.618) instead of 23.
+ *
+ * WHY THAT IS THE RIGHT SHAPE. You can be out of breath standing at the top of
+ * the hill you just walked up — that is the whole value of the standing curve
+ * and it is not being taken away. What sitting down means is that you have
+ * stopped on purpose, and a person who sits after a hard walk audibly settles
+ * within a few breaths. It costs nothing (one `damp` on a frame that is already
+ * writing four fields of the controller), it is inaudible unless you were
+ * working, and it cannot become chrome because it is a sound.
+ */
+const SIT_RATE = 4.5;
+const SEATED_BREATH = 0.71;
 
 export class Seat {
   /**
@@ -252,11 +304,25 @@ export class Sitting {
     const k = Math.min(1, dt * 12);
     c.position.x += (seat.position.x - c.position.x) * k;
     c.position.z += (seat.position.z - c.position.z) * k;
-    c.position.y += (seat.position.y + SEATED_EYE - c.position.y) * k;
+    // The eye goes down more slowly than the body slides across, and catches up
+    // to the same rate as `blend` arrives. See the SETTLE block at `SIT_RATE`.
+    const ky = Math.min(1, dt * (SIT_RATE + (12 - SIT_RATE) * this.blend));
+    c.position.y += (seat.position.y + SEATED_EYE - c.position.y) * ky;
     c.velocity.set(0, 0, 0);
     c.onGround = true;
     /** The walk cycle must not run while the legs are folded. */
     c.speed = 0;
+    /**
+     * …and you get your breath back. See the BREATH block at `SEATED_BREATH`.
+     *
+     * Applied here rather than asked of the controller, because this file is
+     * where "the body is sitting" is known and `controller.update` is the one
+     * function in the app that must never be subtly wrong — which is the same
+     * argument the header of this class makes for every other line in it. It
+     * compounds with the decay the controller has already applied this frame,
+     * and the constant is chosen knowing that.
+     */
+    c.exertion = damp(c.exertion, 0, SEATED_BREATH, dt);
 
     // The arc. Pitch is untouched — see YAW_ARC.
     const offset = wrapAngle(c.yaw - seat.yaw);

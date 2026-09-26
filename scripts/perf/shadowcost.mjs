@@ -185,6 +185,40 @@ const LEVERS = {
     R.renderer.shadowMap.needsUpdate = true;
     return String(c.right);
   }`,
+  /**
+   * WHAT "KEEP THE BOX, REMOVE THE FAR CASTERS" WOULD BE WORTH, measured
+   * without anyone having to build it first.
+   *
+   * `box 58 → 38` reads as nothing (-0.27 ms) and that is a conservation law
+   * rather than a broken arm: the projection is orthographic and the map is a
+   * fixed grid over the box, so texels touched = (leaf area in frustum) /
+   * (metres per texel)², the numerator goes as s² and the denominator goes as
+   * s², and they cancel. Shrinking the box quarters the crowns and quadruples
+   * the texels each one covers.
+   *
+   * So to price the change that DOES help — leave the box at 58 m and stop
+   * leaf cards casting past ~30 m, leaving those texels empty — the box and the
+   * map have to move TOGETHER, holding the texel size fixed. 30/58 of the edge
+   * and 1024/2048 of the map is 58.6 mm per texel against the shipping 56.6, a
+   * 3.5% difference that biases this row very slightly PESSIMISTIC. What comes
+   * out is the shadow pass with 26.8% of today's casting area and today's
+   * sharpness, which is exactly the proposed forest.js layer split.
+   *
+   * IT IS A PRICE, NOT A PATCH: with the map halved the near dapple really is
+   * coarser, which is the thing the split exists to avoid paying for. Read the
+   * number, do not ship the arm.
+   */
+  'casters 58 → 30 at fixed texel size': `(on) => {
+    const R = window.RR, sh = R.atmosphere.sun.shadow, c = sh.camera;
+    const s = on ? 30 : 58;
+    const n = on ? ${SHIPPING_MAP / 2} : ${SHIPPING_MAP};
+    c.left = -s; c.right = s; c.top = s; c.bottom = -s;
+    c.updateProjectionMatrix();
+    sh.mapSize.set(n, n);
+    if (sh.map) { sh.map.dispose(); sh.map = null; }
+    R.renderer.shadowMap.needsUpdate = true;
+    return c.right + ':' + sh.mapSize.x;
+  }`,
   'leaves stop casting': `(on) => {
     const R = window.RR; let n = 0;
     R.scene.traverse((o) => {

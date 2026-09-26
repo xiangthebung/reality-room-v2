@@ -3,7 +3,9 @@ import { clamp01, damp, lerp, wrapAngle } from '../core/util.js';
 import {
   FLAG_BITE,
   FLAG_FISHING,
+  FLAG_POINTING,
   FLAG_SITTING,
+  FLAG_WAVING,
   INTERP_DELAY_MS,
   hueOf,
 } from '../net/protocol.js';
@@ -240,6 +242,21 @@ export class Avatar {
     this._sit = 0;
     /** Same, for having a rod out. */
     this._rodOut = 0;
+    /**
+     * …and the same again for the two hand gestures. Eased for exactly the
+     * reason `_sit` is: the bits arrive at 18 Hz and an arm that snapped to a
+     * pose on the tick would be a limb teleporting, which is far more visible on
+     * an arm than on a pair of legs because there is nothing else moving.
+     *
+     * THE SPEEDS ARE DELIBERATELY DIFFERENT. Pointing is fast — 0.02 remaining
+     * per second, the same as sitting — because it is a deictic gesture and the
+     * whole of its meaning is "NOW, THERE"; late is the same as wrong. Waving is
+     * slower at 0.08, about a third of a second up and the same back down, which
+     * is what a person's arm actually does and what stops the sine on the roll
+     * starting from a jerk.
+     */
+    this._point = 0;
+    this._wave = 0;
     /** A short flash on the aura when this person types something. */
     this._pulse = 0;
     /** @type {THREE.Mesh|null} built only if this person ever fishes. */
@@ -576,6 +593,10 @@ export class Avatar {
     const fishing = (this.flags & FLAG_FISHING) !== 0;
     this._sit = damp(this._sit, sitting ? 1 : 0, 0.02, dt);
     this._rodOut = damp(this._rodOut, fishing ? 1 : 0, 0.05, dt);
+    const pointing = (this.flags & FLAG_POINTING) !== 0;
+    const waving = (this.flags & FLAG_WAVING) !== 0;
+    this._point = damp(this._point, pointing ? 1 : 0, 0.02, dt);
+    this._wave = damp(this._wave, waving ? 1 : 0, 0.08, dt);
 
     const walking = this._speed > WALK_THRESHOLD && this._sit < 0.5;
     if (walking) {
@@ -626,6 +647,53 @@ export class Avatar {
     this.arms[1].pivot.rotation.x = armX2;
     this.arms[0].pivot.rotation.z = lerp(-0.11, -0.42, rod);
     this.arms[1].pivot.rotation.z = lerp(0.11, 0.26, rod);
+
+    /**
+     * ---- pointing, and waving ----------------------------------------------
+     *
+     * THE RIGHT ARM ONLY, and both are mixed on top of whatever the chain above
+     * produced rather than replacing it — the same trick `_sit` and `_rodOut`
+     * use, and it is what makes waving while walking a blend of two valid poses
+     * instead of a state machine with a corner in it. The left arm keeps
+     * swinging, which is most of what stops a wave looking like a mannequin
+     * being posed.
+     *
+     * THE ROD WINS, because it is the most specific claim on that hand and
+     * because a rod is 2.5 m of geometry parented to the body at the place the
+     * hand is supposed to be — an arm that left it would look like the rod had
+     * come unstuck. Scaling by (1 − rod) rather than branching keeps the
+     * transition continuous in both directions.
+     *
+     * WAVING WINS OVER POINTING. Both at once is a keyboard artefact rather than
+     * an intent, and of the two the wave is the one with a beginning and an end,
+     * so it is the one that would look broken if it were interrupted.
+     *
+     * POINTING NEEDS NOTHING FROM THE WIRE. `_headPitch` is this peer's own look
+     * angle, already interpolated to this frame by `_interpolate` and already
+     * being written into the head three lines up in `update`, so the arm goes
+     * exactly where they are looking — which is what a person's arm does — for
+     * two arithmetic operations and no bytes. See FLAG_POINTING in protocol.js.
+     *
+     * The arm's local −Y maps to (0, −cos x, −sin x), so x = π/2 is dead ahead
+     * and x = π/2 + pitch follows the aim; the raised wave sits at 2.46, which is
+     * about 40° past vertical — up and slightly forward, the way somebody waves
+     * across a clearing rather than the way somebody hails a taxi.
+     */
+    const gesture = 1 - rod;
+    const point = this._point * gesture;
+    const wave = this._wave * gesture;
+    if (point > 0.001 || wave > 0.001) {
+      const right = this.arms[1].pivot;
+      /**
+       * 6.6 rad/s is a hair over one wave a second, and the check that matters
+       * here is the project's own: this modulates a limb's ANGLE, not anything's
+       * luminance, so the 3 Hz rule has no claim on it — the only light that
+       * changes is the Lambert term on a capsule the size of a forearm.
+       */
+      const rock = Math.sin(tripUniforms.uTime.value * 6.6) * 0.44;
+      right.rotation.x = lerp(lerp(right.rotation.x, Math.PI / 2 + this._headPitch, point), 2.46, wave);
+      right.rotation.z = lerp(lerp(right.rotation.z, 0.02, point), 0.3 + rock, wave);
+    }
 
     // A small vertical bob on the stride, so walking has weight. Twice the
     // stride frequency because both feet land per cycle.

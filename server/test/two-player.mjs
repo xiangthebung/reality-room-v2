@@ -104,6 +104,31 @@ const browser = await chromium.launch({
     '--enable-unsafe-swiftshader',
     '--ignore-gpu-blocklist',
     '--autoplay-policy=no-user-gesture-required',
+    /**
+     * THREE PAGES IN ONE BROWSER MEANS TWO OF THEM ARE IN THE BACKGROUND, AND
+     * CHROMIUM STOPS GIVING A BACKGROUND PAGE FRAMES.
+     *
+     * This is the single cause of most of what this gate has been reporting,
+     * and it reports as two completely different bugs. Without these flags the
+     * backgrounded page's rAF is throttled toward a tick a second, so:
+     *
+     *   - "the host's animals actually moved in those seconds: mean 0.00 m".
+     *     They did not move because the host's FRAME LOOP was not running.
+     *     Measured on a foreground page they move about 2 m every eight
+     *     seconds, indefinitely, and go on doing it after a minute of standing
+     *     still.
+     *   - "E over a patch eats it: FAIL". `findInteractable` runs in the frame
+     *     loop and `interact()` reads what it left; on a page getting a frame a
+     *     second there is no target when the key arrives.
+     *
+     * Both look like netcode, neither is. And it is intermittent, because which
+     * page is in front depends on the order they were opened and on what the
+     * machine was doing — which is why this gate could pass on a quiet desktop
+     * and fail on the same commit an hour later.
+     */
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
     // A repeating tone on the microphone and no permission dialog.
     '--use-fake-device-for-media-stream',
     '--use-fake-ui-for-media-stream',
@@ -759,6 +784,9 @@ const patchOf = (page) =>
     window.RR.forest.patches.map((p) => ({
       id: p.id,
       x: p.x,
+      // `y` as well as x and z, because the two places below stand the body ON
+      // the patch and a body placed at an x/z with no y is a body inside a hill.
+      y: p.y,
       z: p.z,
       d: Math.hypot(p.x - window.RR.controller.position.x, p.z - window.RR.controller.position.z),
     }))
@@ -783,11 +811,60 @@ if (victim) {
    * `E` tests the ranking in `findInteractable` too, which is the part that
    * decides a mushroom beats whatever else is within reach.
    */
+  /**
+   * MOVE, LET THE BODY FALL, AND ONLY THEN STRIKE THE KEY.
+   *
+   * This used to set x and z and dispatch `E` in the same evaluate, which is
+   * the recorded harness bug in another costume: the y is whatever it was
+   * before the teleport, so the body is standing in the air (or inside a hill)
+   * over the patch, and `withinReach` — which measures a VERTICAL distance as
+   * well as a horizontal one, because xz distance reaches through mountains —
+   * correctly refuses. `findInteractable` then returns null and `E` does
+   * whatever `E` does with nothing in reach, and the test reports "E over a
+   * patch eats it: FAIL", which reads exactly like a broken mushroom.
+   *
+   * The controller's own gravity brings it down in a few frames. Waiting for
+   * the height to STOP CHANGING rather than for a fixed number of them is the
+   * same rule every other settle in this repo follows.
+   */
+  /**
+   * PLACE THE BODY AT THE PATCH'S OWN HEIGHT, WHICH THE PATCH CARRIES.
+   *
+   * This used to set x and z and dispatch `E` in the same evaluate, leaving y
+   * at whatever it was before the teleport — so the body stood in the air (or
+   * inside a hill) over a patch a hundred and fifty metres away, and
+   * `withinReach`, which measures a VERTICAL distance as well as a horizontal
+   * one because xz distance reaches through mountains, correctly refused.
+   * `findInteractable` then returned null and the test reported "E over a patch
+   * eats it: FAIL", which reads exactly like a broken mushroom.
+   *
+   * Waiting for gravity is the other way to do it and it is worse here: the
+   * ground chunk at a sector two out may not have streamed yet, so the height
+   * "settles" instantly at the wrong value and the wait proves nothing.
+   * `forest-field.js` stores y beside x and z for every patch precisely so that
+   * the thing you walk to and press E at is the thing that has a mushroom on
+   * it — so use it.
+   */
+  /**
+   * AND BRING IT TO THE FRONT FIRST.
+   *
+   * Two of the three pages this gate opens are in the background at any moment,
+   * and Chromium gives a background page a frame a second or less. Everything
+   * about `E` runs in the frame loop — `findInteractable` decides what is in
+   * reach and `interact()` reads what it left — so on a throttled page the key
+   * arrives with a stale target and nothing happens. The launch flags above
+   * turn off the timer throttling and are not enough on their own: rAF for an
+   * occluded page is a compositor decision, not a timer one.
+   */
+  await a.bringToFront();
   await ev(a, (p) => {
-    window.RR.controller.position.x = p.x;
-    window.RR.controller.position.z = p.z;
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE', bubbles: true }));
+    window.RR.controller.position.set(p.x, p.y + 0.05, p.z);
+    window.RR.controller.velocity.set(0, 0, 0);
+    window.RR.controller.applyToCamera();
   }, victim);
+  await ev(a, () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE', bubbles: true }));
+  });
 
   const gone = await ev(a, (id) => ({
     eaten: window.RR.forest.field.eaten.has(id),
@@ -877,8 +954,9 @@ if (victim) {
   );
 
   await ev(late, (p) => {
-    window.RR.controller.position.x = p.x;
-    window.RR.controller.position.z = p.z;
+    window.RR.controller.position.set(p.x, p.y + 0.05, p.z);
+    window.RR.controller.velocity.set(0, 0, 0);
+    window.RR.controller.applyToCamera();
   }, victim);
   let second = null;
   const alsoFound = await waitFor(async () => {
@@ -891,11 +969,18 @@ if (victim) {
   check('C found a patch of its own', alsoFound, second?.id ?? 'none');
 
   if (second) {
+    /**
+     * The patch carries its own y. USE IT — see the note at A's site above.
+     */
     await ev(late, (p) => {
-      window.RR.controller.position.x = p.x;
-      window.RR.controller.position.z = p.z;
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE', bubbles: true }));
+      window.RR.controller.position.set(p.x, p.y + 0.05, p.z);
+      window.RR.controller.velocity.set(0, 0, 0);
+      window.RR.controller.applyToCamera();
     }, second);
+    await new Promise((r) => setTimeout(r, 400));
+    await ev(late, () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE', bubbles: true }));
+    });
     check(
       'C ate one while still on their own',
       await ev(late, (id) => window.RR.forest.field.eaten.has(id), second.id),

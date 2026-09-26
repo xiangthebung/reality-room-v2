@@ -1,0 +1,230 @@
+
+========================================================================
+  cave gate: check  (cave-check.mjs)
+========================================================================
+seed         caves<1400  nearest    seam      ray step   gully    flank    bad
+grove-01     17          49 m       1.3 cm    0.20 m     8.9 m    0.328    0
+check-1      16          168 m      2.3 cm    0.11 m     6.2 m    0.214    0
+check-2      16          281 m      1.8 cm    0.26 m     11.2 m   0.426    0
+check-3      14          212 m      2.3 cm    0.19 m     9.7 m    0.367    0
+check-4      16          124 m      1.4 cm    0.22 m     11.4 m   0.432    0
+check-5      16          70 m       2.0 cm    0.17 m     6.3 m    0.222    0
+check-6      15          117 m      1.9 cm    0.13 m     5.7 m    0.199    0
+check-7      15          217 m      1.4 cm    0.22 m     11.7 m   0.446    0
+check-8      17          154 m      2.1 cm    0.18 m     7.0 m    0.278    0
+check-9      16          209 m      2.0 cm    0.21 m     12.8 m   0.466    0
+check-10     16          251 m      2.3 cm    0.20 m     14.1 m   0.523    0
+check-11     16          195 m      1.5 cm    0.16 m     8.5 m    0.318    0
+check-12     16          67 m       1.7 cm    0.18 m     10.8 m   0.383    0
+check-13     17          105 m      1.1 cm    0.13 m     6.3 m    0.230    0
+check-14     16          200 m      2.0 cm    0.19 m     11.4 m   0.444    0
+check-15     17          132 m      1.5 cm    0.25 m     13.1 m   0.447    0
+check-16     14          172 m      2.0 cm    0.18 m     11.7 m   0.406    0
+check-17     15          174 m      6.1 cm    0.21 m     12.8 m   0.466    0
+check-18     16          148 m      3.9 cm    0.17 m     7.2 m    0.261    0
+check-19     17          90 m       1.5 cm    0.21 m     8.2 m    0.309    0
+check-20     16          115 m      2.9 cm    0.21 m     9.9 m    0.384    0
+check-21     17          178 m      3.1 cm    0.26 m     5.7 m    0.187    0
+check-22     17          117 m      1.7 cm    0.20 m     14.3 m   0.530    0
+check-23     17          166 m      1.3 cm    0.15 m     9.4 m    0.345    0
+
+nearest mouth: 49–281 m over 24 seeds (there is no keep-out; this is wherever the ridge put it)
+
+PASS: no step in the ground anywhere, every mouth is dry and on a slope
+
+========================================================================
+  cave gate: normals  (cave-normals.mjs)
+========================================================================
+
+grove-01
+  k=  0 cave          139094 vertices  every normal is a unit vector
+  k=  0 cave-shafts      924 vertices  every normal is a unit vector
+  k= -1 cave           66592 vertices  every normal is a unit vector
+  k= -1 cave-shafts      504 vertices  every normal is a unit vector
+
+grove-03
+  k=  0 cave          119504 vertices  every normal is a unit vector
+  k=  0 cave-shafts      672 vertices  every normal is a unit vector
+  k=  1 cave          143020 vertices  every normal is a unit vector
+  k=  1 cave-shafts      672 vertices  every normal is a unit vector
+
+8 meshes, 470982 vertices
+
+PASS: no cave vertex carries a normal the shader cannot normalize
+
+========================================================================
+  cave gate: roof  (cave-roof.mjs)
+========================================================================
+k=0  fully buried past the hood
+k=-1  fully buried past the hood
+k=1  fully buried past the hood
+
+PASS: no passage breaks the hillside past its own hood
+
+========================================================================
+  cave gate: mouth  (cave-mouth.mjs)
+========================================================================
+
+k=0  blind at 78.3 m  0 rings with terrain in the passage, 0 of them where the ground is still drawn
+  terrain first clears the ceiling at ring 6 (4.5 m)
+
+k=-1  blind at 29.1 m  0 rings with terrain in the passage, 0 of them where the ground is still drawn
+  terrain first clears the ceiling at ring 4 (3 m)
+
+0 lit rings have the height field standing inside the passage; worst +0.00 m
+0 rings are BREACHED — no ground drawn where the hillside stands clear of the roof (bar: 0)
+
+PASS cave-mouth  2 mouths measured
+
+========================================================================
+  cave gate: floor  (cave-floor.mjs)
+========================================================================
+
+k=0  2422 probes  175 disagree by > 0.45 m  (63 hovering, 110 wading; 0 of them standing on a breakdown block)  worst hover +1.41 m, worst sunk -5.79 m
+   breakdown blocks: 201 columns with a slab in them  1 hovering / 0 wading over 0.45 m  mean |gap| 0.09 m  worst +0.59 / -0.45
+   p6 ring  98 across -0.75  analytic   -42.76  nearest drawn   -36.97  gap -5.79   | passage floor, rock floor off by -5.79  | sample said ring  96 floor   -42.76 inside 1  (this ring: axis -39.38 r 6.92 f 0.52)
+   p6 ring  95 across -0.75  analytic   -42.26  nearest drawn   -37.85  gap -4.41   | passage floor, rock floor off by -4.41  | sample said ring  93 floor   -42.26 inside 1  (this ring: axis -38.48 r 7.97 f 0.52)
+   p1 ring  86 across  0.75  analytic     -2.2  nearest drawn     0.48  gap -2.68   | passage floor, rock floor off by -2.68  | sample said ring  85 floor     -2.2 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p7 ring  65 across -0.75  analytic   -29.86  nearest drawn    -27.3  gap -2.56   | passage floor, rock floor off by -2.56  | sample said ring  69 floor   -29.86 inside 1  (this ring: axis -24.78 r 8.66 f 0.55)
+   p1 ring  89 across -0.75  analytic    -2.35  nearest drawn    -0.15  gap -2.2   | passage floor, rock floor off by -2.2  | sample said ring  86 floor    -2.35 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p1 ring  89 across  0.75  analytic    -2.29  nearest drawn     -0.1  gap -2.19   | passage floor, rock floor off by -2.19  | sample said ring  86 floor    -2.29 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p3 ring 104 across -0.75  analytic    -23.7  nearest drawn   -21.93  gap -1.77   | passage floor, rock floor off by -1.77  | sample said ring 101 floor    -23.7 inside 1  (this ring: axis -21.37 r 4.45 f 0.53)
+   p2 ring  32 across  0.75  analytic     3.01  nearest drawn      4.7  gap -1.69   | passage floor, rock floor off by -1.69  | sample said ring  34 floor     3.01 inside 1  (this ring: axis 4.91 r 2.33 f 0.79)
+   p7 ring  92 across  0.75  analytic   -30.48  nearest drawn   -28.79  gap -1.68   | passage floor, rock floor off by -1.68  | sample said ring  90 floor   -30.48 inside 1  (this ring: axis -25.28 r 7.52 f 0.7)
+   p1 ring  86 across  -0.4  analytic    -2.46  nearest drawn    -0.96  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.46 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p1 ring  86 across   0.4  analytic    -2.43  nearest drawn    -0.94  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.43 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p5 ring  41 across  0.75  analytic    -2.89  nearest drawn    -1.42  gap -1.47   | passage floor, rock floor off by -1.47  | sample said ring  39 floor    -2.89 inside 1  (this ring: axis -0.58 r 3.4 f 0.87)
+   p7 ring  92 across -0.75  analytic   -30.49  nearest drawn   -29.04  gap -1.45   | passage floor, rock floor off by -1.45  | sample said ring  91 floor   -30.49 inside 1  (this ring: axis -25.28 r 7.52 f 0.7)
+   p7 ring 161 across   0.4  analytic   -46.32  nearest drawn   -47.74  gap +1.41   | passage floor, rock floor off by 1.41  | sample said ring 163 floor   -46.32 inside 1  (this ring: axis -44.21 r 4.7 f 0.33)
+
+k=-1  1286 probes  65 disagree by > 0.45 m  (31 hovering, 31 wading; 0 of them standing on a breakdown block)  worst hover +1.23 m, worst sunk -3.60 m
+   breakdown blocks: 154 columns with a slab in them  1 hovering / 0 wading over 0.45 m  mean |gap| 0.09 m  worst +0.45 / -0.34
+   p4 ring 113 across  0.75  analytic   -27.75  nearest drawn   -24.14  gap -3.6   | passage floor, rock floor off by -3.6  | sample said ring 111 floor   -27.75 inside 1  (this ring: axis -22.92 r 10.54 f 0.48)
+   p4 ring 116 across  0.75  analytic   -28.01  nearest drawn    -24.7  gap -3.31   | passage floor, rock floor off by -3.31  | sample said ring 114 floor   -28.01 inside 1  (this ring: axis -23.7 r 8.93 f 0.49)
+   p4 ring 110 across  0.75  analytic    -27.5  nearest drawn   -24.41  gap -3.08   | passage floor, rock floor off by -3.08  | sample said ring 109 floor    -27.5 inside 1  (this ring: axis -22.36 r 11.69 f 0.46)
+   p4 ring 110 across   0.4  analytic    -27.7  nearest drawn   -25.41  gap -2.29   | passage floor, rock floor off by -2.29  | sample said ring 111 floor    -27.7 inside 1  (this ring: axis -22.36 r 11.69 f 0.46)
+   p4 ring 119 across -0.75  analytic   -27.99  nearest drawn    -25.7  gap -2.29   | passage floor, rock floor off by -2.29  | sample said ring 117 floor   -27.99 inside 1  (this ring: axis -24.87 r 6.54 f 0.49)
+   p4 ring 110 across     0  analytic   -27.66  nearest drawn   -25.75  gap -1.91   | passage floor, rock floor off by -1.91  | sample said ring 111 floor   -27.66 inside 1  (this ring: axis -22.36 r 11.69 f 0.46)
+   p4 ring 116 across  -0.4  analytic   -28.05  nearest drawn   -26.31  gap -1.74   | passage floor, rock floor off by -1.74  | sample said ring 118 floor   -28.05 inside 1  (this ring: axis -23.7 r 8.93 f 0.49)
+   p4 ring 119 across  -0.4  analytic   -28.02  nearest drawn   -26.77  gap -1.25   | passage floor, rock floor off by -1.25  | sample said ring 119 floor   -28.02 inside 1  (this ring: axis -24.87 r 6.54 f 0.49)
+   p1 ring  62 across -0.75  analytic     3.75  nearest drawn     2.51  gap +1.23   | passage floor, rock floor off by 1.23  | sample said ring  61 floor     3.75 inside 1  (this ring: axis 5.44 r 4.02 f 0.97)
+   p4 ring 119 across   0.4  analytic      -28  nearest drawn   -26.79  gap -1.21   | passage floor, rock floor off by -1.21  | sample said ring 119 floor      -28 inside 1  (this ring: axis -24.87 r 6.54 f 0.49)
+   p1 ring 125 across  0.75  analytic   -12.73  nearest drawn   -11.55  gap -1.19   | passage floor, rock floor off by -1.19  | sample said ring 122 floor   -12.73 inside 1  (this ring: axis -10.8 r 3.98 f 0.48)
+   p4 ring  50 across  0.75  analytic    -7.42  nearest drawn    -8.52  gap +1.1   | passage floor, rock floor off by 1.1  | sample said ring  46 floor    -7.42 inside 1  (this ring: axis -7.08 r 2.84 f 0.45)
+   p1 ring  62 across  0.75  analytic     3.69  nearest drawn     2.78  gap +0.92   | passage floor, rock floor off by 0.92  | sample said ring  61 floor     3.69 inside 1  (this ring: axis 5.44 r 4.02 f 0.97)
+   p4 ring 116 across   0.4  analytic   -28.04  nearest drawn   -28.91  gap +0.87   | passage floor, rock floor off by -1.71  | sample said ring 118 floor   -28.04 inside 1  (this ring: axis -23.7 r 8.93 f 0.49)
+
+240 disagreements over 0.45 m (94 hovering, 141 wading); worst hover +1.41 m  <-- the body stands in mid-air here
+breakdown blocks alone: 355 columns, 2 hovering + 0 wading = 2 bad, mean |gap| 0.09 m, worst +0.59 / -0.45 m
+
+FAIL cave-floor (2 caves probed)
+  worst hover +1.41 m is over the 1.00 m bar — the body stands in mid-air with the rock drawn under its feet
+
+========================================================================
+  cave gate: walk  (cave-walk.mjs)
+========================================================================
+k=0   built=true  deepest 77.0 m at 40 s  30 of 81 samples past 18 m  longest stall 35 frames
+          0s  depth     0  in    0  ring   0  off 41.9/5.2  head  21.8  overfloor -15.9  speed  0.04/ 0.36 x1  aim -1  yaw -0.31/-0.31  ground
+          2s  depth     0  in    0  ring   0  off 36.8/5.2  head  19.7  overfloor -13.8  speed  2.87/ 2.82 x1  aim -1  yaw -0.3/-0.3  ground
+          4s  depth     0  in    0  ring   0  off 31.5/5.2  head  16.9  overfloor -10.9  speed   2.7/ 2.69 x1  aim -1  yaw -0.3/-0.3  ground
+          6s  depth     0  in    0  ring   0  off 26.4/5.2  head  13.9  overfloor  -7.9  speed  2.47/  2.5 x1  aim -1  yaw -0.3/-0.3  ground
+          8s  depth     0  in    0  ring   0  off 19.4/5.2  head  12.9  overfloor    -7  speed  3.92/ 3.85 x1  aim -1  yaw -0.3/-0.3  ground
+         10s  depth     0  in    0  ring   0  off 13.5/5.2  head  10.6  overfloor  -4.7  speed  2.49/ 2.49 x1  aim -1  yaw -0.3/-0.3  ground
+         12s  depth     0  in    0  ring   0  off  8.5/5.2  head   7.9  overfloor    -2  speed  2.54/ 2.53 x1  aim -1  yaw -0.3/-0.3  ground
+         14s  depth     0  in    0  ring   0  off  2.9/5.2  head   5.8  overfloor   0.2  speed   2.9/ 2.89 x1  aim -1  yaw -0.3/-0.3  ground
+         16s  depth   2.2  in    1  ring   3  off  0.3/5.1  head   4.2  overfloor   1.7  speed  1.95/ 1.92 x1  aim 3  yaw -0.31/-0.31  ground
+         18s  depth     3  in    1  ring   4  off  0.8/5.1  head   4.2  overfloor   1.7  speed  1.85/ 1.84 x1  aim 4  yaw -0.39/-0.38  ground
+         20s  depth   5.3  in    1  ring   7  off  1.1/5.1  head   4.2  overfloor   1.7  speed  1.82/ 1.82 x1  aim 7  yaw -0.44/-0.44  ground
+         22s  depth   9.1  in    1  ring  12  off  0.7/5.4  head   4.6  overfloor   1.6  speed  1.98/ 1.98 x1  aim 13  yaw -0.41/-0.41  ground
+         24s  depth  13.7  in    1  ring  19  off  0.5/4.3  head   3.2  overfloor   1.8  speed  2.91/ 3.39 x1  aim 19  yaw -0.38/-0.38  ground
+         26s  depth  21.9  in    1  ring  30  off  0.7/4.4  head   3.1  overfloor   1.9  speed  3.58/  4.4 x1  aim 30  yaw -0.38/-0.39  ground
+         28s  depth    31  in    1  ring  43  off  0.2/3.8  head   2.5  overfloor   1.8  speed   4.4/  4.4 x1  aim 43  yaw -0.36/-0.36  ground
+         30s  depth  36.2  in    1  ring  50  off  0.9/3.5  head   2.3  overfloor   1.8  speed  3.22/ 3.16 x1  aim 50  yaw -0.28/-0.28  ground
+         32s  depth  42.1  in    1  ring  58  off  0.8/3.6  head   2.4  overfloor   1.7  speed  3.46/ 3.49 x1  aim 58  yaw -0.29/-0.29  ground
+         34s  depth  48.8  in    1  ring  67  off  0.4/3.9  head   2.8  overfloor   1.8  speed  3.25/ 3.23 x1  aim 67  yaw -0.19/-0.19  ground
+         36s  depth  55.6  in    1  ring  76  off  0.4/4.4  head   3.3  overfloor   1.8  speed   3.4/ 3.87 x1  aim 76  yaw -0.5/-0.5  ground
+         38s  depth  67.7  in    1  ring  94  off    2/4  head   2.6  overfloor     2  speed  4.36/ 4.39 x1  aim 94  yaw -2/-1.96  ground
+         40s  depth    77  in    1  ring 106  off  1.1/3.3  head   1.9  overfloor     2  speed     3/ 2.92 x1  aim 106  yaw -2.62/-2.62  ground
+k=-1  built=true  deepest 42.7 m at 25 s  39 of 81 samples past 18 m  longest stall 48 frames
+          0s  depth     0  in    0  ring   0  off 43.2/5  head   5.7  overfloor   0.1  speed  0.04/ 0.36 x1  aim -1  yaw 2.74/2.74  ground
+          2s  depth     0  in    0  ring   0  off 36.7/5  head   4.5  overfloor   1.2  speed  3.39/ 3.37 x1  aim -1  yaw 2.74/2.74  ground
+          4s  depth     0  in    0  ring   0  off   29/5  head   5.6  overfloor   0.1  speed  1.07/  4.4 x1  aim -1  yaw 2.74/2.74  ground
+          6s  depth     0  in    0  ring   0  off 20.2/5  head   8.7  overfloor    -3  speed  4.21/  4.4 x1  aim -1  yaw 2.74/2.74  ground
+          8s  depth     0  in    0  ring   0  off 13.1/5  head   7.5  overfloor  -1.8  speed  3.16/ 3.31 x1  aim -1  yaw 2.74/2.74  ground
+         10s  depth     0  in    0  ring   0  off  6.3/5  head   6.2  overfloor  -0.4  speed  2.94/ 2.92 x1  aim -1  yaw 2.74/2.74  ground
+         12s  depth     0  in 0.22  ring   0  off  0.1/5  head     4  overfloor   1.8  speed  2.32/ 2.17 x1  aim 0  yaw 2.77/2.74  ground
+         14s  depth   3.8  in    1  ring   5  off  0.1/4.2  head   3.1  overfloor   1.7  speed   1.8/  1.8 x1  aim 5  yaw 2.58/2.6  ground
+         16s  depth   6.9  in    1  ring  10  off  0.5/5.3  head   4.5  overfloor   1.6  speed  1.85/ 1.86 x1  aim 10  yaw 2.43/2.45  ground
+         18s  depth   9.9  in    1  ring  13  off  1.9/4.6  head   3.7  overfloor   1.6  speed  1.88/ 1.87 x1  aim 13  yaw 2.71/2.34  ground
+         20s  depth    16  in    1  ring  21  off    1/4.7  head   3.6  overfloor   1.9  speed  3.55/ 4.16 x1  aim 21  yaw 2.42/2.42  ground
+         22s  depth  28.2  in    1  ring  38  off  0.9/4.1  head   3.7  overfloor     1  speed  1.46/  4.4 x1  aim 38  yaw -3/-3  air
+         24s  depth  37.3  in    1  ring  50  off  0.4/4  head   3.8  overfloor   0.9  speed  1.42/  4.4 x1  aim 50  yaw -2.94/-2.95  air
+         26s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed  4.38/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         28s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         30s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         32s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         34s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         36s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         38s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+         40s  depth  42.7  in    1  ring  56  off  0.9/4.2  head   3.9  overfloor   0.9  speed   4.4/  4.4 x1  aim 56  yaw -2.89/-2.89  ground
+k=1   built=true  deepest 40.8 m at 32 s  29 of 81 samples past 18 m  longest stall 429 frames
+          0s  depth     0  in    0  ring   0  off 46.7/4.6  head   8.6  overfloor  -3.3  speed  0.04/ 0.37 x1  aim -1  yaw -0.41/-0.41  ground
+          2s  depth     0  in    0  ring   0  off 40.4/4.6  head   7.3  overfloor    -2  speed  3.26/ 3.25 x1  aim -1  yaw -0.41/-0.41  ground
+          4s  depth     0  in    0  ring   0  off 32.8/4.6  head   7.9  overfloor  -2.6  speed  0.36/  4.4 x1  aim -1  yaw -0.41/-0.41  air
+          6s  depth     0  in    0  ring   0  off   24/4.6  head  10.4  overfloor  -5.1  speed  4.21/ 4.02 x1  aim -1  yaw -0.41/-0.41  ground
+          8s  depth     0  in    0  ring   0  off 18.4/4.6  head   7.9  overfloor  -2.6  speed  2.44/ 2.49 x1  aim -1  yaw -0.41/-0.41  ground
+         10s  depth     0  in    0  ring   0  off 12.7/4.6  head   5.8  overfloor  -0.5  speed  3.15/ 3.17 x1  aim -1  yaw -0.41/-0.41  ground
+         12s  depth     0  in    0  ring   0  off  5.4/4.6  head     5  overfloor   0.3  speed  4.33/ 4.38 x1  aim -1  yaw -0.41/-0.41  ground
+         14s  depth   1.4  in    1  ring   1  off  0.4/4.8  head   3.7  overfloor   1.8  speed  1.89/ 1.84 x1  aim 2  yaw -0.41/-0.4  ground
+         16s  depth   3.8  in    1  ring   5  off  0.6/5.4  head   4.5  overfloor   1.7  speed  1.76/ 1.76 x1  aim 5  yaw -0.49/-0.49  ground
+         18s  depth   7.6  in    1  ring  10  off  0.3/4.3  head   3.3  overfloor   1.6  speed  1.89/ 1.89 x1  aim 10  yaw -0.51/-0.51  ground
+         20s  depth   9.6  in    1  ring  13  off  1.1/4.2  head   3.2  overfloor   1.7  speed  1.89/ 1.89 x1  aim 13  yaw -0.39/-0.4  ground
+         22s  depth  13.2  in    1  ring  19  off  1.2/5  head     4  overfloor   1.8  speed  2.18/ 2.24 x1  aim 19  yaw -0.42/-0.41  ground
+         24s  depth  13.7  in    1  ring  20  off  1.3/5  head   3.9  overfloor   1.8  speed  2.47/ 2.47 x1  aim 20  yaw -0.41/-0.42  ground
+         26s  depth  19.1  in    1  ring  27  off  1.4/4.8  head   3.6  overfloor   1.9  speed  3.34/ 4.39 x1  aim 27  yaw -0.38/-0.37  air
+         28s  depth  27.2  in    1  ring  37  off  0.8/4.7  head   3.4  overfloor   1.9  speed  4.36/  4.4 x1  aim 37  yaw -0.38/-0.4  ground
+         30s  depth  35.9  in    1  ring  47  off  1.8/4.8  head   3.5  overfloor     2  speed  4.36/ 4.39 x1  aim 268  yaw 0.31/0.31  ground
+         32s  depth  40.8  in    1  ring  52  off  3.7/4.9  head   3.7  overfloor     2  speed  3.56/ 3.57 x1  aim 273  yaw 0.92/0.88  ground
+         34s  depth  40.8  in    1  ring  53  off  3.7/4.9  head   3.7  overfloor     2  speed  3.64/ 3.64 x1  aim 273  yaw 1.09/1.08  ground
+         36s  depth  40.8  in    1  ring  53  off  3.7/4.9  head   3.7  overfloor     2  speed  3.64/ 3.64 x1  aim 273  yaw 1.09/1.09  ground
+         38s  depth  40.8  in    1  ring  53  off  3.7/4.9  head   3.7  overfloor     2  speed  3.64/ 3.64 x1  aim 273  yaw 1.09/1.09  ground
+         40s  depth  40.8  in    1  ring  53  off  3.7/4.9  head   3.7  overfloor     2  speed  3.64/ 3.64 x1  aim 273  yaw 1.09/1.09  ground
+
+PASS: every mouth walked into, past 18 m, holding W
+
+========================================================================
+  cave gate: branch  (cave-branch.mjs)
+========================================================================
+
+grove-01 k=0  main 343 m, 9 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1       131    67m     2.1x10.6     3.7x20.2    2.9   13.8   -0.1    5.2      25      61m      0
+  2       222    72m      3.5x1.8      6.0x3.2    3.1    1.8   +0.0    2.7      22      24m      3
+  3       293    77m      0.8x2.1      7.3x3.9    4.1    2.3   +0.0    4.5      22      49m      0
+  4       269   120m      0.5x4.5      5.2x8.5    1.9    3.6   +0.0    5.1      18      40m      0
+  5       340    31m      4.1x3.9      6.4x7.3    5.2    3.1   +0.0    3.4      14      31m      2
+  6       444   108m      5.7x4.8      7.6x8.7    2.1    3.6   +0.0   15.9      21      43m      0
+  7       419   142m      6.5x5.1      8.3x9.5    2.0    2.9   +0.0   10.6      33      59m      0
+  8<4      29    71m      2.6x1.8      6.4x3.4    5.5    2.6   +0.0    2.9       8      50m      0
+        LOOP: rejoins path 4 at ring 103 — hole 1.6x1.8 m, bore 6.4x3.4 m, threshold +0.00 m
+  9<6      34    57m      1.0x2.4      8.4x4.5    4.2    2.0   +0.0    4.4       5      30m      0
+
+grove-01 k=-1  main 197 m, 5 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1        94   108m      1.8x4.3      5.0x8.1    2.6    3.3   +0.0    3.5      26      42m      0
+  2       238    73m      2.9x4.7      4.8x7.9    3.6    5.7   +0.0    9.9      20      52m      0
+  3       211    24m      5.0x4.2      6.7x7.7    4.9    2.4   +0.0    6.6       6      24m      2
+  4       211    86m      2.9x5.3      6.0x9.8    3.5    5.5   +0.0    6.6      34      56m      0
+  5<1      38    77m      2.3x4.0      4.5x7.3    2.5    3.9   +0.0    3.2      18      63m      0
+
+grove-02 k=1  main 281 m, 9 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1        40    98m      2.8x1.9      6.6x3.5    3.5    1.7   +0.0    3.0      22      52m      9
+  2       215   143m      2.2x4.4      5.2x8.5    2.4    3.4   +0.0    3.9      37      31m      1
+  3       363   123m      3.6x4.1      4.6x7.5    3.2    5.4   +0.0   15.2      44      42m      0
+  4       340    81m      5.5x4.7      7.5x8.6    4.1    2.3   -0.0   10.6      17      47m      0
+  5       340    35m      1.0x9.4     2.9x17.0    2.3   13.8   +0.1   10.6      10      35m      1
+  6<1      28    76m      4.4x2.0      7.1x3.8    4.7    2.1   +0.0    3.2      25      54m      0
+  7<2      26    99m      1.8x4.0      4.5x7.4    3.5    5.5   +0.0    3.2      30      62m      0
+  8<3      26    68m      1.6x3.4      3.8x6.2    3.2    5.7   +0.0    2.7      30      55m     31
+  9<4      26    48m      4.8x2.0      6.9x3.7    2.7    1.6   +0.0    3.1      15      48m      0

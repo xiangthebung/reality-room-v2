@@ -143,18 +143,12 @@ body.locked #crosshair {
   color: var(--dim);
   transition: opacity 0.8s ease;
 }
-#phase-bar {
-  margin-top: 6px;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-}
-#phase-bar i {
-  display: block;
-  height: 100%;
-  width: 0;
-  background: rgba(255, 255, 255, 0.5);
-}
+/* There was a `#phase-bar` here, a one-pixel track filled from `time / total`.
+   It is deleted rather than hidden. A progress bar welded to the glass is a
+   man-made rectangle that also announces a remaining duration — it turns the
+   trip into a timed effect you are waiting out, which is the single thing this
+   project's design law forbids. The label above is now a one-shot per phase
+   (see `setTrip` in src/ui/hud.js) and fades on the `.phase` transition. */
 
 /* Five items, drawn from src/core/keys.js — see the block comment in
    src/ui/hud.js. It stays `nowrap` because a second line of persistent chrome
@@ -195,7 +189,32 @@ body.locked .help {
    The one panel in this project allowed to be a full page of chrome, and for the
    same reason the settings menu is: you are not looking at the forest while it
    is up, and the instant it goes it is `visibility: hidden` and out of the
-   hit-testing entirely. See the header of src/ui/menu.js. */
+   hit-testing entirely. See the header of src/ui/menu.js.
+
+   IT IS A WINDOW NOW, NOT A LID, AND THE FRAMES WERE ALREADY BEING DRAWN.
+
+   The last background layer used to be a solid `#05070a`, so the first thing
+   anybody ever saw of a game whose entire argument is "this is a place" was a
+   form on a black rectangle — with a fully built, wind-blown, bird-crossed
+   forest being rendered behind it ten times a second and thrown away. The
+   opaque layer is gone; what remains is the same radial vignette at higher
+   alpha over a heavy backdrop filter, which is the mechanism `.menu-card`
+   directly below has always used at blur(8px).
+
+   THE BLUR IS WHAT MAKES A LOW FRAME RATE ACCEPTABLE, and that is the whole
+   reason it is this heavy rather than a tasteful 8px. The camera does not move
+   while the menu is up, so at 20px of blur the difference between consecutive
+   frames is a few leaves moving under a dozen pixels of smear: choppiness is
+   invisible, and the draw-rate heartbeat that protects a player who opens the
+   game and goes to make tea (see `GATE_DRAW_HZ` in src/main.js) survives
+   untouched. `brightness(0.5)` and `saturate(0.75)` do the work the opaque
+   layer used to do — text contrast — without deleting the world.
+
+   It is a compositor pass on one full-screen layer, so it costs once per
+   COMPOSITED frame rather than per rAF: 10-24 a second while the gate is up
+   and never again after `.gone`. Not measured on a weak machine; if it ever
+   has to go, the honest fallback is more `brightness()` and less `blur()`,
+   never the opaque layer back. */
 .gate {
   position: fixed;
   inset: 0;
@@ -206,9 +225,26 @@ body.locked .help {
      padding is what keeps the panel off the edges once it does scroll. */
   overflow: auto;
   padding: 24px 16px;
-  background:
-    radial-gradient(120% 90% at 50% 40%, rgba(24, 40, 28, 0.55), rgba(4, 6, 8, 0.94)),
-    #05070a;
+  /**
+   * A WINDOW, NOT A PANEL — and the first values for it were still a panel.
+   *
+   * The opaque base layer is gone and the wood behind is genuinely being drawn,
+   * but at brightness(0.5) under a 0.62/0.93 vignette the photograph came back
+   * as a dark green wash with nothing readable in it: technically a forest, and
+   * indistinguishable from a gradient, which is the thing this change existed
+   * to stop being. The centre is opened up (0.62 -> 0.44) and the filter is
+   * brought back toward the real image (0.5 -> 0.72 brightness, 0.75 -> 0.85
+   * saturation), while the EDGE is left almost where it was (0.93 -> 0.95) —
+   * the vignette is what keeps the two menu cards legible against whatever the
+   * wood happens to be doing behind them, and the cards sit off-centre.
+   *
+   * The blur stays at 20px and is load-bearing for something other than looks:
+   * the gate draws the world at 10-24 Hz, and heavy blur on a static camera is
+   * what makes that rate invisible. Reducing it would show the choppiness.
+   */
+  background: radial-gradient(120% 90% at 50% 40%, rgba(16, 30, 22, 0.44), rgba(4, 6, 8, 0.95));
+  backdrop-filter: blur(20px) saturate(0.85) brightness(0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(0.85) brightness(0.72);
   z-index: 10;
   transition: opacity 0.9s ease, visibility 0.9s;
 }
@@ -235,6 +271,20 @@ body.locked .help {
   margin: 0;
   color: var(--dim);
 }
+/* The one fact about the world, under the subtitle. Styled as an ASIDE — the
+   size drops, the ink drops, it goes italic — because the moment it reads at
+   the same weight as the line above it, it reads as a second tagline, and a
+   second tagline is marketing. It is filled by src/ui/menu.js after the first
+   paint, so the height is reserved here and the layout cannot jump. */
+.gate .aside {
+  margin: 9px auto 0;
+  max-width: 48ch;
+  min-height: 1.6em;
+  font-size: 12.5px;
+  line-height: 1.6;
+  font-style: italic;
+  color: rgba(242, 236, 224, 0.46);
+}
 #enter {
   font: inherit;
   font-size: 15px;
@@ -245,12 +295,48 @@ body.locked .help {
   background: rgba(242, 236, 224, 0.06);
   color: var(--ink);
   cursor: pointer;
+  /* Wide enough for the longest thing it ever says — "Letting the ground
+     arrive…" — so that narrating the wait on the button's own face does not
+     make the button change size four times while somebody watches it. */
+  min-width: 16em;
   transition: background 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
 }
 #enter:hover {
   background: rgba(242, 236, 224, 0.13);
   border-color: rgba(242, 236, 224, 0.5);
   transform: translateY(-1px);
+}
+/* Once it has been pressed it is a status line and not a control, and it has to
+   look like one: no pointer, no lift on hover, and the ink pulled back so the
+   eye goes to the track underneath rather than back to the button. The
+   `disabled` attribute is the real guard — see the re-entry flag in main.js —
+   this only stops it LOOKING clickable while it is not. */
+#enter:disabled,
+#enter:disabled:hover {
+  cursor: default;
+  transform: none;
+  background: rgba(242, 236, 224, 0.03);
+  border-color: rgba(242, 236, 224, 0.16);
+  color: rgba(242, 236, 224, 0.66);
+}
+
+/* The determinate track under the button. Always in the layout, at zero width,
+   so that starting a load moves nothing on the panel; `width` is the only
+   animated property and it is driven from real sector counts rather than from
+   a timer, so it can stall honestly when the machine is slow. */
+.entering-bar {
+  width: min(300px, 62%);
+  height: 1px;
+  margin: 14px auto 0;
+  background: rgba(242, 236, 224, 0.1);
+  overflow: hidden;
+}
+.entering-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: rgba(242, 236, 224, 0.5);
+  transition: width 0.45s ease;
 }
 .gate-go {
   display: flex;

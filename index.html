@@ -18,9 +18,16 @@
 
       <div id="prompt" class="prompt" hidden></div>
 
+      <!-- The phase readout, which is a REMARK and no longer a status field.
+           There was a progress bar under this label, filled from
+           `time / total`, and it was the most filter-like object in the game:
+           a bar on the glass telling you how much of this is left says "you
+           are watching a timed effect with a remaining duration", which is
+           the one thing the trip must never be allowed to say. The label
+           survives — arriving once per phase, four seconds, then gone — see
+           `setTrip` in src/ui/hud.js. -->
       <div id="phase" class="phase" hidden>
         <span id="phase-label"></span>
-        <div id="phase-bar"><i></i></div>
       </div>
 
       <div id="toast" class="toast" hidden></div>
@@ -81,6 +88,22 @@
         <header class="gate-head">
           <h1>Reality&nbsp;Room</h1>
           <p class="sub">A forest, a jukebox, and whatever happens next.</p>
+          <!-- ONE FACT ABOUT THE WORLD, ROTATED PER PAGE LOAD.
+
+               Filled by src/ui/menu.js from a list of eight. Empty here on
+               purpose: the list is data and belongs beside the code that
+               picks from it, and an empty paragraph with a reserved height
+               cannot shift the layout when it is filled a moment later.
+
+               This exists because until now nothing in the entire product
+               said that this world HAS caves, a river with fish in it, a
+               ferry, fires, viewpoints or a mushroom. The Controls page
+               lists verbs; nothing listed wonders. Every line is a fact and
+               none of them is an instruction — "there are mushrooms, they
+               are not decorative" is a description of the wood, whereas
+               "eat a mushroom" would be a tutorial, and a tutorial is the
+               wrong voice for a title card. -->
+          <p id="gate-wonder" class="aside"></p>
         </header>
 
         <div class="menu">
@@ -180,6 +203,12 @@
             </label>
             <p id="menu-company-note" class="menu-note"></p>
 
+            <div class="menu-field">
+              <span class="menu-label">Kind of place</span>
+              <div id="menu-lands" class="menu-segment"></div>
+              <p id="menu-land-note" class="menu-note"></p>
+            </div>
+
             <label class="menu-field" for="menu-seed">
               <span class="menu-label">Wood</span>
               <span class="menu-inline">
@@ -209,6 +238,26 @@
           <button id="enter" type="button">Enter the forest</button>
           <button id="menu-settings" type="button" class="menu-ghost menu-wide">Settings</button>
         </div>
+
+        <!-- THE WAIT, NARRATED, AND A BAR THAT MEANS SOMETHING.
+
+             Between the click and the forest there are 2.4-4 seconds (bounded
+             at 12) of real work: the ground ring settling, then thirty-nine
+             shader programs compiling, then the first frames being drawn. None
+             of it used to put a single pixel on the screen, so the most
+             engineered moment in the session read as a broken button — and
+             with no re-entry guard, an impatient second click re-ran the whole
+             handler, opened the room twice and created a second AudioContext.
+
+             The bar is DETERMINATE because it can honestly be: the settle poll
+             already knows how many sectors are outstanding, so the first stage
+             reports a real fraction rather than a spinner pretending to. See
+             `hud.entering` in src/ui/hud.js and the `#enter` handler in
+             src/main.js. The label goes on the button itself rather than in a
+             line of its own, so nothing on this panel moves when the wait
+             starts; the track below is always in the layout, at zero width and
+             one pixel of ink, for the same reason. -->
+        <div id="entering-bar" class="entering-bar" aria-hidden="true"><i></i></div>
 
         <p class="fine">
           Headphones recommended. Contains slow motion, colour shift and low-frequency sound.

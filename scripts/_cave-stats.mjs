@@ -212,6 +212,95 @@ for (const seed of SEEDS) {
           }
         }
       }
+      /**
+       * THE GRAPH, WHICH IS THE ONE THING THIS FILE COULD NEVER SEE.
+       *
+       * Every number above is about METRES — how long, how twisty, how tall —
+       * and the room's complaint was never about metres. "It looks like one
+       * continuous tunnel rather than having cave-like subsystems" is a
+       * statement about TOPOLOGY, and until loop closure existed the topology
+       * of every cave in this world was a tree, so nothing was tempted to
+       * measure it.
+       *
+       * The vertices are the mouth, every junction, and every dead end. The
+       * edges are the stretches of passage between them. In a tree E = V - 1
+       * exactly, so the cyclomatic number `alpha = E - V + 1` is zero for every
+       * cave this project has ever built; each closure adds one edge without
+       * adding a passage end, so it adds exactly one to alpha.
+       *
+       * WHAT THE NUMBERS SHOULD BE, and they are surveyed rather than chosen.
+       * Collon et al. 2017 (34 systems) and Jouves et al. 2017 (26 systems,
+       * 621 km) both put real caves' mean vertex degree between 1.8 and 2.6,
+       * and junctions of degree four or more are scarce in nature. So: alpha
+       * just above zero, k near 2, one to three closures a cave. A run where
+       * alpha climbs past 4 or k past 2.6 is not a better cave, it is a maze —
+       * Paris et al. 2021 report their own generator overshooting exactly that
+       * way, and this is the number that would have told them.
+       *
+       * A closure's own weld ring is counted into `len` twice over, once here
+       * and once in the passage it welds into. That is at most the LOOP_COLLAR
+       * of rings — under four metres per closure — so it moves `totalLen` by
+       * a fraction of a per cent and cannot move `tallM` or `vastM` at all,
+       * because a weld is bounded to 0.85 of the bore it enters and no bore in
+       * this world is 30 m across.
+       */
+      /**
+       * CAN YOU GET OUT, AND HOW FAR IS THE WALK — WHICH IS THE ONE PROPERTY
+       * "EASY TO GET LOST IN" IS ALLOWED TO COST NOTHING.
+       *
+       * `toExit` is the shortest route to daylight from every ring, through the
+       * passages, relaxed over the junctions and the loop welds — see the block
+       * in `prepare`. Two numbers come out of it and they answer different
+       * questions. `sealed` is rings with no route at all, and it is the one that
+       * must be zero: a single one of those is a player who cannot leave, which
+       * in a social hangout is somebody quitting. `far` is the longest walk out
+       * anybody can be facing, and it is allowed to be large — being a long way
+       * from the door is the feature, being unable to reach it is the failure.
+       */
+      let far = 0;
+      let sealed = 0;
+      for (const p of cave.paths) {
+        if (!p.toExit) {
+          sealed = -1;
+          break;
+        }
+        for (let i = 0; i < p.toExit.length; i++) {
+          if (!Number.isFinite(p.toExit[i])) sealed++;
+          else if (p.toExit[i] > far) far = p.toExit[i];
+        }
+      }
+
+      const closures = [];
+      for (let pi = 1; pi < cave.paths.length; pi++) {
+        const q = cave.paths[pi];
+        if (q.loopEnd && q.loopToIndex >= 0) {
+          closures.push({ from: pi, to: q.loopToIndex, ring: q.loopRing });
+        }
+      }
+      const deg = new Map();
+      const bump = (key, by) => deg.set(key, (deg.get(key) ?? 0) + by);
+      // The mouth, one end of the trunk.
+      bump('mouth', 1);
+      let edges = 1;
+      for (let pi = 0; pi < cave.paths.length; pi++) {
+        const q = cave.paths[pi];
+        // A passage's far end is a vertex of degree 1 unless it welds into one.
+        if (!q.loopEnd) bump(`end${pi}`, 1);
+      }
+      for (let pi = 1; pi < cave.paths.length; pi++) {
+        const q = cave.paths[pi];
+        // A junction: the host's line continues through it and the lead leaves.
+        bump(`j${pi}`, 3);
+        edges += 2;
+      }
+      for (const cl of closures) {
+        bump(`c${cl.from}`, 3);
+        edges += 2;
+      }
+      let vsum = 0;
+      for (const v of deg.values()) vsum += v;
+      const V = deg.size;
+      const E = edges;
       const trunk = stat.per[0];
       const branchLen = stat.per.slice(1).reduce((s, x) => s + x.len, 0);
       /**
@@ -231,6 +320,10 @@ for (const seed of SEEDS) {
           : 0;
       return {
         paths: stat.paths,
+        closures: closures.length,
+        alpha: E - V + 1,
+        kbar: V ? vsum / V : 0,
+        loops: closures.map((cl) => `p${cl.from}->p${cl.to}@${cl.ring}`),
         trunkLen: trunk.len,
         branchLen,
         totalLen: trunk.len + branchLen,
@@ -246,6 +339,32 @@ for (const seed of SEEDS) {
         overlap,
         stacked,
         worst,
+        far,
+        sealed,
+        /**
+         * THE BUILD'S OWN ACCOUNT OF ITSELF, WHICH IS NOT DERIVABLE FROM HERE.
+         *
+         * Everything above is measured off the drawn rings, and there are two
+         * questions about the walk that the rings cannot answer at all.
+         *
+         * The first is how many junctions were PLANNED. A branch that
+         * `buildBranch` refused leaves no trace in the geometry — the cursor
+         * moves on and the passage looks exactly like a passage that never
+         * asked. So a cave that wanted eight and built three is indistinguishable
+         * here from a cave that wanted three, and the room's "it lacks cave-like
+         * subsystems" lived in that gap for as long as the gap was invisible.
+         * `branchStats` is the ledger; see the block over it in caves.js.
+         *
+         * The second is the hold probability the walk actually realised. The
+         * turning measured above is after the resample has splined the joints
+         * and after the burial has deleted whole stretches, so it cannot be
+         * compared against the constant in the file. `walkStats.holdSum /
+         * holdN` can, and it is the number that must not fall when the hold rule
+         * is touched — because every hundredth off it comes out of the length,
+         * and the length is the chambers.
+         */
+        branch: cave.branchStats ?? null,
+        walk: cave.walkStats ?? null,
       };
     }, c.k);
     if (!r) {
@@ -263,6 +382,96 @@ for (const seed of SEEDS) {
         (r.worst ? `
     worst: p${r.worst.pi} rings ${r.worst.i}-${r.worst.j}  ${r.worst.along} m apart along the line, ${r.worst.d} m apart in space against ${r.worst.reach} m of section (dy ${r.worst.dy})` : '')
     );
+    if (r.branch) {
+      const b = r.branch;
+      console.log(
+        `    junctions: wanted ${b.want}, tried ${b.tried}, built ${b.built}` +
+          `  (${b.tried ? ((100 * b.built) / b.tried).toFixed(0) : '—'}% of tried, ` +
+          `${b.want ? ((100 * b.built) / b.want).toFixed(0) : '—'}% of wanted)` +
+          `  refused: ${b.wall} no wall / ${b.short} too few nodes / ${b.buried} buried` +
+          `  |  subs: wanted ${b.subWant} tried ${b.subTried} built ${b.subBuilt}` +
+          ` (${b.subWall}/${b.subShort}/${b.subBuried})` +
+          /**
+           * `looped` IS A SUBSET OF `built`, NOT A FOURTH REFUSAL, and the
+           * ledger's own invariant is unchanged by it:
+           *   tried = built + wall + short + buried
+           * A lead whose closure search finds nothing is a lead, and it is
+           * counted as built like any other. What `loopWant - looped` measures
+           * is closures asked for and not found, which is a fact about the rock.
+           */
+          `  |  loops: wanted ${b.loopWant ?? 0}, closed ${(b.looped ?? 0) + (b.subLooped ?? 0)}` +
+          ` (${b.looped ?? 0} off the trunk, ${b.subLooped ?? 0} off a lead)`
+      );
+      /**
+       * THE BIG ROOMS, AND HOW MANY WAYS ON THEY HAVE.
+       *
+       * "In big rooms there should be 3-4 cave subsystems so it's hard to tell
+       * where you came from" is the room's request, and it is not derivable from
+       * anything above: a junction and a chamber are both visible in the ring
+       * arrays and whether they are the SAME PLACE is not. `atChamber` is
+       * junctions whose base ring is inside a chamber run; `extra` is the ways
+       * on those chambers were given beyond the first.
+       *
+       * The degree of a chamber that got its full allowance is four: the passage
+       * in, the passage on, its own junction, and one extra. Two extras is five,
+       * which is the top of the range asked for. This line is where a change
+       * that quietly stopped finding chambers would show up as a zero.
+       */
+      console.log(
+        `    chambers: ${b.atChamber ?? 0} junction(s) inside a chamber, ` +
+          `${b.chambers ?? 0} of them given extra ways on ` +
+          `(${b.extra ?? 0} built of ${b.extraTried ?? 0} tried of ${b.extraWant ?? 0} wanted)`
+      );
+    }
+    /**
+     * WHICH CONSTRAINT IS BINDING, WHICH IS NOT THE SAME QUESTION AS "HOW MANY
+     * CLOSED".
+     *
+     * `closed 0` says the search failed and says nothing about why, and there
+     * are seven places it can. The counters partition the rings examined in the
+     * order the tests run, so the largest one is the answer — and the two
+     * numbers that are not counters are the ones that say what to do about it.
+     * `nearest` is the closest any lead's head ever came to another passage,
+     * whatever else was wrong: if that is over LOOP_FAR then no bar is binding
+     * and these branches simply do not reach, which is a fact about the mountain
+     * and not a constant to move. `bestCirc` is the largest circuit available at
+     * a legal distance, so `bestCirc` under the bar means the bar is the answer
+     * and `bestCirc` well over it means something later is.
+     */
+    if (r.branch?.loopWhy?.offers) {
+      const w = r.branch.loopWhy;
+      console.log(
+        `    loop search: ${w.offers} lead(s) offered, ${w.scan} rings scanned, ` +
+          `${w.pass} shortlisted, ${w.ok} closed` +
+          `
+      refused: ${w.base} at the base doorway / ${w.far} out of the ` +
+          `10-42 m band / ${w.dive} too steep / ${w.span} circuit too short / ` +
+          `${w.wall} no wall / ${w.skew} arriving side-on` +
+          `
+      paid:    ${w.bore} bore too small / ${w.reach} connector length / ` +
+          `${w.roof} no rock over the connector / ${w.clash} clashed` +
+          `
+      best available: nearest passage ${Number.isFinite(w.nearest) ? w.nearest.toFixed(0) : '—'} m, ` +
+          `enclosure ${w.bestSpan.toFixed(0)} m, circuit ${w.bestCirc.toFixed(0)} m (bar is 90)`
+      );
+    }
+    console.log(
+      `    graph: alpha ${r.alpha}, mean degree ${r.kbar.toFixed(2)}, ` +
+        `${r.closures} closure(s)${r.loops.length ? ` — ${r.loops.join(', ')}` : ''}` +
+        `  (real systems: alpha just over 0, degree 1.8-2.6)` +
+        `  |  way out: longest walk to daylight ${r.far.toFixed(0)} m, ` +
+        `${r.sealed === 0 ? 'no sealed rings' : `${r.sealed} SEALED RINGS`}`
+    );
+    if (r.walk) {
+      const w = r.walk;
+      console.log(
+        `    walk: ${w.nodes} nodes, ${w.corners} corners (${w.nodes ? ((100 * w.corners) / w.nodes).toFixed(0) : '—'}%), ` +
+          `${w.escapes} by the escape hatch;  mean hold ${w.holdN ? (w.holdSum / w.holdN).toFixed(3) : '—'}` +
+          `  mean rockGen ${w.rockN ? (w.genSum / w.rockN).toFixed(3) : '—'}` +
+          `  mean overburden ${w.rockN ? (w.rockSum / w.rockN).toFixed(1) : '—'} m` +
+          `  |  ${w.corners ? (r.trunkLen / w.corners).toFixed(1) : '—'} m of trunk per corner`
+      );
+    }
   }
 }
 
@@ -278,5 +487,69 @@ console.log(
     `${mean((x) => x.vastM).toFixed(0)} m over 25  ` +
     `overlap ${mean((x) => x.overlap).toFixed(1)}  stacked ${mean((x) => x.stacked).toFixed(1)}`
 );
+
+/**
+ * THE BRANCH YIELD, POOLED RATHER THAN AVERAGED.
+ *
+ * A per-cave mean of a percentage weights a cave that planned one junction the
+ * same as one that planned ten, and the short caves are exactly the ones whose
+ * junctions fail. Summing the numerators and denominators across the world is
+ * the only honest form of "what fraction of the junctions this design asked for
+ * actually exist".
+ */
+const sum = (f) => all.reduce((s, x) => s + f(x), 0);
+const withBranch = all.filter((x) => x.branch);
+if (withBranch.length) {
+  const g = (k) => withBranch.reduce((s, x) => s + x.branch[k], 0);
+  console.log(
+    `branch yield:  ${g('built')} built of ${g('tried')} tried of ${g('want')} wanted  ` +
+      `= ${g('want') ? ((100 * g('built')) / g('want')).toFixed(0) : '—'}% of the design  ` +
+      `|  refused ${g('wall')} no wall, ${g('short')} too few nodes, ${g('buried')} buried, ` +
+      `${g('want') - g('tried')} never reached (passage ran out)  ` +
+      `|  subs ${g('subBuilt')}/${g('subTried')}/${g('subWant')}`
+  );
+  console.log(
+    `chamber junctions: ${g('atChamber')} of ${g('built')} built junctions are in a chamber; ` +
+      `${g('chambers')} chamber(s) given extra ways on, ` +
+      `${g('extra')} extra exit(s) built of ${g('extraTried')} tried of ${g('extraWant')} wanted`
+  );
+}
+const withWalk = all.filter((x) => x.walk);
+if (withWalk.length) {
+  const nodes = withWalk.reduce((s, x) => s + x.walk.nodes, 0);
+  const corners = withWalk.reduce((s, x) => s + x.walk.corners, 0);
+  const holdSum = withWalk.reduce((s, x) => s + x.walk.holdSum, 0);
+  const holdN = withWalk.reduce((s, x) => s + x.walk.holdN, 0);
+  const trunk = withWalk.reduce((s, x) => s + x.trunkLen, 0);
+  console.log(
+    `walk:  ${(nodes / withWalk.length).toFixed(1)} nodes/cave, ` +
+      `${nodes ? ((100 * corners) / nodes).toFixed(0) : '—'}% of them corners, ` +
+      `realised mean hold ${holdN ? (holdSum / holdN).toFixed(3) : '—'} ` +
+      `(the constant is 0.62; under 0.58 means chambers are being spent), ` +
+      `${corners ? (trunk / corners).toFixed(1) : '—'} m of trunk per corner`
+  );
+}
+if (all.length) {
+  console.log(
+    `tall metres pooled: ${sum((x) => x.tallM).toFixed(0)} m over 15 m, ` +
+      `${sum((x) => x.vastM).toFixed(0)} m over 25 m — NEITHER OF THESE MAY FALL`
+  );
+  const cl = sum((x) => x.closures ?? 0);
+  const al = sum((x) => x.alpha ?? 0);
+  const kb = all.reduce((s, x) => s + (x.kbar ?? 0), 0) / all.length;
+  console.log(
+    `topology pooled: ${cl} closure(s) over ${all.length} caves ` +
+      `(${(cl / all.length).toFixed(2)} a cave, want 1-3), ` +
+      `mean alpha ${(al / all.length).toFixed(2)} (want just over 0), ` +
+      `mean degree ${kb.toFixed(2)} (want 1.8-2.6, near 2) — ` +
+      `MORE IS NOT BETTER HERE; past 2.6 is a maze`
+  );
+  const sealed = sum((x) => Math.max(0, x.sealed ?? 0));
+  console.log(
+    `way out pooled: ${sealed} sealed ring(s) over ${all.length} caves — THIS MUST BE ZERO; ` +
+      `longest walk to daylight ${Math.max(...all.map((x) => x.far ?? 0)).toFixed(0)} m worst, ` +
+      `${mean((x) => x.far ?? 0).toFixed(0)} m mean`
+  );
+}
 if (problems.length) console.log(`\npage errors:\n  ${problems.join('\n  ')}`);
 await browser.close();

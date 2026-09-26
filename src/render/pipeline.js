@@ -275,6 +275,14 @@ void main() {
 }
 `;
 
+/**
+ * Dark adaptation, in stops of exposure and in seconds. See `setCaveAdaptation`,
+ * which is where the whole argument for these three numbers lives.
+ */
+const ADAPT_DEEP = 2.1;
+const ADAPT_OPEN = 4.0;
+const ADAPT_CLOSE = 0.75;
+
 export class Pipeline {
   constructor(renderer, scene, camera) {
     this.renderer = renderer;
@@ -608,6 +616,21 @@ export class Pipeline {
         uGlowAmount: { value: 0 },
         uBloom: { value: 0.42 },
         uExposure: { value: 1.05 },
+        /**
+         * ==== DARK ADAPTATION ================================================
+         *
+         * A SECOND exposure, multiplied into the first, and it exists as its own
+         * uniform for exactly the reason `atmosphere.setCave` gives about the fog
+         * density: `uExposure` is the AUTHORED stop and the debug panel's slider
+         * owns it, so a per-frame write to it would silently delete a working
+         * control — which this project has a memory note about. A product means
+         * the knob still means what it says and this multiplies with it.
+         *
+         * Driven by `setCaveAdaptation` below, which holds the whole argument
+         * about time constants. 1 is "outdoors", i.e. bit-for-bit the frame that
+         * existed before this block.
+         */
+        uAdapt: { value: 1 },
         uVignette: { value: 0.34 },
         /**
          * ==== THE GRADE ======================================================
@@ -774,6 +797,7 @@ export class Pipeline {
         uniform float uGlowAmount;
         uniform float uBloom;
         uniform float uExposure;
+        uniform float uAdapt;
         uniform float uVignette;
         uniform float uGrade;
         uniform vec3 uGradeShadow;
@@ -1146,7 +1170,21 @@ export class Pipeline {
            * is worth more than a stop of restraint here — ACES rolls the
            * highlights off perfectly well on its own.
            */
-          col = aces(col * uExposure * (1.0 - uLevel * 0.05));
+          /**
+           * …times the dark-adaptation multiplier, INSIDE the ACES curve and
+           * not after it.
+           *
+           * That placement is the whole reason this reads as an eye opening
+           * rather than as a brightness slider. ACES is a tone curve: scaling
+           * the scene BEFORE it moves which part of the curve the cave's light
+           * lands on, so the near-black rock climbs out of the toe and gains
+           * contrast as well as level, while the mouth — which is already up on
+           * the shoulder — barely moves and rolls off instead of clipping. A
+           * multiply after the curve is a gamma-space gain: it lifts the black
+           * point, washes the frame grey and blows the doorway to white, which
+           * is what "a dimmer" looks like.
+           */
+          col = aces(col * uExposure * uAdapt * (1.0 - uLevel * 0.05));
 
           /**
            * A fixed vignette, present when sober and never animated.
@@ -1547,6 +1585,69 @@ export class Pipeline {
      * it so the transition stays soft and bright edges do not crawl.
      */
     this.bloomLift = bloomLift;
+  }
+
+  /**
+   * DARK ADAPTATION: THE MOUTH AS A THRESHOLD RATHER THAN AS A DIMMER.
+   *
+   * `caveMix` already crossfades the fog, the reverb and whether the wood is
+   * submitted at all, and every one of those is a property of WHERE THE BODY IS.
+   * This is a property of the EYE, and the two have completely different time
+   * constants — which is the entire percept and the reason this is a second
+   * filter downstream of the mix rather than another consumer of it.
+   *
+   * WHY ASYMMETRIC, AND WHY IT IS THE POINT. Human cone adaptation to the dark
+   * has a fast phase of a few seconds (the rod branch takes ten minutes and is
+   * not what a player would ever sit still for); adaptation back to the light is
+   * far quicker, a fraction of a second, because the pupil closes and the
+   * photopigment bleaches almost immediately. Everybody has felt both halves and
+   * nobody has ever been able to name them. A SYMMETRIC filter — one time
+   * constant either way — was the first sketch, and it is unmistakably a
+   * cross-fade on a slider: walking out of a cave into afternoon sun takes four
+   * seconds to come back, which reads as the engine catching up rather than as
+   * your eyes.
+   *
+   * The numbers are the fast phase of the real curve rather than a taste:
+   *
+   *   OPENING, 4.0 s. Short enough that you are not standing in a black corridor
+   *   waiting for the game, long enough that the first ten metres of passage are
+   *   genuinely dark and then genuinely resolve — which is the thing a player
+   *   remembers about walking into a cave and the thing an instant fade deletes.
+   *
+   *   CLOSING, 0.75 s. Fast enough to be startling. Walking out of a mouth at
+   *   2.2x exposure into daylight blows the whole frame for about half a second
+   *   and then snaps back, which is exactly what happens to a caver and is
+   *   something no amount of bloom can fake.
+   *
+   * THE FILTER IS AN EXPONENTIAL WITH A dt-CORRECT COEFFICIENT — `1 - exp(-dt/T)`
+   * and not `dt * k` — because this project runs anywhere from 60 to 340 fps and
+   * a naive lerp changes its time constant with the frame rate. At 340 fps the
+   * naive form is four times faster than at 85, and the one thing this must be
+   * is the same duration on every machine.
+   *
+   * WHAT `target` IS. 1.05's worth of authored exposure at the surface, up to
+   * ADAPT_DEEP times that underground. 2.1 was picked against the cave's own
+   * measured levels rather than by eye: the ambient on far rock sits around
+   * 0.008-0.027 linear and the near-field term around 0.024, all of which is in
+   * the ACES toe where a stop buys a lot of contrast, while the doorway term is
+   * an order of magnitude up and is already on the shoulder. Above about 2.4 the
+   * fungus heads and the crystal facets — which are additive and were tuned just
+   * under the 0.85 bright-pass — start to bloom, and a cave where every mushroom
+   * glares is a cave with no darkness left in it.
+   *
+   * It is deliberately NOT gated on `navigator.webdriver`: it is a pure function
+   * of `mix`, which the pinned scripts already control by standing somewhere, so
+   * a stored screenshot taken at a fixed station is reproducible. What it is NOT
+   * is reproducible mid-walk, so anything that photographs a cave has to settle
+   * for a couple of seconds first — the same requirement `caveMix` already
+   * imposes on the fog.
+   */
+  setCaveAdaptation(mix, dt) {
+    const target = 1 + (ADAPT_DEEP - 1) * Math.min(1, Math.max(0, mix));
+    const now = this.outputMaterial.uniforms.uAdapt.value;
+    const tau = target > now ? ADAPT_OPEN : ADAPT_CLOSE;
+    const k = 1 - Math.exp(-Math.max(0, dt) / tau);
+    this.outputMaterial.uniforms.uAdapt.value = now + (target - now) * k;
   }
 
   render(dt = 1 / 60) {

@@ -1,0 +1,25 @@
+
+terrain character, 640 m blocks at 1.6 m cells
+
+block       centre          relief   max step  mean step  sub-relief  spread  
+origin      0,0             55.56 m  6.3 m     0.192 m    32.87 m     18.34 m 
+E 640       640,0           67.14 m  7.23 m    0.227 m    36.26 m     21.85 m 
+E 1280      1280,0          66.71 m  8.15 m    0.23 m     34.58 m     23.76 m 
+E 2560      2560,0          64.49 m  6.88 m    0.207 m    33.34 m     22.91 m 
+S 640       0,640           12.49 m  0.56 m    0.053 m    6.87 m      1.97 m  
+S 1280      0,1280          9.53 m   0.68 m    0.078 m    7.06 m      1.23 m  
+S 2560      0,2560          5.89 m   0.31 m    0.045 m    3.62 m      0.79 m  
+W 1280      -1280,0         63.9 m   5.92 m    0.336 m    40.43 m     16.03 m 
+W 2560      -2560,0         64.71 m  6.7 m     0.296 m    42.24 m     18.99 m 
+NE 1810     1280,-1280      20.8 m   2.39 m    0.137 m    13.29 m     3.68 m  
+SW 1810     -1280,1280      16.83 m  0.54 m    0.053 m    7.8 m       3.08 m  
+SE 2715     1920,1920       21.13 m  3.63 m    0.131 m    13.93 m     5.73 m  
+far 5120    5120,-2560      24.36 m  0.77 m    0.099 m    13.79 m     6.1 m   
+far 8000    -5657,5657      21.64 m  0.58 m    0.068 m    9.39 m      2.12 m  
+
+far blocks: relief 5.9–67.1 m (origin 55.56 m), max step 0.31–8.15 m (origin 6.3 m)
+
+FAIL: heights inside 181 m changed (hash af91cfda -> 7b143e96)
+  210022 points sampled; largest move 0
+
+TERRAIN SURVEY FAILED

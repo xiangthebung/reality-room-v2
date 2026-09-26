@@ -5,7 +5,7 @@ import { makeLiving } from '../trip/living.js';
 import { colliders } from './forest.js';
 import { Seat } from '../player/seats.js';
 import { buildHearths } from './campfire.js';
-import { sitePlan } from './sites.js';
+import { siteName, sitePlan } from './sites.js';
 
 /**
  * The places people meet.
@@ -84,7 +84,24 @@ import { sitePlan } from './sites.js';
  */
 function logBench(group, materials, { x, y, z, yaw, length = 2.4, seats = null, label = null }) {
   const bench = new THREE.Group();
-  bench.position.set(x, y, z);
+  /**
+   * SET THE THREE COMPONENTS SEPARATELY, and the reason is a real bug that stood
+   * in the spawn clearing for months.
+   *
+   * `Vector3.set(x, y, z)` has a compatibility guard in three — `if (z ===
+   * undefined) z = this.z` — so a caller that forgets `z` does not get NaN and
+   * does not get an error. It gets ZERO, silently, and the bench is built
+   * perfectly at the wrong place. `fireRing` forgot it, so all twenty-nine ring
+   * benches were laid out along the line z = 0 at the HEIGHT of the ground where
+   * they should have been: the near hearth is 57 m up the z axis, and its five
+   * logs hung two and a half metres in the air five metres in front of where
+   * everybody arrives, as a black bar across the top of the first frame anyone
+   * ever sees. Assigning the fields directly means a missing `z` is NaN and the
+   * object vanishes, which is a bug that reports itself.
+   */
+  bench.position.x = x;
+  bench.position.y = y;
+  bench.position.z = z;
   bench.rotation.y = yaw;
   group.add(bench);
 
@@ -144,6 +161,13 @@ function fireRing(
   materials,
   site,
   seats,
+  /**
+   * `label` is what the world calls this place — see `siteName` in sites.js,
+   * which is where all nine names now come from. The default is a FALLBACK and
+   * not the name of anything: it is what a seat gets if a caller builds a ring
+   * round something that is not in the site plan, so that `Seat.label` is never
+   * null for a fire.
+   */
   { radius = 2.45, length = 1.7, count = 5, label = 'the fire' } = {}
 ) {
   for (let i = 0; i < count; i++) {
@@ -153,6 +177,7 @@ function fireRing(
     logBench(group, materials, {
       x,
       y: heightAt(x, z),
+      z,
       // Facing the fire: `forward(yaw)` must point from the seat to the flame,
       // and `forward` is (-sin, -cos), so the arguments are negated.
       yaw: Math.atan2(x - site.x, z - site.z),
@@ -170,8 +195,11 @@ function fireRing(
  * the fish are here, and it is the only place in the world where you can sit
  * with your feet over moving water. Stacking uses on one object is how a place
  * acquires the quality of being somewhere rather than being a feature.
+ *
+ * `label` is this landing's name in this world — 'the upper landing', 'the
+ * landing', 'the lower landing', ordered downstream. See `siteName` in sites.js.
  */
-function buildJetty(group, materials, site, seats) {
+function buildJetty(group, materials, site, seats, label) {
   const jetty = new THREE.Group();
   jetty.position.set(site.x, 0, site.z);
   jetty.rotation.y = site.yaw;
@@ -240,7 +268,7 @@ function buildJetty(group, materials, site, seats) {
       yaw: site.yaw,
       length: 1.9,
       seats,
-      label: 'the landing',
+      label,
     });
   }
 
@@ -301,6 +329,17 @@ export function buildGathering(scene, { seed, seats }) {
     // Larger than a hearth out in the wood: this is the fire the whole room
     // gathers round rather than the one four people found.
     radius: 1.15,
+    /**
+     * How far out somebody still counts as being AT this fire. See
+     * `setCompany` below.
+     *
+     * The commons has two rings — five logs at 3.9 m and nine at 9.2 — so 10.5
+     * covers the outer row and the metre of bench behind it. Read off the
+     * `fireRing` calls below rather than guessed, and it is the reason this
+     * number lives here beside them instead of in campfire.js: the radius of a
+     * ring of seats is a fact about the furniture.
+     */
+    ring: 10.5,
   };
 
   /* ---- fires out in the wood -------------------------------------------- */
@@ -323,25 +362,40 @@ export function buildGathering(scene, { seed, seats }) {
    * screen up behind everybody, and — the part that actually matters — what
    * tells you from a distance that somebody built this.
    */
+  /**
+   * THE LABEL IS ASKED FOR RATHER THAN TYPED, and this is the whole of the
+   * change that made `Seat.label` mean something.
+   *
+   * It read `label: 'the commons'` here, in two places, and 'the fire' / 'the
+   * view' / 'the landing' in four more — six string literals describing nine
+   * places, none of which were ever read by anything. `siteName()` in sites.js
+   * now names all nine off the plan, so what a seat is called and what the world
+   * announces when you walk into it are one string with one author. A label that
+   * disagreed with the toast would be worse than no label at all: it would make
+   * two people at the same fire call it two different things.
+   */
+  const commonsName = siteName(sites.commons);
   fireRing(group, materials, commonsFire, seats, {
     radius: 3.9,
     length: 2.6,
-    label: 'the commons',
+    label: commonsName,
   });
   fireRing(group, materials, commonsFire, seats, {
     radius: 9.2,
     length: 2.9,
     count: 9,
-    label: 'the commons',
+    label: commonsName,
   });
 
   for (const site of sites.hearths) {
-    fireSites.push({ x: site.x, y: site.y, z: site.z, radius: 0.82 });
+    // `ring` 3.6 against `fireRing`'s default radius of 2.45 plus half a
+    // 1.7 m log: a body on the seat is inside, a body walking past is not.
+    fireSites.push({ x: site.x, y: site.y, z: site.z, radius: 0.82, ring: 3.6 });
     /**
      * A ring of five logs at two and a half metres. Close enough that the fire
      * lights everyone's face, far enough that nobody is cooking.
      */
-    fireRing(group, materials, site, seats);
+    fireRing(group, materials, site, seats, { label: siteName(site) });
   }
 
   for (const fire of fireSites) {
@@ -378,13 +432,22 @@ export function buildGathering(scene, { seed, seats }) {
       yaw: bestYaw,
       length: 2.1,
       seats,
-      label: 'the view',
+      label: siteName(site),
     });
   }
 
   /* ---- landings ---------------------------------------------------------- */
 
-  const jetties = sites.jetties.map((site) => buildJetty(group, materials, site, seats));
+  const jetties = sites.jetties.map((site) =>
+    buildJetty(group, materials, site, seats, siteName(site))
+  );
+
+  /**
+   * Scratch for `setCompany`, allocated once. That function runs a few times a
+   * second for the whole life of the session and a fresh array each time would
+   * be pure garbage for a dozen integers.
+   */
+  const _counts = new Int32Array(fireSites.length);
 
   return {
     group,
@@ -423,6 +486,55 @@ export function buildGathering(scene, { seed, seats }) {
         }
       }
       return best ? { jetty: best, distance: bestD } : null;
+    },
+
+    /**
+     * WHO IS SITTING AT WHICH FIRE, and the reason this counting step is here
+     * rather than in campfire.js or in main.js.
+     *
+     * main.js is the only place that knows WHO is seated — it composes the pose
+     * flags for the local body and reads `net.peers` for everybody else — so it
+     * supplies the bodies. campfire.js is the only place that knows what a
+     * flame does with a number. This function is the piece in between, and it
+     * belongs here because the thing it uses is `ring`, which is a fact about
+     * the furniture two functions up: a hearth's ring of logs is at 2.45 m and
+     * the commons' outer ring is at 9.2, and no other file should have to know
+     * that.
+     *
+     * NOTHING GOES ON THE WIRE FOR THIS. Positions and a sitting flag are
+     * already in every 18 Hz pose row, so each client runs this same loop over
+     * the same interpolated positions and arrives at the same number — the same
+     * zero-byte trick that puts two people at the same fire without either of
+     * them saying which fire it is. It is not perfectly synchronised, and it
+     * does not have to be: the six-second ease in campfire.js is two hundred
+     * pose ticks long, so a client that is one body behind for a tick shows a
+     * flame height that differs by well under a per cent.
+     *
+     * NEAREST FIRE WINS AND A BODY IS COUNTED ONCE. Two fires cannot both claim
+     * the same person even where their rings overlap, which they can in
+     * principle — `SITE_SPACING` is 52 m so in practice they never do, but a
+     * body counted twice would be a bug that only appears on one seed.
+     *
+     * @param {{x: number, z: number}[]} bodies everybody currently seated,
+     *   local player included.
+     */
+    setCompany(bodies) {
+      _counts.fill(0);
+      for (const b of bodies) {
+        let best = -1;
+        let bestD = Infinity;
+        for (let i = 0; i < fireSites.length; i++) {
+          const f = fireSites[i];
+          const d = (f.x - b.x) * (f.x - b.x) + (f.z - b.z) * (f.z - b.z);
+          const ring = f.ring ?? 3.6;
+          if (d < bestD && d <= ring * ring) {
+            bestD = d;
+            best = i;
+          }
+        }
+        if (best >= 0) _counts[best] += 1;
+      }
+      hearths.setCompany(_counts);
     },
 
     update(dt, camera) {

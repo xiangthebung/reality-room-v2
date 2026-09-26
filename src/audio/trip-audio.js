@@ -1321,11 +1321,29 @@ export class TripAudio {
    * every animation frame is a buzz at the frame rate — which is one of the
    * ways the previous version earned its complaint.
    */
-  update(dt, { intensity = 0, dissolve = 0, breath = 0, phase = '', transient = 0 } = {}) {
+  update(dt, { intensity = 0, dissolve = 0, breath = 0, after = 0, phase = '', transient = 0 } = {}) {
     if (!this.built) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const strength = clamp01(intensity);
+    /**
+     * THE AFTERGLOW, AND IT IS A TENTH OF ONE THING RATHER THAN A LITTLE OF
+     * EVERYTHING.
+     *
+     * `after` is 1 when a trip reaches its own end and decays with a 360 s time
+     * constant; pressing N sets it to 0 outright. See the field in
+     * trip/state.js, and the floor the director puts under the gentle visual
+     * families. The audible half of that is the SPACE and nothing else: the
+     * wood keeps a little more room in it than it should for a few minutes,
+     * while the drone, the ducking, the low-end weight, the sub and the detune
+     * are all exactly zero, because every one of those is driven by `strength`.
+     *
+     * A tenth, because this has to sit under the reverb the room already has
+     * and be mistakable for it. That is the whole percept — you cannot tell
+     * whether the wood is still doing this or whether you are still listening
+     * differently.
+     */
+    const afterWet = clamp01(after) * 0.1;
 
     const n = this.nodes;
 
@@ -1390,7 +1408,10 @@ export class TripAudio {
       now,
       1.4
     );
-    n.send.gain.setTargetAtTime(strength > 0.004 ? 0.62 : 0, now, 1.4);
+    // The send has to stay open or the afterglow's wet gain has nothing to be
+    // wet WITH — this is what feeds the convolver, and a tail with no input is
+    // silence however far the fader above is up.
+    n.send.gain.setTargetAtTime(strength > 0.004 || afterWet > 0.0004 ? 0.62 : 0, now, 1.4);
     n.tilt.frequency.setTargetAtTime(1100 + strength * 4200, now, 2.2);
 
     /**
@@ -1574,7 +1595,7 @@ export class TripAudio {
      * fifth of its amplitude and arriving two seconds late. At 0.7 s it keeps
      * 89% of it, and is still far too slow to zipper on frame jitter.
      */
-    n.hallWet.gain.setTargetAtTime(strength * TUNING.hallMax, now, 2.6);
+    n.hallWet.gain.setTargetAtTime(Math.max(strength, afterWet) * TUNING.hallMax, now, 2.6);
     const weight = strength * (0.55 + breath * 0.45);
     this.weight = weight;
     n.lowGain.gain.setTargetAtTime(weight * TUNING.lowMax, now, 0.7);

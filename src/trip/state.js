@@ -122,6 +122,37 @@ export function dissolveAt(t) {
   return 0.5 - 0.5 * Math.cos(k * Math.PI * 2);
 }
 
+/**
+ * THE SETTLE — the comedown as a phase of its own rather than the come-up run
+ * backwards.
+ *
+ * The comedown had nothing that was not simply less of the peak, and that is
+ * the one part of the reported experience this file was getting wrong. What
+ * people describe on the way down is not attenuation, it is a REVERSAL of
+ * character: the strangeness leaves first and the beauty stays. The air goes
+ * clearer than it has been all day, the far ridge resolves, and you stand there
+ * for a minute feeling like the wood is pleased with you.
+ *
+ * Same construction as `dissolveAt` — a raised cosine over its own phase, zero
+ * at both ends, no discontinuity anywhere — because it is the same KIND of
+ * thing: a curve that is not a level, driving effects that exist nowhere else
+ * in the trip. It peaks at t = 263, about halfway through the comedown, where
+ * the level is still around 0.5.
+ *
+ * What it is spent on is in the director: the fog goes BELOW its sober density
+ * (every other phase thickens it, so clarity cannot be mistaken for less peak),
+ * the melt and the view breath and the camera are damped by (1 - settle) so the
+ * geometry and the picture stop moving well before the colour does, and the
+ * bird chorus overshoots on its way back. All three are existing levers pushed
+ * in a direction nothing else pushes them.
+ */
+export function settleAt(t) {
+  const phase = PHASES[4];
+  if (t <= phase.from || t >= phase.to) return 0;
+  const k = (t - phase.from) / (phase.to - phase.from);
+  return 0.5 - 0.5 * Math.cos(k * Math.PI * 2);
+}
+
 export class TripState {
   constructor() {
     this.seed = '';
@@ -131,6 +162,35 @@ export class TripState {
     this.doses = 0;
     this.level = 0;
     this.dissolve = 0;
+    /** The comedown's own curve, 0..1, non-zero only in that phase. */
+    this.settle = 0;
+    /**
+     * THE AFTERGLOW, 0..1.
+     *
+     * Set to 1 when a trip reaches its own natural end, and to 0 by `ground()`
+     * — pressing N should genuinely put you back, and an escape hatch that
+     * leaves a residue is not an escape hatch. It decays with a 360 s time
+     * constant, so five minutes later it is still at 0.43 and eighteen minutes
+     * later it is at 0.05.
+     *
+     * The director maps it into a FLOOR under the eased level, and only for the
+     * families that cannot move anything: saturation, warmth, emergent detail,
+     * the self-luminous light and the ground's lushness. The melt, the breath,
+     * the lean, the hills, the view breath, the whole camera family, the
+     * pipeline's trail and the jukebox detune all keep reading the true level
+     * and are at exactly zero. So the wood is solid, nothing is breathing, and
+     * the greens are still a little too deep — which is the state being
+     * modelled, and the reason it is worth having is that you genuinely cannot
+     * tell whether it is really there or whether you are still looking
+     * differently.
+     *
+     * A SEPARATE NUMBER FROM `level` ON PURPOSE, and this is the same argument
+     * `dissolve` makes: it is not more or less of the trip, it is a different
+     * thing, and folding it into the envelope would put a fifth of a stop of
+     * bloom on the frame and an aurora in the sky for five minutes after you
+     * came down. See uAfter in living.js.
+     */
+    this.after = 0;
     this.phase = SOBER;
     /**
      * The breathing clock, in radians, free-running.
@@ -145,8 +205,17 @@ export class TripState {
     this.breathPhase = 0;
     /**
      * The same wave as a scalar, -1..1, for the things that genuinely are
-     * global — the hills, the canopy pulse's envelope, the audio's breath
-     * layer, the camera. About seven cycles a minute.
+     * global: the hills swelling, the canopy pulse's envelope, the extra swell
+     * on foliage in the vertex shader, and the low-end weight in trip-audio.
+     * About seven cycles a minute.
+     *
+     * THE CAMERA WAS LISTED HERE AND NEVER READ IT. _updateCamera runs the fov
+     * drift, the dolly, the roll and the sway off `clock` directly, on periods
+     * of thirty-two and ninety seconds — deliberately much slower than the
+     * breath, because a fast depth oscillation is the most reliable way to make
+     * somebody motion sick. Corrected rather than deleted because the claim
+     * matters to the block in `update` that stops this clock at ego death: what
+     * holds still is the world, and the camera keeps drifting.
      */
     this.breath = 0;
     /** Two incommensurate periods, so the plateau is never a flat line. */
@@ -230,7 +299,18 @@ export class TripState {
     this._recompute();
   }
 
-  end() {
+  /**
+   * @param {boolean} natural true when the envelope ran out on its own.
+   *
+   * THE ONLY CALLER THAT PASSES TRUE IS `update`, and that is the whole
+   * distinction the afterglow rests on. A trip that finishes leaves one; a trip
+   * you ended with N does not, because the N key is the thing a player reaches
+   * for when they want out and it has to mean out. The debug seek past the end
+   * arrives through `update` and therefore counts as natural, which is right —
+   * it is the same envelope, run faster.
+   */
+  end(natural = false) {
+    this.after = natural ? 1 : 0;
     this.time = -1;
     this.doses = 0;
     this.redoses = [];
@@ -246,15 +326,73 @@ export class TripState {
     this.clock += dt;
     if (this.time >= 0 && !this.paused) {
       this.time += dt;
-      if (this.time >= this.total) this.end();
+      if (this.time >= this.total) this.end(true);
     }
+    /**
+     * The afterglow decays whether or not anything is running, so a second dose
+     * during one does not restart its clock. 360 s is the time constant; it is
+     * an exponential rather than a ramp because there is no moment at which it
+     * should end, which is the point of it — you stop noticing it before it
+     * stops being there.
+     */
+    if (this.after > 1e-4) this.after *= Math.exp(-dt / 360);
+    else this.after = 0;
     this._recompute();
+
+    /**
+     * ---- THE WORLD HOLDS ITS BREATH AT EGO DEATH ---------------------------
+     *
+     * The breath was the closed form `clock * 0.72` and is now an integrator,
+     * so its RATE can be slowed — and at the crest of the dissolve it runs at
+     * 8% of normal, which is a wood that has stopped breathing rather than one
+     * breathing slowly. It is here rather than in `_recompute` because it is
+     * the one quantity in this class that needs a dt.
+     *
+     * WHY ONE LINE STOPS FOUR SYSTEMS. Everything downstream of this phase
+     * stops with it: uBreathPhase, which is every surface in the forest
+     * swelling along its own normal and every domain warp riding on the same
+     * number; uBreath, which is the hills and the extra canopy swell; the
+     * canopy pulse's envelope in the director; and the low-end weight in
+     * trip-audio, which is the half of the breath you feel rather than see.
+     * That is the file's own "three systems on one clock reads as one event"
+     * argument, used for the first time to produce a STILLNESS instead of a
+     * motion. Nothing else in the trip can do that: every other
+     * lever is an amplitude, and taking an amplitude to zero is an effect
+     * switching off, while taking a clock to zero is the world holding still.
+     * The dissolve is a raised cosine, so the deceleration and the release are
+     * both smooth, and the release is free — the phase simply starts advancing
+     * again from wherever it stopped, with no jump, because a phase has no
+     * memory of how fast it was going.
+     *
+     * AND YES, THIS DEPENDS ON THE FRAME HISTORY, WHICH THIS PROJECT FORBIDS
+     * FOR ANYTHING TWO CLIENTS MUST AGREE ABOUT. Three reasons it is right
+     * here, in order of how much they matter:
+     *
+     *   1. THE CLOCK IT REPLACED WAS ALREADY AN ACCUMULATOR. `this.clock` is
+     *      `clock += dt` from whenever this tab loaded — see the note in the
+     *      director about why uTime is worldClock() and this is not. So the
+     *      breath was never a pure function of anything shared, and the change
+     *      adds no new dependency: it makes an already-local clock's rate vary.
+     *   2. NOTHING ABOUT A TRIP TRAVELS. A trip is one person's. The only thing
+     *      that leaves this machine is the level, which net/index.js sends so
+     *      other people can see the state you are in; the breath, the surges,
+     *      the dissolve and this phase are all derived locally, and two people
+     *      tripping in one clearing are expected to be having different
+     *      experiences.
+     *   3. THE WORLD'S OWN TIME-VARYING FIELDS ARE UNAFFECTED. Everything two
+     *      clients must agree about — the wind, the canopy pulse, the surge
+     *      front, the river, the day — reads worldClock() or the epoch and is
+     *      untouched by this.
+     */
+    this.breathPhase += dt * 0.72 * (1 - 0.92 * this.dissolve);
+    this.breath = Math.sin(this.breathPhase);
   }
 
   _recompute() {
     const t = this.time;
     this.phase = phaseAt(t, this.redoses);
     this.dissolve = t < 0 ? 0 : dissolveAt(t);
+    this.settle = t < 0 ? 0 : settleAt(t);
 
     const base = t < 0 ? 0 : levelAt(t, this.redoses);
     // Surges rather than a plateau. A static peak is the single most artificial
@@ -271,9 +409,14 @@ export class TripState {
      * wood inhaling at conversational speed is agitated rather than alive. It
      * is also the rate the audio breath layer and the camera are on, and those
      * two are the ones a body entrains to.
+     *
+     * THE PHASE IS ADVANCED IN `update`, NOT HERE, because it is an integrator
+     * now — the rate falls to 8% of that at ego death. See the block there. It
+     * deliberately does NOT move on the calls to this function that come from
+     * `begin`, `seek` and `end`: a free-running clock has no business jumping
+     * because somebody sought to a different point in the trip, and the whole
+     * value of a phase is that it is continuous.
      */
-    this.breathPhase = this.clock * 0.72;
-    this.breath = Math.sin(this.breathPhase);
 
     /**
      * The surge: a nineteen-second carrier under a seventy-second ceiling.

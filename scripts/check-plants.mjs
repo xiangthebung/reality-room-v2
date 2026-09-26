@@ -95,6 +95,22 @@ const report = await page.evaluate(async () => {
     // The melt, which is geometry now. Peaks at the tip, where aFlex is 1.
     const flow = uFlow * scale * 0.45;
     /**
+     * The undergrowth parting around your boots — see the parting block in
+     * VERTEX_BODY in trip/living.js. It is the first term in this budget that
+     * is ALWAYS ON: it does not scale with the trip at all, so it is spent at
+     * this amount in a sober forest too, which is exactly the kind of thing
+     * this check exists to keep an eye on.
+     *
+     * The gate is the lean's gate upside down — smoothstep(0.45, 0.25, aScale)
+     * against the lean's smoothstep(0.25, 0.45, aScale) — so the two partition
+     * the wood between them: trees lean and never part, grass and ferns part
+     * and never lean. Worst case is full flex at zero distance, which is the
+     * same worst case every other line here takes.
+     */
+    const pt = Math.min(1, Math.max(0, (0.45 - scale) / 0.2));
+    const partGate = pt * pt * (3 - 2 * pt);
+    const part = 0.35 * scale * partGate;
+    /**
      * The canopy pulse, which only foliage gets. rrCanopy sums two sines of
      * amplitude 1 and 0.5, so its worst case is 1.5 — and unlike the terms
      * above it does not vanish at the root, because a leaf card is displaced
@@ -103,7 +119,7 @@ const report = await page.evaluate(async () => {
      * on a fifteen-metre pine is what wrecked the grass last time.
      */
     const pulse = o.name === 'leaf' ? uPulse * scale * 1.5 : 0;
-    const total = lean + wind + breath + flow + pulse;
+    const total = lean + wind + breath + flow + pulse + part;
 
     rows.push({
       name: o.name || o.type,
@@ -113,6 +129,7 @@ const report = await page.evaluate(async () => {
       wind: Number(wind.toFixed(3)),
       breath: Number(breath.toFixed(3)),
       flow: Number(flow.toFixed(3)),
+      part: Number(part.toFixed(3)),
       pulse: Number(pulse.toFixed(3)),
       total: Number(total.toFixed(3)),
       ratio: Number((total / Math.max(height, 1e-3)).toFixed(3)),
@@ -134,6 +151,7 @@ console.log(
   pad('wind', 8),
   pad('breath', 8),
   pad('flow', 8),
+  pad('part', 8),
   pad('pulse', 8),
   pad('total', 8),
   'total/height'
@@ -157,6 +175,7 @@ for (const [name, list] of byName) {
     pad(worst.wind, 8),
     pad(worst.breath, 8),
     pad(worst.flow, 8),
+    pad(worst.part, 8),
     pad(worst.pulse, 8),
     pad(worst.total, 8),
     worst.ratio

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clamp, clamp01, damp, hashString, makeRng, wrapAngle } from '../core/util.js';
 import { modalHasKeyboard } from '../core/keys.js';
 import { WATER_LEVEL, groundUnder, heightAt, streamPointNear } from '../world/terrain.js';
+import { ripple } from '../world/ripples.js';
 import { daylightAt } from '../world/daylight.js';
 import { fishGeometry } from '../world/shoal.js';
 import { makeLiving } from '../trip/living.js';
@@ -1283,6 +1284,10 @@ export class Fishing {
      */
     this.disturb?.(x, z, 5.5, 1);
     this.sound?.('splash', this._target, 0.45);
+    // The float going in. Full strength: this is the one splash the player is
+    // already looking directly at, so it is the one the surface most has to
+    // agree happened.
+    ripple(this._target.x, this._target.z, 1);
 
     /**
      * The wait, and the catch, decided NOW rather than when the fish arrives.
@@ -2082,6 +2087,7 @@ export class Fishing {
     _where.y = WATER_LEVEL;
     _where.z = this._beachZ;
     this.sound?.('splash', _where, 0.35);
+    ripple(this._beachX, this._beachZ, 0.75);
     // And the shoal knows about it, which is the last thing a fish going back in
     // does: everything nearby leaves.
     this.disturb?.(this._beachX, this._beachZ, 4, 0.6);

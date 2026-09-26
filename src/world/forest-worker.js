@@ -71,6 +71,16 @@ self.onmessage = (e) => {
      * `setWorldSeed` also publishes onto this worker's `globalThis`, so any
      * further copy of terrain.js that appears in this realm adopts it too.
      */
+    /**
+     * `setWorldSeed` also chooses the LAND, because the land is a prefix on the
+     * seed string — see `landOf` in lands/index.js. `msg.seed` is the same
+     * string `forest-field.js` hands to every scatter rng in here and the same
+     * one `main.js` passes to `setWorldSeed`, so this realm's terrain, its
+     * scatter AND its land are consistent by construction rather than by
+     * coincidence. Getting the land wrong here would be the exact hazard the
+     * block above describes for the seed, with a louder symptom: a worker
+     * building rainforest scatter rules against boreal ground.
+     */
     setWorldSeed(msg.seed);
     return;
   }
@@ -108,9 +118,17 @@ self.onmessage = (e) => {
 
   const collide = new Float32Array(built.collide);
   const rustle = new Float32Array(built.rustle);
+  // Standing dead trunks, in their own triples beside the bush cues and for the
+  // same reason: a second grid at the far end, so an entry can be invisible to
+  // everything that does not ask for it. See `snags` in scatter.js. `?? []`
+  // because a sector builder that predates the field simply has none.
+  const snags = new Float32Array(built.snags ?? []);
   const patches = new Float32Array(built.patches);
   const glow = new Float32Array(built.glow);
-  transfer.push(collide.buffer, rustle.buffer, patches.buffer, glow.buffer);
+  transfer.push(collide.buffer, rustle.buffer, snags.buffer, patches.buffer, glow.buffer);
 
-  self.postMessage({ key, kind, sx, sz, layers, collide, rustle, patches, glow }, transfer);
+  self.postMessage(
+    { key, kind, sx, sz, layers, collide, rustle, snags, patches, glow },
+    transfer
+  );
 };

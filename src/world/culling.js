@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 
 /**
  * Bucketed instance culling.
@@ -75,6 +76,87 @@ import * as THREE from 'three';
  */
 
 const _sphere = new THREE.Sphere();
+
+/* -------------------------------------------------------------------------- */
+/* the cadence, and the margin that has to pay for it                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * THE REPACK CADENCE AND THE BUCKET MARGIN ARE ONE NUMBER WEARING TWO HATS, AND
+ * THIS BLOCK IS THE ARITHMETIC THAT TIES THEM.
+ *
+ * A repack fires after `MOVE_STEP` metres of travel or `TURN_STEP` radians of
+ * turn. Between two repacks the visible set is whatever the camera decided at
+ * the first one, so the frustum test is run against a sphere of
+ * `bucket.radius + margin` and the margin has to be at least as large as the
+ * furthest a bucket can appear to move in that interval. Two terms:
+ *
+ *   TRANSLATION. Walking `d` metres slides every bucket `d` metres relative to
+ *   the frustum, whatever its distance. Bounded by the threshold itself, plus
+ *   about 1.3 m of trip-camera sway and dolly that happens without the body
+ *   moving at all. A CONSTANT.
+ *
+ *   ROTATION. Turning by `θ` sweeps the frustum plane sideways by `D·sin(θ)` at
+ *   distance `D`. PROPORTIONAL TO DISTANCE, and this is the term that used not
+ *   to be modelled: a flat 12 m covers a 3° turn out to 229 m and does not cover
+ *   it at 384, which is survivable only because a bucket entering at the far
+ *   edge of the frustum is 99% fogged. Widen the turn threshold and that stops
+ *   being survivable, so the distance term is now explicit.
+ *
+ * WHAT MAKES THIS SAFE TO SHIP AT ALL is that both terms are written as
+ * DIFFERENCES FROM CADENCE 1. At cadence 1 the constant term is exactly zero and
+ * so is the proportional one, so the sphere radius the test uses is
+ * `b.radius + margin` with `margin` the 12 m the layer was constructed with —
+ * the same float, by the same arithmetic, as before any of this existed. High
+ * and Ultra therefore draw the identical frame and
+ * `check:cull`'s zero-pixel-diff claim over them is undisturbed. Only the rungs
+ * that ask for a slower cadence pay a wider margin, and they pay exactly the
+ * geometry above and not a round number somebody liked.
+ */
+/** Metres of travel between repacks, at cadence 1. */
+const MOVE_STEP = 2.5;
+/**
+ * The turn threshold at cadence 1, as the dot product it has always been
+ * written as, and the angle derived FROM it rather than the other way round.
+ *
+ * This looks backwards and is not. 0.99966 is the literal this file has carried
+ * from the start and is what every reproducibility claim about the culler rests
+ * on; `cos(3° / 2)` is 0.99965732, which is a different float and would move the
+ * repack boundary by a hundredth of a degree for no reason at all. So the
+ * shipped number stays the definition and the angle — 2.9998°, near enough 3 —
+ * is what is inferred, which keeps cadence 1 bit-for-bit what it was while still
+ * letting cadence 2 and 3 be computed from an angle rather than guessed.
+ */
+const TURN_DOT = 0.99966;
+const TURN_STEP = 2 * Math.acos(TURN_DOT);
+/**
+ * The two numbers a cadence implies, computed in one place so they cannot drift.
+ *
+ * BOTH ARE DELTAS ON WHATEVER THE LAYER ALREADY HAD, not absolutes. Every layer
+ * in the world happens to use the default 12 m today, so an absolute would be
+ * indistinguishable — right up until somebody gives one layer a margin of its
+ * own, at which point an absolute would silently throw it away the first time
+ * the quality level moved. `packSlab` keeps its constructed margin and adds
+ * this; k = 1 adds exactly zero to both, which is what makes cadence 1 the
+ * arithmetic that shipped rather than a reconstruction of it.
+ */
+export function cadenceMargin(k) {
+  return {
+    /** Extra metres of margin every bucket gets, whatever its distance. */
+    extra: MOVE_STEP * (k - 1),
+    /**
+     * Extra metres of margin per metre of distance, for the extra turn allowed.
+     * Written as a DIFFERENCE so that k = 1 is exactly zero and the test below
+     * reduces to `b.radius + margin`, the arithmetic that shipped.
+     */
+    slack: k === 1 ? 0 : Math.sin(TURN_STEP * k) - Math.sin(TURN_STEP),
+  };
+}
+
+/** The pose threshold a cadence implies. See TURN_DOT for why 1 is special-cased. */
+function cadenceTurnDot(k) {
+  return k === 1 ? TURN_DOT : Math.cos((TURN_STEP * k) / 2);
+}
 
 /**
  * The same packer, for a layer whose instances arrive and leave while the game
@@ -265,6 +347,39 @@ export function packSlab(
   const canThin = thinnable ?? (mesh.name === 'grass' || mesh.name === 'ferns');
   let density = 1;
   const take = (b) => (density >= 1 ? b.count : Math.max(1, Math.ceil(b.count * density)));
+
+  /**
+   * What this layer was CONSTRUCTED with, kept because the cadence adds to it
+   * rather than replacing it. See `cadenceMargin`.
+   */
+  const ownMargin = margin;
+  /**
+   * Extra margin per metre of a bucket's distance. Zero at cadence 1, which is
+   * what makes the test below bit-identical to the one that shipped. See the
+   * `cadenceMargin` block at the top of this file.
+   */
+  let marginSlack = 0;
+  /**
+   * "This layer is switched off at this quality level."
+   *
+   * Distinct from an empty band and from a zero count, because it has to survive
+   * both: a suppressed layer must draw nothing from `update` AND nothing from
+   * `restoreAll`, or `check:cull` would compare a culled frame that omits it
+   * against a restored frame that includes it and report the difference as a
+   * culling bug. It is also the only state in here that is set from outside the
+   * frame loop, so re-entering it has to force a full repack rather than trust
+   * `written` — the buffer was never written while the layer was off.
+   */
+  let suppressed = false;
+
+  /**
+   * How wide the frustum test's sphere is for one bucket, given how far away it
+   * is. `Math.max(horizontal, 0)` because `horizontal` is the distance to the
+   * bucket's SURFACE and goes negative for the one the eye is standing inside —
+   * a negative distance must not be allowed to shrink the margin.
+   */
+  const testRadius = (b, horizontal) =>
+    b.radius + margin + marginSlack * (horizontal > 0 ? horizontal : 0);
 
   /**
    * "Instances [from, to) were just rewritten — send them."
@@ -601,6 +716,49 @@ export function packSlab(
     },
 
     /**
+     * How much MORE generous the frustum test is than this layer was built to
+     * be: a flat extra margin plus a per-metre slack, both added to the margin
+     * the layer was constructed with.
+     *
+     * `writtenLength = -1` and nothing else, exactly as `setDensity` does: the
+     * next update takes the full-repack path, which re-tests every bucket. It
+     * does NOT forget the camera pose — `InstanceCuller.setCadence` owns that,
+     * for the same reason `setBand` leaves it to `InstanceCuller.setBand`.
+     */
+    setMargin(extra = 0, slack = 0) {
+      const next = ownMargin + extra;
+      if (next === margin && slack === marginSlack) return;
+      margin = next;
+      marginSlack = slack;
+      writtenLength = -1;
+    },
+
+    /**
+     * Switch this layer off entirely, or back on.
+     *
+     * "Off" here is stronger than an empty band: the band is a property of the
+     * world (which mesh draws which distance), this is a property of the quality
+     * level (whether the category is drawn at all), and only the second one is
+     * allowed to make `restoreAll` draw nothing. Coming back on cannot trust
+     * `written`, because nothing was written while it was off.
+     */
+    setSuppressed(on) {
+      const next = !!on;
+      if (next === suppressed) return;
+      suppressed = next;
+      writtenLength = -1;
+      scanned = 0;
+      if (suppressed) {
+        mesh.count = 0;
+        mesh.visible = false;
+      }
+    },
+
+    get suppressed() {
+      return suppressed;
+    },
+
+    /**
      * Move this layer's level-of-detail band at runtime.
      *
      * `minDistance`, `maxDistance` and `alwaysNear` were closure constants until
@@ -679,6 +837,17 @@ export function packSlab(
     },
 
     restoreAll() {
+      // A suppressed layer draws nothing here either. See `setSuppressed`: the
+      // whole point of `restoreAll` is to be the ground truth `check:cull`
+      // diffs against, and ground truth for a layer the quality level has
+      // switched off is an empty mesh.
+      if (suppressed) {
+        mesh.count = 0;
+        mesh.visible = false;
+        writtenLength = -1;
+        scanned = 0;
+        return;
+      }
       const dstMatrix = mesh.instanceMatrix.array;
       const dstColor = mesh.instanceColor ? mesh.instanceColor.array : null;
       /**
@@ -747,7 +916,14 @@ export function packSlab(
        */
       eyeX = eye.x;
       eyeZ = eye.z;
-      if (buckets.length === 0 || minDistance >= maxDistance) {
+      /**
+       * `suppressed` joins the two conditions that were already here, and it
+       * belongs on this line rather than above the eye record for exactly the
+       * reason the block above gives: a layer that is switched off still has to
+       * record an eye, or `inBand` would answer TRUE for everything the moment
+       * it is switched back on and `restoreAll` would submit the whole slab.
+       */
+      if (suppressed || buckets.length === 0 || minDistance >= maxDistance) {
         mesh.count = 0;
         mesh.visible = false;
         writtenLength = -1;
@@ -783,7 +959,7 @@ export function packSlab(
           if (horizontal > maxDistance || horizontal <= minDistance) continue;
           if (horizontal > alwaysNear) {
             _sphere.center.set(b.x, b.y, b.z);
-            _sphere.radius = b.radius + margin;
+            _sphere.radius = testRadius(b, horizontal);
             if (!frustum.intersectsSphere(_sphere)) continue;
           }
           written[writtenLength + added] = i;
@@ -823,7 +999,7 @@ export function packSlab(
         if (horizontal > maxDistance || horizontal <= minDistance) continue;
         if (horizontal > alwaysNear) {
           _sphere.center.set(b.x, b.y, b.z);
-          _sphere.radius = b.radius + margin;
+          _sphere.radius = testRadius(b, horizontal);
           if (!frustum.intersectsSphere(_sphere)) continue;
         }
         if (diverged < 0) {
@@ -878,10 +1054,63 @@ export function packSlab(
  * accumulate before the next one — threshold movement plus the trip camera's
  * sway and dolly (≤ ~1.3 m) with room to spare. Raise the thresholds and the
  * margin must grow with them.
+ *
+ * THAT SENTENCE USED TO BE A WARNING AND IS NOW AN IMPLEMENTATION. `setCadence`
+ * moves both ends of the pair together from one scalar, so raising the
+ * thresholds without paying the margin is no longer something anybody can do by
+ * hand — see `cadenceMargin` at the top of this file for what it costs and why.
+ *
+ * IT REGISTERS ITS OWN KNOBS, which is the pattern core/quality.js describes at
+ * length: the settings registry knows the NAMES of the knobs and nothing else,
+ * and whoever owns the private state claims them from inside their own module.
+ * The two claimed here — how often the visible set is recomputed, and whether
+ * the impostor band is drawn at all — are both properties of this object and of
+ * nothing else.
+ *
+ * `impostorBand` HAS A SECOND SETTER, in render/impostor.js, which declines to
+ * hand the forest a renderer while the band is off so the atlases are never
+ * baked. The registry supports several setters per knob for exactly this, and
+ * NEITHER HALF IS ANY USE ALONE:
+ *
+ *   - the bake gate is what saves 60 MB of VRAM and fifteen frames of bake, and
+ *     it also stops the draws, because `setReach` in forest.js keeps the band
+ *     collapsed to `min === max` until `impostorsReady`. But it only works on a
+ *     session that STARTS at potato. Auto's whole job is to arrive there later,
+ *     from a rung that has already baked, and by then `impostorsReady` is true
+ *     and cannot be untrue.
+ *   - the suppression here works whenever it is set and however the level was
+ *     reached, but it cannot un-bake anything.
+ *
+ * AND THERE IS A THIRD THING WITH NEARLY THIS NAME. `forest.setImpostors(on)`
+ * collapses the band for `impostor-ab.mjs`, which renders one station twice
+ * inside one page session so that the difference is the band rather than the
+ * machine. Its own comment says there is no quality preset for the band and
+ * there should not be, which was right when the band's cost was measured in
+ * milliseconds on a desktop and is not right now that it is measured in draw
+ * calls on a Chromebook. Nothing here conflicts with it — a collapsed band and a
+ * suppressed packer both draw nothing, and both make `restoreAll` draw nothing
+ * too, so `check:cull` sees a consistent pair either way.
  */
 export class InstanceCuller {
   constructor() {
     this.packers = [];
+    /**
+     * Mesh names this quality level does not draw at all. Matched against
+     * `mesh.name`, which is the CATEGORY (`trunk`, `leaf`, `impostor`, `grass`,
+     * `ferns`, `rocks`, …) rather than the layer id — fifteen archetypes share
+     * one name, and switching a category off means all fifteen.
+     *
+     * Name-based category logic in this file has precedent: `packSlab` decides
+     * `canThin` the same way. It is a smell and the alternative — a `category`
+     * field threaded through `addStreamed` in forest.js — is a change to a file
+     * this one does not own.
+     */
+    this._suppressed = new Set();
+    this._cadence = 1;
+    this._moveSq = MOVE_STEP * MOVE_STEP;
+    /** |q1·q2| = cos(θ/2); this threshold is roughly a 3° turn. */
+    this._turnDot = cadenceTurnDot(1);
+    this._margin = cadenceMargin(1);
     /**
      * Instances re-copied by the last repack that did any work at all.
      *
@@ -896,10 +1125,29 @@ export class InstanceCuller {
     this._lastPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
     this._lastQuaternion = new THREE.Quaternion(0, 0, 0, 0);
     this._lastFov = 0;
+
+    /**
+     * CLAIMED HERE AND APPLIED IMMEDIATELY, WHICH IS WHY `add` HAS TO REPLAY IT.
+     *
+     * `Settings.register` pushes the current value to the setter the moment it
+     * is claimed, and that moment is this constructor — which runs at the top of
+     * `buildForest`, before a single packer has been added. So both setters
+     * below fire against an empty `packers` list and their only lasting effect
+     * is on `this._cadence` / `this._suppressed`; `add` is what carries the
+     * state onto every layer that arrives afterwards. Get that wrong and the
+     * knobs appear to work only after the player next touches them, which is the
+     * exact failure `invalidate()` further down exists to describe.
+     */
+    quality.register('cullCadence', (v) => this.setCadence(v));
+    quality.register('impostorBand', (on) => this.setSuppressed('impostor', !on));
   }
 
   add(packer) {
     this.packers.push(packer);
+    // See the constructor: a layer that arrives after the knobs were claimed
+    // has to be told what they said.
+    packer.setMargin(this._margin.extra, this._margin.slack);
+    if (this._suppressed.has(packer.mesh.name)) packer.setSuppressed(true);
   }
 
   /** Every instance of every layer, frustum ignored. See packer.restoreAll. */
@@ -935,11 +1183,67 @@ export class InstanceCuller {
     this._lastPosition.set(Infinity, Infinity, Infinity);
   }
 
+  /**
+   * How often the visible set is recomputed, as a multiple of the shipping
+   * cadence — and, inseparably, how much margin the packers test with.
+   *
+   * ONE CALL SETS BOTH, and that is the whole reason this method exists rather
+   * than two public fields. The thresholds and the margin are a pair (see the
+   * class comment and `cadenceMargin`); a cadence raised without the matching
+   * margin does not look like a performance setting, it looks like the wood
+   * popping in and out at the edges of the screen while you turn, and it would
+   * be found by `check:cull` at best and by a player at worst.
+   *
+   * `invalidate()` at the end, for the same reason `setDensity` and
+   * `restoreAll` reset the pose: nothing about the camera has changed, so the
+   * movement test in `update` would decline to repack and the new margin would
+   * not reach a single buffer until the player next walked two and a half
+   * metres. A control that does nothing and then works a moment later is worse
+   * than one that does nothing.
+   */
+  setCadence(k) {
+    const next = Math.max(1, Number(k) || 1);
+    if (next === this._cadence) return;
+    this._cadence = next;
+    this._moveSq = (MOVE_STEP * next) ** 2;
+    this._turnDot = cadenceTurnDot(next);
+    this._margin = cadenceMargin(next);
+    for (const packer of this.packers) {
+      packer.setMargin(this._margin.extra, this._margin.slack);
+    }
+    this.invalidate();
+  }
+
+  /** What cadence this culler is on, for the debug readout and for tests. */
+  get cadence() {
+    return this._cadence;
+  }
+
+  /**
+   * Draw every layer of a category, or none of them.
+   *
+   * The set is remembered rather than only pushed, because layers arrive over
+   * the life of the session — `addStreamed` is called during the build, but the
+   * impostor layers get their real material frames later — and a category
+   * switched off before its packers existed has to stay off for the ones that
+   * turn up afterwards. `add` reads it.
+   */
+  setSuppressed(name, on) {
+    const was = this._suppressed.has(name);
+    if (was === !!on) return;
+    if (on) this._suppressed.add(name);
+    else this._suppressed.delete(name);
+    for (const packer of this.packers) {
+      if (packer.mesh.name === name) packer.setSuppressed(!!on);
+    }
+    this.invalidate();
+  }
+
   update(camera, force = false) {
-    const moved =
-      camera.position.distanceToSquared(this._lastPosition) > 2.5 * 2.5;
-    // |q1·q2| = cos(θ/2); this threshold is roughly a 3° turn.
-    const turned = Math.abs(camera.quaternion.dot(this._lastQuaternion)) < 0.99966;
+    const moved = camera.position.distanceToSquared(this._lastPosition) > this._moveSq;
+    // |q1·q2| = cos(θ/2). At cadence 1 this is 0.99966, i.e. roughly a 3° turn,
+    // which is the number this file shipped with; see setCadence.
+    const turned = Math.abs(camera.quaternion.dot(this._lastQuaternion)) < this._turnDot;
     const zoomed = Math.abs(camera.fov - this._lastFov) > 0.25;
     if (!force && !moved && !turned && !zoomed) return false;
 

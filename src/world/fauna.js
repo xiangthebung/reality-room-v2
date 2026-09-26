@@ -2,6 +2,21 @@ import * as THREE from 'three';
 import { TAU, clamp, clamp01, damp, lerp, makeRng, rngRange, wrapAngle } from '../core/util.js';
 import { WORLD_RADIUS, heightAt, slopeAt, wetness } from './terrain.js';
 import { colliderGrid } from './forest.js';
+/**
+ * A SECOND IMPORT OF THE SAME MODULE, THROUGH THE NAMESPACE, AND FOR EXACTLY
+ * THE REASON THE `wildlifeAudio` ONE BELOW IS A NAMESPACE.
+ *
+ * What this file wants from `forest.js` is `snagZones` — the streamed index of
+ * standing DEAD trunks, which is the only place in this canopy a perched bird
+ * is visible against the sky (see `pickPerch`). That grid is being added by
+ * another pass in the same wave as this one, and a named import of an export
+ * that does not exist yet is a link-time error in ESM: the whole app fails to
+ * boot with a blank page. Through the namespace it is `undefined` until the day
+ * it lands, and the perch picker falls back to exactly the behaviour it has
+ * today. Nothing else is bought by it and nothing is lost; the bundler folds
+ * two imports of one module into one.
+ */
+import * as forestExports from './forest.js';
 import { glowSprite } from './textures.js';
 import {
   tapirGeometry,
@@ -24,7 +39,32 @@ import { beastMaterial, flyerMaterial, swarmMaterial } from './fauna/shading.js'
  * file is a day behind". Nothing else is bought by it and nothing is lost.
  */
 import * as wildlifeAudio from '../audio/wildlife.js';
-import { darkAt, daylightAt, dayPhase } from './daylight.js';
+import {
+  CYCLE_SECONDS,
+  darkAt,
+  dawnAt,
+  daylightAt,
+  dayOrigin,
+  dayPhase,
+  dayPinned,
+  dayScale,
+} from './daylight.js';
+/**
+ * WHICH LAND'S ANIMALS. This file was the last big one in `src/world/` that had
+ * never heard of the land layer — `grep -l currentLand src/` returned six files
+ * and this was not one of them — so clicking "Winter wood" gave you snow,
+ * spruces, and then capuchin monkeys and morpho butterflies in it.
+ *
+ * IT IS SAFE ON THE WIRE FOR THE ONE REASON THE WHOLE LAND LAYER IS SAFE: the
+ * land rides the seed string, every client derives it from the same string
+ * before `buildFauna` runs, and the roster below is a NAME filter over a table
+ * that is a module constant. So `everyone` — the flat wire-order list, see the
+ * block at its declaration — is the same length with the same animal at the
+ * same index in every tab, without a byte crossing the network to say so. What
+ * would NOT be safe is anything that shortened the index space from a local
+ * decision (a quality rung, a device check, a URL flag); nothing here does.
+ */
+import { currentLand } from './lands/index.js';
 
 const { VOICE_COUNT, Wildlife } = wildlifeAudio;
 
@@ -124,6 +164,20 @@ const FAUNA_RENDER_ORDER = -2;
 
 /** How far a creature can be before it is not worth drawing. Metres. */
 const FAR = { tapir: 130, agouti: 78, capuchin: 64 };
+/**
+ * The furthest any of them, derived rather than written down.
+ *
+ * `unseen()` needs "past this an animal is a speck in fog for that observer
+ * however directly they are facing it", which is a property of the largest
+ * animal in the table and not of any particular one — the function is handed a
+ * point, not a species. It read `FAR.deer`, which has been UNDEFINED since the
+ * deer became a tapir: `d > undefined` is false, so the early-out never fired
+ * and every observer in the room paid the facing test at any distance. It was
+ * invisible because it fails safe (the recycler holds rather than strands), and
+ * it is a table-length bug of exactly the kind this project has recorded twice.
+ * Written against the table so it cannot go stale again.
+ */
+const FAR_MAX = Math.max(...Object.values(FAR));
 
 /** Grid cell for the trunk index, metres. Big enough that a lookup is 9 cells. */
 const TRUNK_CELL = 16;
@@ -162,7 +216,23 @@ const TRUNK_CELL = 16;
  * it always did: it is the actual list of the actual trunks, so a bird perched
  * from it is on a branch that is really there.
  */
-function trunkIndex() {
+/**
+ * THE SECOND GRID, AND WHY THE FILTER IS A PARAMETER NOW.
+ *
+ * `snagZones` (see the namespace import at the top) is a ColliderGrid holding
+ * nothing but standing dead trunks, streamed by the same machinery and in the
+ * same triples. Every entry in it is a snag by construction, so the radius
+ * filter that identifies a tree in the mixed grid has no work to do there — and
+ * running it anyway would be harmless today and a silent bug the first time
+ * somebody pushes a fallen dead log into that grid.
+ *
+ * Both arguments default to exactly what this function did before it took any,
+ * so the trunk index at the call site below is unchanged.
+ *
+ * @param {{cells: Map}} grid the ColliderGrid to read
+ * @param {boolean} treesOnly apply the "under 0.8 m is a tree" radius filter
+ */
+function trunkIndex(grid = colliderGrid, treesOnly = true) {
   return {
     /** Nearest trunk to a point, or null. */
     near(x, z, maxDistance = TRUNK_CELL) {
@@ -178,10 +248,10 @@ function trunkIndex() {
       const cz = Math.floor(z / TRUNK_CELL);
       for (let i = -span; i <= span; i++) {
         for (let j = -span; j <= span; j++) {
-          const cell = colliderGrid.cells.get(`${cx + i},${cz + j}`);
+          const cell = grid.cells.get(`${cx + i},${cz + j}`);
           if (!cell) continue;
           for (const c of cell) {
-            if (c.r >= 0.8) continue;
+            if (treesOnly && c.r >= 0.8) continue;
             const d = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
             if (d < bestD) {
               bestD = d;
@@ -232,6 +302,70 @@ function standable(x, z) {
   if (wetness(x, z) > 0.42) return false;
   return slopeAt(x, z) < 0.42;
 }
+
+/**
+ * WHICH WORLD DAY THIS IS. An integer, or -1 for "do not ask".
+ *
+ * The only thing in this file that needs a DATE rather than a time of day is
+ * `theCrossing` — the rare herd event at the bottom of `updateHerd` — and it
+ * needs one for one reason: two people in a room have to agree about whether
+ * today is the day. `dayPhase` cannot answer that, because it deliberately
+ * throws the integer part away; what it keeps is the fraction of a turn, and
+ * two turns apart look identical to it.
+ *
+ * SO THIS RE-DERIVES THE TURN COUNT FROM THE SAME THREE NUMBERS `dayPhase`
+ * USES, and it is a pure function of the wall clock exactly as that one is.
+ * `dayOrigin` is the shared epoch a room can be shifted by — the hook that
+ * exists so everyone can be made to watch the same sunset — and `dayScale` is
+ * how fast the sky runs, so a room that has agreed on both agrees on this too
+ * without a byte crossing the wire. CYCLE_SECONDS is 1200, i.e. a world day is
+ * twenty real minutes.
+ *
+ * -1 WHENEVER THE CLOCK IS NOT REALLY RUNNING, and that is the whole of the
+ * automation pinning for this feature. Under `navigator.webdriver` `dayPhase`
+ * returns AUTHORED_PHASE for ever and the turn count below would still be
+ * ticking underneath it — a script photographing the same authored hour would
+ * find the crossing on some runs and not others, which is the exact shape of
+ * flake the pinning rule exists to prevent. A pin from `setDayPhase` or from
+ * the URL means somebody is holding the sky still on purpose and the same
+ * argument applies. Both return -1, and every caller treats -1 as "no".
+ */
+function worldDay(nowMs = Date.now()) {
+  if (dayPinned() !== null) return -1;
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return -1;
+  return Math.floor((((nowMs - dayOrigin()) / 1000) * dayScale()) / CYCLE_SECONDS);
+}
+
+/**
+ * A stable 0..1 out of a seed string and an integer, with no allocation past
+ * the string walk.
+ *
+ * FNV-1a, because it is four lines and because the alternative here would be
+ * `makeRng`, which is a stateful stream — and a stream is exactly the wrong
+ * shape for this question. What is being asked is "is today the day", and the
+ * answer has to be the same on every frame, on every machine, and computable
+ * out of order; a stream gives a different answer depending on how many times
+ * anything else has drawn from it.
+ */
+function dayHash(seed, day, salt) {
+  let h = 2166136261 ^ (day * 2654435761) ^ (salt * 40503);
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * How often a world day carries a crossing. See the block in `updateHerd`.
+ *
+ * A world day is CYCLE_SECONDS = 1200 s, so a quarter is one every eighty
+ * minutes of continuous play — and only if you are near that herd, awake, and
+ * outdoors when it happens. There is no way to raise the odds and no way to
+ * ask for one, which is the entire feature.
+ */
+const CROSSING_CHANCE = 0.25;
 
 /** Hoisted scratch. Nothing in the update path may allocate. */
 const _v = new THREE.Vector3();
@@ -414,11 +548,56 @@ const MORPH_TOTAL = Object.fromEntries(
   Object.entries(MORPHS).map(([k, list]) => [k, list.reduce((s, m) => s + m.w, 0)])
 );
 
-/** Draw a morph. Falls through to the first entry, which is always the plain one. */
-function pickMorph(rng, name) {
-  const list = MORPHS[name];
+/**
+ * A LAND MAY REPLACE ONE SPECIES' MORPH LIST, AND THAT IS THE WHOLE OF ITS
+ * LICENCE OVER WHAT AN ANIMAL LOOKS LIKE.
+ *
+ * The winter wood needs a paler, greyer, heavier version of the same animals —
+ * that is what a boreal population IS — and it must not cost a geometry family,
+ * a material, a draw call or a second `BEASTS` row. A morph list is exactly the
+ * right size of lever for that, because every field in one is already a
+ * MULTIPLIER on the species' own numbers (see the block above `MORPHS`): the
+ * countershading, the rump flash and the eye are still computed from the base
+ * coat and are still being scaled rather than replaced, so a winter tapir is
+ * the same animal in a different key and cannot come out as a differently
+ * shaped object with the markings in the wrong places.
+ *
+ * WHY NOT OVERRIDE `colour` INSTEAD, which is the obvious knob: because `pale`
+ * is a multiplier fitted to the base being nearly black — the tapir's is
+ * [2.25, 2.1, 1.9] and its own note says so in as many words — so lifting the
+ * base lifts the belly by the same factor again and the countershading clips
+ * before the coat has got anywhere. A morph moves both together, which is the
+ * arithmetic that was wanted in the first place.
+ *
+ * It is a whole-list replacement rather than a merge because the weights have
+ * to sum to something and a merge cannot say "and drop the ginger one".
+ *
+ * A land with no `coats` gets `MORPHS` and `MORPH_TOTAL` by identity — the same
+ * objects, not copies — so the rainforest cannot be moved by this.
+ */
+function morphTables(land) {
+  const over = land?.fauna?.coats;
+  if (!over) return { list: MORPHS, total: MORPH_TOTAL };
+  const list = { ...MORPHS };
+  for (const [name, coat] of Object.entries(over)) if (coat.morphs) list[name] = coat.morphs;
+  const total = Object.fromEntries(
+    Object.entries(list).map(([k, l]) => [k, l.reduce((s, m) => s + m.w, 0)])
+  );
+  return { list, total };
+}
+
+/**
+ * Draw a morph. Falls through to the first entry, which is always the plain one.
+ *
+ * The table is passed in rather than read from module scope so a land can swap
+ * it; see `morphTables`. Exactly one rng draw either way, which is the thing
+ * that must not change — this generator is shared with the size, the rack and
+ * the nerve, and an extra draw here would reseat every animal after it.
+ */
+function pickMorph(rng, name, table, totals) {
+  const list = table[name];
   if (!list) return null;
-  let r = rng() * MORPH_TOTAL[name];
+  let r = rng() * totals[name];
   for (const m of list) {
     r -= m.w;
     if (r <= 0) return m;
@@ -1316,13 +1495,16 @@ const WINGS = [
 ];
 /**
  * WINGS[0] is the morpho and the code below relies on it, which is worth one
- * line to say out loud: three of the eight slots are dealt it outright rather
- * than rolled for it. See `seatFlutter`.
+ * line to say out loud: two of the seven slots are dealt it outright rather
+ * than rolled for it. See the seeding loop.
+ *
+ * `PIGMENT`/`PIGMENT_TOTAL` — "everything the deal does not cover" — used to be
+ * precomputed here. They are derived per build now, because a land may drop
+ * species from `WINGS` and the remainder after the deal is then a different
+ * list with a different total; see the filter beside `flutterRng`. The
+ * rainforest's values are unchanged, and the derivation is seven adds once.
  */
 const MORPHO_SLOTS = 2;
-/** Everything that is a pigment butterfly, i.e. everything the deal does not cover. */
-const PIGMENT = WINGS.slice(1);
-const PIGMENT_TOTAL = PIGMENT.reduce((s, k) => s + k.w, 0);
 
 /** Flock birds, drawn entirely by the vertex shader. */
 /**
@@ -1337,6 +1519,71 @@ const PIGMENT_TOTAL = PIGMENT.reduce((s, k) => s + k.w, 0);
 const FLOCK_BIRDS = 96 + 6;
 /** Three pairs. See the macaw block after the flock loop. */
 const MACAW_PAIRS = 3;
+/**
+ * ==== THE BIG PAIR THAT CROSSES HIGH, PER LAND ============================
+ *
+ * The macaw block below is right about why it exists — a bonded pair crossing a
+ * gap in the canopy is one of the two or three images "Amazon" reduces to — and
+ * it was the last thing in this file still hard-coded to one continent. A
+ * winter wood got three pairs of scarlet and blue macaws turning over the
+ * spruces at sixty metres, in snow, which is the single most visible wrong
+ * thing an observer could report about the taiga.
+ *
+ * A SUBSTITUTION AND NOT A DELETION, and that distinction is the whole design.
+ * Dropping the pairs would have left six slots in an InstancedMesh with
+ * uninitialised matrices — identity, i.e. six birds sitting at the world origin
+ * — and it would have deleted the effect rather than moved it. Every boreal
+ * forest on earth has the same image in it: TWO RAVENS, high, straight, black,
+ * croaking to each other as they go. Same pair, same machinery, same six slots,
+ * same zero draw calls. Only the numbers below change.
+ *
+ * WHY THE RAVEN'S NUMBERS ARE WHAT THEY ARE.
+ *   `coats` — both birds the same, which is itself the species: a macaw pair is
+ *   a scarlet and a blue and you can tell them apart at seventy metres; a raven
+ *   pair is two identical black shapes and the ONLY thing that says there are
+ *   two is the constant gap between them. Not literally black — 0.07 linear is
+ *   about sRGB 75, which against a bright sky is a silhouette anyway, and a
+ *   true zero would lose the wing edge on the up-beat.
+ *   `sweep` 1.15 against the macaw's 1.7. That channel lengthens the tail, and
+ *   the tail is most of what a macaw's outline IS; a raven has a short wedge
+ *   and reads as all wing.
+ *   `span` a little under the macaw's. Corvus corax runs 1.2–1.5 m of wingspan
+ *   against a scarlet macaw's 1.1, but the macaw's number here is carrying that
+ *   enormous tail as well, so on outline alone the raven is the smaller shape.
+ *   `beat` slower and deeper again. A raven's flight is unhurried and rowing,
+ *   and at this distance the beat rate is half of how you identify one.
+ *
+ * The lift, the ring radius and the cruise are NOT in this table. They are
+ * about being visible at all — 54–76 m is above the canopy this forest hides
+ * everything under, and 11 m/s on a 110 m ring is what makes the arc read as
+ * straight — and both birds want exactly the same answer to both.
+ *
+ * Keyed by the name the land record carries, defaulting to the rainforest's, so
+ * a record that has never heard of this field gets bit-identical macaws.
+ */
+const HIGH_PAIRS = {
+  macaw: {
+    /** Scarlet, then blue-and-gold. Alternated by pair; see the loop. */
+    coats: [
+      [1.55, 0.24, 0.16],
+      [0.32, 0.62, 1.5],
+    ],
+    span: [1.85, 2.05],
+    body: [1.5, 1.7],
+    sweep: 1.7,
+    beat: [0.22, 0.3],
+  },
+  raven: {
+    coats: [
+      [0.07, 0.075, 0.09],
+      [0.07, 0.075, 0.09],
+    ],
+    span: [1.62, 1.8],
+    body: [1.34, 1.5],
+    sweep: 1.15,
+    beat: [0.26, 0.34],
+  },
+};
 const MACAW_BIRDS = MACAW_PAIRS * 2;
 const FLOCKS = 4;
 /** Birds that sit on real branches and leave when you get near. */
@@ -1400,6 +1647,32 @@ const FIREFLIES = 460;
 
 export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   const rng = makeRng(`${seed}:fauna`);
+  /**
+   * THE LAND, AND EVERYTHING THIS FILE TAKES FROM IT IS A NAME FILTER.
+   *
+   * `main.js` has already called `setWorldSeed(SEED)`, which chooses the land
+   * from the seed's prefix — the same guarantee `forest.js` relies on at its
+   * own `currentLand()` call, and the reason nothing about the roster has to be
+   * sent.
+   *
+   * THE SETS ARE SHAPED LIKE `layers` AND `clutter` ON PURPOSE. That is a
+   * mechanism this codebase already trusts: a land drops a streamed layer by
+   * not naming it, `underLayer` bails when the bounds are missing, and nothing
+   * had to be told. A fauna roster is the same problem — "which of these rows
+   * exist here" — and giving it a second shape would be two mechanisms to
+   * remember and one of them stale.
+   *
+   * THE FALLBACK IS THE WHOLE TABLE, for the reason `forest.js` gives about a
+   * roster with no overlap: a land that names nothing this file has would
+   * otherwise be a wood with no animals in it and nothing saying so, and this
+   * project has recorded twice that a layer which places nothing looks exactly
+   * like a layer that works.
+   */
+  const land = currentLand();
+  const kindSet = land?.fauna?.kinds ?? null;
+  const beasts = Object.entries(BEASTS).filter(([n]) => !kindSet || kindSet.has(n));
+  const beastRows = beasts.length ? beasts : Object.entries(BEASTS);
+  const morphs = morphTables(land);
   const group = new THREE.Group();
   group.name = 'fauna';
   /**
@@ -1412,6 +1685,16 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   scene.add(group);
 
   const trunks = trunkIndex();
+  /**
+   * THE DEAD TREES, SEPARATELY, OR NULL IF NOBODY IS PUBLISHING THEM YET.
+   *
+   * Read through the namespace and captured once, because the export is either
+   * there at module-evaluation time or it never will be — `snagZones` is a
+   * module constant in `forest.js`, not something that appears later. Null here
+   * means `pickPerch` runs precisely the picker it ran before this pass, which
+   * is the degradation this whole indirection exists to buy.
+   */
+  const snags = forestExports.snagZones ? trunkIndex(forestExports.snagZones, false) : null;
   /** @type {Wildlife|null} */
   let wildlife = null;
 
@@ -1523,6 +1806,43 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * everything. Stored here at no cost and replayed against a new anchor.
    */
   const flocks = [];
+  /**
+   * ==== WHICH BIRDS THIS LAND HAS, AS INDICES INTO THE WHOLE TABLE ==========
+   *
+   * `landVoiceIndices` selects by NAME and hands back GLOBAL indices — see the
+   * long block on that export in audio/wildlife.js for why the index space must
+   * never be shortened, and the one at the head of this file for why a name
+   * filter over a module constant is safe on the wire. So everything downstream
+   * keeps using the one index space it always used and is simply drawn from a
+   * smaller bag. In the rainforest `roster[v] === v` and every loop below deals
+   * exactly what it dealt before this line existed.
+   *
+   * RESOLVED HERE, ABOVE THE FLOCKS, AND THAT IS THE BUG THIS MOVE FIXES. It
+   * used to sit down in the percher section, so the perchers were land-aware
+   * and the FLOCKS were not: `flockVoice` drew from `VOICE_ROSTER.length`, the
+   * whole twenty, and a winter wood therefore had rings of quetzals and toucans
+   * turning over the spruces. The perchers are the birds you meet and the
+   * flocks are the birds you look up at, and half a fix is the kind that gets
+   * called finished.
+   *
+   * The `?? Array.from(...)` is defensive against a `wildlife.js` from before
+   * that export existed — same reason as the `VOICE_NAMES` fallback — and a
+   * wood with the wrong birds in it beats a wood with a blank page in it.
+   */
+  const roster =
+    wildlifeAudio.landVoiceIndices?.() ?? Array.from({ length: VOICE_COUNT }, (_, i) => i);
+  /**
+   * Which big pair crosses over this land. See HIGH_PAIRS.
+   *
+   * Both nestings accepted, in the same order and for the same reason the audio
+   * layer's `setLand` accepts both: the land records are being extended by
+   * several passes at once and it is not settled whether a field of this kind
+   * hangs off the record or off its `fauna` sub-object. An unknown name falls
+   * back to the macaw rather than to nothing, because a record with a typo in it
+   * should give you the wrong bird and not six birds standing on the origin.
+   */
+  const highPair =
+    HIGH_PAIRS[currentLand()?.highPair ?? currentLand()?.fauna?.highPair] ?? HIGH_PAIRS.macaw;
   /** Scratch for the per-flock plumage resolve. Nothing at load may allocate. */
   const _fCoat = [1, 1, 1];
   const _fMark = [1, 1, 1];
@@ -1555,10 +1875,22 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      * and the flocks would have gone back to being anonymous. 1.25 keeps the
      * top six — motmot, potoo, quetzal, aracari, tinamou, oropendola, toucan —
      * which read as something at forty metres up.
+     *
+     * AND IT DRAWS FROM `roster` NOW, NOT FROM THE WHOLE TABLE. See that
+     * declaration: this line said `VOICE_ROSTER.length` and was the half of the
+     * land-aware birds that never landed. `roster.length` in a land with a short
+     * list may well contain nothing over 1.25 — the taiga's eight top out at a
+     * tinamou — in which case the four retries all fail and the flock takes
+     * whatever the last roll gave it, which is the correct degradation: a
+     * smaller bird overhead, not a bird from the wrong continent.
+     *
+     * `roster.length` AND NEVER A LITERAL, and the index it produces is
+     * `roster[i]` and never `i`. Two peers must derive the same flock, and the
+     * only thing they both agree on is the GLOBAL index.
      */
-    let flockVoice = Math.floor(rng() * VOICE_ROSTER.length);
+    let flockVoice = roster[Math.floor(rng() * roster.length)];
     for (let tries = 0; tries < 4 && sizeOf(flockVoice) < 1.25; tries++) {
-      flockVoice = Math.floor(rng() * VOICE_ROSTER.length);
+      flockVoice = roster[Math.floor(rng() * roster.length)];
     }
     const flockPlume = plumageOf(flockVoice);
     plumageInto(_fCoat, _fMark, flockPlume, false);
@@ -1690,10 +2022,10 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    */
   for (let m = 0; m < MACAW_PAIRS; m++) {
     /**
-     * Scarlet, and it is painted rather than dealt from the voice roster.
+     * Painted from HIGH_PAIRS rather than dealt from the voice roster.
      *
      * Every other bird up here takes its colours from `plumageOf` so that the
-     * thing you see agrees with the thing you hear. A macaw is the one case
+     * thing you see agrees with the thing you hear. This pair is the one case
      * where that would lose: the roster's plumage is tuned for birds seen at
      * three metres in shade, and this bird is a silhouette at seventy metres
      * against a bright sky, where the only thing that survives is raw
@@ -1701,11 +2033,17 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      * right in sRGB renders as washed grey — so these are near-primary values
      * chosen for what comes out the far end, not for what reads well in a
      * table.
+     *
+     * The pairs ALTERNATE through the table's colour list, which is the same
+     * `m % 2` this used to write out longhand: in the rainforest that is a
+     * scarlet pair, then a blue-and-gold, then a scarlet. In a land whose two
+     * entries are the same colour it is three identical pairs, which is what a
+     * raven is.
      */
-    const scarlet = m % 2 === 0;
-    const cr = scarlet ? 1.55 : 0.32;
-    const cg = scarlet ? 0.24 : 0.62;
-    const cb = scarlet ? 0.16 : 1.5;
+    const coat = highPair.coats[m % highPair.coats.length];
+    const cr = coat[0];
+    const cg = coat[1];
+    const cb = coat[2];
 
     const a = rng() * TAU;
     // The centre sits near the player, so the ring passes over rather than
@@ -1746,8 +2084,9 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         k,
         rng() * TAU,
         // A deeper, much slower wingbeat than a small bird's. A macaw's beat is
-        // heavy and unhurried and it is half of how you identify one in the air.
-        rngRange(rng, 0.22, 0.3),
+        // heavy and unhurried and it is half of how you identify one in the
+        // air; a raven's is slower still. See HIGH_PAIRS.
+        rngRange(rng, highPair.beat[0], highPair.beat[1]),
         rngRange(rng, 3.2, 4.1),
         1
       );
@@ -1757,9 +2096,16 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * BIG. The build channels are span, body and sweep — a macaw is nearly a
        * metre of bird with a very long tail, so the span goes up hard and the
        * sweep with it. At seventy metres this is the difference between a speck
-       * and a shape.
+       * and a shape. A raven is broader in the wing and much shorter in the
+       * tail, which is the whole of the outline difference; see HIGH_PAIRS.
        */
-      birdBuild.setXYZW(k, rngRange(rng, 1.85, 2.05), rngRange(rng, 1.5, 1.7), 1.7, 0);
+      birdBuild.setXYZW(
+        k,
+        rngRange(rng, highPair.span[0], highPair.span[1]),
+        rngRange(rng, highPair.body[0], highPair.body[1]),
+        highPair.sweep,
+        0
+      );
       birdMark.setXYZW(k, 1, 1, 1, 0);
       birds.setMatrixAt(k, _m.identity());
       pair.birds.push({
@@ -1855,6 +2201,61 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
   const PERCH_NEAR = 12;
   const PERCH_BAND = 58;
 
+  /**
+   * ==== A DEAD TREE FIRST, AND IT IS THE LAST THIRD OF "I CAN NEVER SPOT ONE"
+   *
+   * The record on this problem has three parts and the first two are done. The
+   * birds were all in the grass because the collider grid is empty at load, and
+   * that is fixed at the top of `updatePerchers`; they were sixty metres away,
+   * and the band came in to 12-58 m. What is left is the SIGHT LINE, and it is
+   * not a distance problem at all: a bird four metres up inside a closed canopy
+   * is behind two metres of alpha-tested leaf card, and `clearLine` can only
+   * tell you that a TRUNK is not in the way. You hear it, you turn, you are
+   * looking at leaves.
+   *
+   * A SNAG IS THE ONE PLACE IN THIS WOOD WHERE THAT IS NOT TRUE. The scatter
+   * builds a standing dead tree by skipping the canopy push and keeping the
+   * trunk — about one stem in fifty — and its own comment says why the collider
+   * deliberately stays in the "this is a tree" band: so that the birds keep
+   * perching on the one thing you can actually see them on. This is that
+   * sentence being cashed. A bird on a bare spar is against the SKY, which is
+   * the only background in this forest that is not more forest.
+   *
+   * IT IS A TERM IN A PICKER THAT ALREADY RUNS, and that is the whole cost: one
+   * more grid query on the handful of perch rolls a minute, no new state, no
+   * new draw, nothing per frame.
+   *
+   * THE TWO NUMBERS.
+   *
+   *   `SNAG_REACH` 13 m against the live trunk's 9. Wider on purpose: snags are
+   *   a fiftieth of the stems, so a 9 m disc finds one roughly a fiftieth as
+   *   often as it finds a tree, and the bias would almost never fire. 13 m is
+   *   2.1 times the area, which is about as far as a candidate point may be
+   *   dragged before the perch stops being at the radius the band asked for.
+   *
+   *   `SNAG_BIAS` 0.72, i.e. when there IS a dead tree in reach, seven times in
+   *   ten the bird takes it. Not 1.0, because a wood where every visible bird is
+   *   on a dead tree is a wood with a rule in it, and the rule is legible after
+   *   about the fourth bird. Three in ten still go into the canopy and are hard
+   *   to find, which is what makes finding one worth anything.
+   *
+   * THE HEIGHT IS LOWER ON A SNAG, AND THAT IS A CORRECTNESS FIX BEFORE IT IS
+   * AN AESTHETIC ONE. A snag is SQUASHED — `treeSector` scales it vertically by
+   * `0.5 + deadShape * 0.44`, so 0.5 to 0.94 of the live tree it came from — and
+   * this wood's trees run 8 to 20 m, which puts the shortest snags at about 4 m
+   * total. Seating a bird at the live perch height of 3.4-7.6 m would float it
+   * above the broken top of a fair number of them. 2.6-4.4 m sits under the
+   * break for anything but the very shortest, and it happens to be the better
+   * picture anyway: 3.5 m up at fifteen metres away is 13° above the horizon,
+   * which is inside the frame of somebody walking and looking ahead, where the
+   * canopy perch at 5.5 m is not. ESTIMATED FROM THE SCATTER'S OWN FORMULA
+   * rather than measured — the collider carries a radius and not a height, and
+   * asking for the height as well would have meant a fourth channel through the
+   * worker for one number.
+   */
+  const SNAG_REACH = 13;
+  const SNAG_BIAS = 0.72;
+
   function pickPerch(out, ax, az, minR, maxR) {
     for (let attempt = 0; attempt < 14; attempt++) {
       const a = rng() * TAU;
@@ -1862,13 +2263,23 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       const x = ax + Math.cos(a) * r;
       const z = az + Math.sin(a) * r;
       if (!standable(x, z)) continue;
-      const trunk = trunks.near(x, z, 9);
+      /**
+       * The roll is INSIDE the `spar &&`, so a wood with no snag index and a
+       * wood with no snag nearby both draw exactly the numbers this function
+       * drew before the bias existed. That matters more here than it looks:
+       * `rng` is the shared `:fauna` stream, so a stray draw shifts every coat
+       * and every nerve dealt after it.
+       */
+      const spar = snags ? snags.near(x, z, SNAG_REACH) : null;
+      const dead = Boolean(spar) && rng() < SNAG_BIAS;
+      const trunk = dead ? spar : trunks.near(x, z, 9);
       if (trunk && rng() < 0.82) {
         const t = rng() * TAU;
         const reach = trunk.r + rngRange(rng, 0.2, 1.5);
         out.set(
           trunk.x + Math.cos(t) * reach,
-          heightAt(trunk.x, trunk.z) + rngRange(rng, 3.4, 7.6),
+          heightAt(trunk.x, trunk.z) +
+            (dead ? rngRange(rng, 2.6, 4.4) : rngRange(rng, 3.4, 7.6)),
           trunk.z + Math.sin(t) * reach
         );
         return true;
@@ -1981,9 +2392,13 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * reordering cannot move a tree, and two players in a seeded world still deal
    * the same wood.
    */
+  /**
+   * DEALT FROM THE LAND'S ROSTER, NOT FROM THE WHOLE TABLE. See `roster`, which
+   * is now resolved above the flocks because they draw from it too.
+   */
   const deck = [];
-  for (let v = 0; v < VOICE_COUNT && deck.length < PERCHERS; v++) deck.push(v);
-  while (deck.length < PERCHERS) deck.push(Math.floor(rng() * VOICE_COUNT));
+  for (let v = 0; v < roster.length && deck.length < PERCHERS; v++) deck.push(roster[v]);
+  while (deck.length < PERCHERS) deck.push(roster[Math.floor(rng() * roster.length)]);
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
     const t = deck[i];
@@ -2204,6 +2619,32 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * else's future.
    */
   const flutterRng = makeRng(`${seed}:flutter`);
+  /**
+   * WHICH BUTTERFLIES LIVE HERE, AND WHY THE DEAL SWITCHES ITSELF OFF.
+   *
+   * Same name filter as the beasts, over `WINGS` and in `WINGS` order, so the
+   * rainforest — which names all seven — gets the identical array object
+   * contents and identical weights and cannot move by a bit.
+   *
+   * THE DEAL IS CONDITIONAL ON THE MORPHO BEING PRESENT, and that is not a
+   * special case dressed up as a rule. `MORPHO_SLOTS` exists because ONE
+   * species is the entire point of the flutter pass and a weighted roll over
+   * eight instances has enough variance to nearly delete it (see the block at
+   * the seeding loop — a 37% weight once dealt exactly one). A land without the
+   * morpho has no such species: the taiga's two are a sulphur and a
+   * swallowtail, neither of which is the reason the layer exists, and dealing
+   * two slots to whichever happens to sit first in `WINGS` would be an
+   * arbitrary 5:2 split decided by a table's row order rather than by anything
+   * about the land. So when the dealt species is not in the set, every slot
+   * rolls over the whole filtered list by weight — sulphur 0.5 to swallowtail
+   * 0.4, i.e. roughly four to three, which is a mix rather than a hierarchy.
+   */
+  const flutterSet = land?.fauna?.flutter ?? null;
+  const wingsHere = WINGS.filter((k) => !flutterSet || flutterSet.has(k.name));
+  const wings = wingsHere.length ? wingsHere : WINGS;
+  const dealt = wings[0] === WINGS[0] ? WINGS[0] : null;
+  const pigmentHere = dealt ? wings.slice(1) : wings;
+  const pigmentTotalHere = pigmentHere.reduce((s, k) => s + k.w, 0);
 
   /**
    * Seat one butterfly: where it lives, what species it is, how it flies.
@@ -2283,11 +2724,15 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      * is a fact. The slot keeps its role across recycling, so the mix is stable
      * as you walk while the individuals are not.
      */
-    let kind = WINGS[0];
-    if (i >= MORPHO_SLOTS) {
-      let pick = flutterRng() * PIGMENT_TOTAL;
-      kind = PIGMENT[0];
-      for (const k of PIGMENT) {
+    // `dealt === null` is a land with no signature species; see the filter
+    // above `flutterRng`. In the rainforest `dealt` is `WINGS[0]` and this
+    // reads exactly as it always did — no draw for the first MORPHO_SLOTS, one
+    // draw for the rest, over the same list with the same total.
+    let kind = dealt ?? pigmentHere[0];
+    if (dealt === null || i >= MORPHO_SLOTS) {
+      let pick = flutterRng() * pigmentTotalHere;
+      kind = pigmentHere[0];
+      for (const k of pigmentHere) {
         pick -= k.w;
         if (pick <= 0) {
           kind = k;
@@ -2406,7 +2851,12 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
 
   // ---- beasts -------------------------------------------------------------
   const herds = [];
-  for (const [name, spec] of Object.entries(BEASTS)) {
+  // `beastRows`, not `Object.entries(BEASTS)` — the land's roster, in the
+  // table's own order. A dropped row costs nothing at all: its geometry is
+  // never built, its material never compiled, its InstancedMesh never made and
+  // its draw call never issued, which is the same "a dropped layer's rule
+  // simply never runs" the streamed layers get from `land.layers`.
+  for (const [name, spec] of beastRows) {
     const { geometry, neck } = spec.build();
     const material = beastMaterial({
       name,
@@ -2586,14 +3036,67 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * EVERY GROUND ANIMAL IN ONE FLAT LIST, AND THIS IS THE WIRE ORDER.
    *
    * `BEASTS` is an object literal and `herds` is built by iterating it, so this
-   * ordering — deer, then rabbits, then squirrels, each in construction order —
-   * is fixed by the source and identical in every tab that loads this file.
-   * That is the whole addressing scheme: index 7 is the same rabbit on eight
+   * ordering — tapirs, then agoutis, then capuchins, each in construction order
+   * — is fixed by the source and identical in every tab that loads this file.
+   * That is the whole addressing scheme: index 7 is the same agouti on eight
    * machines, so nothing about which animal a row describes has to be sent.
+   *
+   * A LAND SHORTENS THIS LIST AND THAT IS STILL SAFE, but only because of where
+   * the roster comes from. `beastRows` is `BEASTS` filtered by NAME against a
+   * set on the land record, and the land is a prefix on the seed string that
+   * every client has before this function runs — so the taiga's list is tapirs
+   * then agoutis in every tab, at the same indices, with no capuchins anywhere.
+   * The thing that would break it is a roster that varied for a LOCAL reason: a
+   * quality rung, a device capability, a URL flag, an "if I am the host". None
+   * of those may ever be allowed to reach this filter. `snapshot`'s reader
+   * already clamps with `Math.min(everyone.length, …)`, which makes a
+   * disagreement survivable rather than a crash, and it is not a licence.
    *
    * It costs one array of references to objects that already exist, built once.
    */
   const everyone = herds.flatMap((h) => h.members);
+
+  /**
+   * WHICH HERD CROSSES. The biggest one, by counting, never by name.
+   *
+   * See the crossing block in `updateHerd` for what this is for. Resolved once
+   * at build rather than per frame because the herd list cannot change after
+   * this point — members are recycled in place and no herd is ever added or
+   * dropped — and because it is a fact about the LAND: the rainforest's biggest
+   * is twelve agoutis, the taiga's is the same twelve, and a land that drops
+   * that species gets whatever is next without this line being touched.
+   *
+   * `reduce` over the list rather than a lookup, for the reason the file states
+   * everywhere else it counts something: a literal species name here is a bug
+   * with a delay fuse on it, and it has gone off twice already.
+   */
+  const thePassing = herds.length
+    ? herds.reduce((a, b) => (b.members.length > a.members.length ? b : a))
+    : null;
+
+  /**
+   * ==== THE THREE PIECES OF MOOD THAT ARE NOT PARAMETERS ====================
+   *
+   * `dissolve` and `stillness` arrive as arguments beside `tripLevel`, because
+   * they are inputs — somebody outside this file measured them and they change
+   * every frame. These three are DERIVED, they are decided once a frame in
+   * `update`, and passing them down through two call sites as three more
+   * positional arguments would put five numbers on a signature that already has
+   * four and make every one of them harder to read.
+   *
+   *   `heldWood`  whether the freeze was on LAST frame. The whole of the
+   *               release: the herd goes on the frame this is true and the
+   *               threshold is not, which cannot be detected from `dissolve`
+   *               alone because a function of one frame's value has no memory.
+   *   `released`  set on exactly that frame and consumed by the herd loop.
+   *               A flag rather than a direct call because the loop is per
+   *               HERD and the transition is per WOOD.
+   *   `crossing`  the bearing of today's crossing in radians, or null on all
+   *               the days there isn't one. See `theCrossing`.
+   */
+  let heldWood = false;
+  let released = false;
+  let crossing = null;
 
   /**
    * WHO THIS ONE IS: a coat, a size, a rack and the nerve that follows from all
@@ -2615,7 +3118,7 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * looking would be the worst artefact this system can produce.
    */
   function individual(m, spec) {
-    const morph = pickMorph(rng, spec.name);
+    const morph = pickMorph(rng, spec.name, morphs.list, morphs.total);
     // Nothing in here reads the name back; the capture scripts do, the same way
     // they read `__perchers`. A portrait of the wood's one black squirrel is
     // worth very little if the script cannot tell it found one.
@@ -2627,7 +3130,23 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     // A fawn is a fawn: the sex factor is dropped for juveniles rather than
     // multiplied in, because 0.6 × 1.14 puts a male fawn inside the doe range
     // and the one thing a juvenile has to be is unmistakably small.
-    m.scale = base * (m.juvenile ? JUVENILE.size : m.sex.size);
+    /**
+     * A MORPH MAY CARRY A SIZE, AND NO MORPH IN `MORPHS` DOES.
+     *
+     * `?? 1` is an identity for every row this file ships, so the rainforest
+     * cannot move; the field exists for the winter wood's heavy tapir morph,
+     * which is the cheapest "you have never seen one that big" this system can
+     * produce — one multiply, no geometry, no draw call, no extra rng draw.
+     *
+     * It multiplies `m.scale` and deliberately NOT `base`. `base` is what
+     * `nerve` is measured against a few lines down, and a morph is meant to be
+     * a bigger animal rather than a braver one; folding it into `base` would
+     * quietly hand the elk the flee radius and the stare of a stag as well,
+     * which is three coupled changes from a field that says "size". `m.mass`
+     * DOES read `m.scale`, so it lands harder and crashes louder, which is the
+     * one consequence that follows from mass alone and is wanted.
+     */
+    m.scale = base * (m.juvenile ? JUVENILE.size : m.sex.size) * (morph.size ?? 1);
     /**
      * SIZE IS NOT A COSMETIC HERE, and this is the line that makes it mean
      * something. Nerve is the sex's own disposition scaled by how big this
@@ -2752,11 +3271,73 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
    * with her by construction and looks exactly like an animal keeping an eye on
    * its mother.
    */
-  function graze(m, spec) {
+  /**
+   * ==== WHAT A HERD DOES WHEN YOU STAND STILL ===============================
+   *
+   * The audio layer gained `stillness` last wave and its own long note is clear
+   * about the shape it spent it in, which this deliberately copies: THE CHATTER
+   * RADIUS SHRINKS AND NOTHING ELSE. No interval moved, no event was added below
+   * the threshold, nothing got busier. "If standing still made the wood BUSIER
+   * it would read as a reward mechanic, and what it has to read as is the same
+   * wood, closer." The bodies had no equivalent at all — a herd you have been
+   * watching for two minutes behaves exactly like one you jogged past.
+   *
+   * SO THE HERD CLOSES DISTANCE AND DOES NOTHING ELSE. Two terms, both of them
+   * radii, neither of them a rate:
+   *
+   *   THIS ONE, the direction of the next mouthful. A grazing animal walks a few
+   *   metres, puts its head down, and does it again; the bearing has always been
+   *   uniform, so over a minute the animal random-walks around its anchor and
+   *   its expected displacement toward anything is exactly zero. Under stillness
+   *   the bearing is squeezed toward you: at full value the cone is ±99° rather
+   *   than ±180°, so a little over half of each leg is in your direction.
+   *
+   *   `boldness` in `updateHerd`, so that having closed the distance it does not
+   *   simply bolt at the flee radius it always had. Without that second term
+   *   this one only produces a herd that comes fifteen metres nearer and then
+   *   explodes, which is worse than no feature.
+   *
+   * THE ARITHMETIC, because a drift rate is the one thing here you can get
+   * ten times wrong without it looking wrong in the code. A tapir's territory
+   * is 34 m and a graze leg is `sqrt(u) * 34`, mean 22.7 m, walked at 0.42 m/s.
+   * Over a cone of half-angle 1.73 rad the mean forward component is
+   * `sin(1.73)/1.73 = 0.57`, so a full-stillness leg nets about 13 m toward you
+   * in a little under a minute. Two legs bring an animal from the far edge of
+   * its territory to inside its own notice radius, where it stops and looks at
+   * you — which takes about as long as the stillness accumulator itself does to
+   * fill, and that is the right pace: nothing happens, and then you realise
+   * something has been happening.
+   *
+   * `pull` is 0.45 AND NOT 1. At 1 the cone is a line and the animal walks
+   * straight at you, which is not a wild animal, it is a pet. 0.45 is the
+   * largest value at which the path still visibly wanders — you can watch a
+   * tapir graze away from you for ten metres and come back — while the drift is
+   * unmistakable over a minute.
+   *
+   * THE DRAW COUNT IS UNCHANGED. `a` is drawn uniform exactly as it was and
+   * then warped, so at `stillness` 0 this is bit-identical to the old line and
+   * every seeded world deals the same herd. It is also zero under automation
+   * without this file knowing anything about that: main.js does not accumulate
+   * stillness under `navigator.webdriver`, and says why at that line.
+   */
+  const STILL_PULL = 0.45;
+
+  /**
+   * @param {object} m       the herd member
+   * @param {object} spec    its species row out of BEASTS
+   * @param {number} toward  bearing to the nearest person, radians. Ignored at
+   *                         `pull` 0, which is every call the old signature made.
+   * @param {number} pull    0..STILL_PULL. How much of the circle to give up.
+   */
+  function graze(m, spec, toward = 0, pull = 0) {
     const about = m.parent ? m.parent.pos : m.anchor;
     const reach = spec.territory * (m.parent ? JUVENILE.territory : 1);
     for (let attempt = 0; attempt < 8; attempt++) {
-      const a = rng() * TAU;
+      let a = rng() * TAU;
+      // Squeeze the uniform circle onto an arc centred on the bearing to the
+      // player. `wrapAngle` puts the offset in (-π, π] first, so scaling it
+      // narrows the cone symmetrically instead of biasing one side of it.
+      if (pull > 0) a = toward + wrapAngle(a - toward) * (1 - pull);
       const r = Math.pow(rng(), 0.5) * reach;
       const x = about.x + Math.cos(a) * r;
       const z = about.z + Math.sin(a) * r;
@@ -3055,7 +3636,9 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       // Close enough to be noticed at all. Past this an animal is a speck in
       // fog for them however directly they are facing it, and holding the
       // recycler on that basis would strand animals nobody can see.
-      if (d > FAR.deer) continue;
+      // `FAR_MAX`, not `FAR.deer` — see the note on it; that key stopped
+      // existing when the deer became a tapir and this test has been dead since.
+      if (d > FAR_MAX) continue;
       // Standing on top of it: no facing test survives a zero-length vector,
       // and somebody that close can see it whichever way they turn.
       if (d < radius + 2) return false;
@@ -3094,7 +3677,53 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     return _eye;
   }
 
-  function updatePerchers(dt, camera, tripLevel) {
+  /**
+   * ==== THE DISSOLVE IS AN OVERRIDE, NOT ANOTHER MULTIPLIER =================
+   *
+   * `tripLevel` is spent everywhere in this file as a factor: boldness times
+   * that, watch duration times that, notice radius times that. The ego-death
+   * envelope is deliberately NOT another one of those, and the reason is what
+   * the phase is.
+   *
+   * At the peak the wood is exaggerated — a deer lets you closer, a stare lasts
+   * four times as long, one bird refuses to leave. All of that is still an
+   * animal deciding something, just at the far end of the dial. Ego death is
+   * not the far end of the dial. What is being reproduced is the moment you
+   * notice that the deer has not moved, and neither has the one behind it, and
+   * every bird in the wood is facing you — an observation about the world
+   * rather than about how frightened anything is. A multiplier cannot produce
+   * that, because a multiplier still leaves each animal rolling its own dice
+   * and the whole content of the effect is that the dice have stopped.
+   *
+   * SO IT IS A THRESHOLD ON A CURVE THAT COMES BACK DOWN. `dissolveAt` is a
+   * raised cosine over the phase — see `trip/state.js` — so it rises through
+   * 0.5, holds above it for a while and falls back through it with no
+   * discontinuity at either end. Above 0.5 nothing leaves. Below it, everything
+   * that was held is released ON THE SAME FRAME, and `updateHerd` spends that
+   * frame: the wood remembers it is afraid of you and the whole herd goes at
+   * once. That release is the moment the feature exists for; the freeze is
+   * setup for it.
+   *
+   * 0.5 IS EXACTLY THE MIDDLE HALF OF THE PHASE, and that is arithmetic rather
+   * than a guess: `0.5 - 0.5cos(2πk)` exceeds 0.5 for k in (0.25, 0.75), which
+   * is 50.0% of the phase measured over ten thousand samples. Because the
+   * cosine is flat at its top the envelope spends most of that half near 1, so
+   * the freeze does not creep in — it is on, and it stays on long enough to
+   * stop being a glitch and start being a fact about the wood.
+   *
+   * IT IS NOT A LUMINANCE EFFECT AND IT IS NOT SCREEN-SPACE. Nothing here
+   * touches a colour, a uniform or a pixel; it changes what state machines
+   * decide. That makes it exempt from both of the laws this project has
+   * deleted effects for breaking, and it is why the whole of it costs two
+   * compares a frame.
+   */
+  const HOLD_LEVEL = 0.5;
+
+  function updatePerchers(dt, camera, tripLevel, dissolve) {
+    /**
+     * Above the threshold every percher holds and faces you. See HOLD_LEVEL.
+     */
+    const held = dissolve > HOLD_LEVEL;
     /**
      * SEAT THE ROSTER ONCE THERE ARE TREES TO SEAT IT IN, AND THIS IS A BUG FIX
      * RATHER THAN A REFINEMENT.
@@ -3279,7 +3908,38 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
          * unmistakably a reaction to you, far enough that you never touch one.
          */
         const startle = 9;
-        if (dist < startle) {
+        /**
+         * NOTHING LEAVES, AND EVERYTHING IS LOOKING AT YOU.
+         *
+         * The first arm rather than a condition inside the startle branch, and
+         * that is the difference between "they will not flush" and the effect
+         * this is for. A bird that merely refuses to flush is still a bird
+         * hopping about and looking wherever it likes until you get within nine
+         * metres of it; what makes the wood wrong is that the ones you are NOT
+         * near have turned round too. So this arm is unconditional on distance:
+         * it takes the whole roster out of the idle branch, which cancels the
+         * random look-about, cancels the voluntary hop, and points every one of
+         * them at the camera.
+         *
+         * ASSIGNED AND NOT DAMPED, unlike the herd's yaw below. A bird's head
+         * IS its body here — there is no neck channel on the flyer — and a real
+         * small bird's turn is a snap, so damping it would produce twenty-six
+         * slow swivels, which reads as machinery. The animal that turns slowly
+         * is the deer.
+         *
+         * The one bird that already did this — `watcher`, above tripLevel 0.3 —
+         * keeps its own branch below and is now simply the first of them rather
+         * than the only one. It is worth keeping separate: the watcher exists
+         * from the PEAK onward, which is minutes before ego death, and it is
+         * what teaches you that a bird can do this at all. Without that lesson
+         * the roster freezing later would read as the game having stopped.
+         *
+         * `sing` still runs below and that is deliberate. A wood of birds that
+         * are all facing you and all still singing is worse than a silent one.
+         */
+        if (held) {
+          p.yaw = Math.atan2(camera.position.x - p.pos.x, camera.position.z - p.pos.z);
+        } else if (dist < startle) {
           /**
            * THE ONE THAT DOES NOT LEAVE.
            *
@@ -3822,9 +4482,13 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
     birdFlight.needsUpdate = true;
   }
 
-  function updateHerd(herd, dt, camera, tripLevel) {
+  function updateHerd(herd, dt, camera, tripLevel, dissolve, stillness) {
     const { spec, members, mesh, gait, tone, tint } = herd;
     let write = 0;
+    /** See HOLD_LEVEL, above `updatePerchers`. */
+    const held = dissolve > HOLD_LEVEL;
+    /** See STILL_PULL, above `graze`. */
+    const pull = STILL_PULL * clamp01(stillness);
 
     for (const m of members) {
       /**
@@ -3860,7 +4524,25 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
        * refuses to end, which is a much more specific and much more disturbing
        * effect than making it glow.
        */
-      const boldness = 1 + tripLevel * 1.6;
+      /**
+       * AND THE SECOND HALF OF STANDING STILL. See the long block above `graze`
+       * for the first, and for why there are exactly two terms and both are
+       * radii.
+       *
+       * 0.5 at full stillness, which takes a tapir's flee radius from 8 m to
+       * 5.3 and an agouti's from 7.5 to 5. That is close enough to be the point
+       * — five metres from a wild animal that has not noticed anything wrong is
+       * the encounter the whole file is built around — and it is well short of
+       * the 2.5 or so at which the body's own collider would start shoving the
+       * animal about, which would be a much worse bug than a shy deer.
+       *
+       * ADDED INTO `boldness` RATHER THAN GIVEN ITS OWN DIVISOR, so it composes
+       * with the trip and with the animal's nerve the way everything else here
+       * does: at full stillness during a trip a heavy stag is at
+       * `8 / (1 + 1.6 + 0.5) / 1.5 = 1.7 m`, which is inside touching distance,
+       * and that is the correct answer for both of those states at once.
+       */
+      const boldness = 1 + tripLevel * 1.6 + stillness * 0.5;
       const noticeR = spec.notice * (1 + tripLevel * 0.5);
       /**
        * AND THE ANIMAL'S OWN NERVE, WHICH IS WHERE ITS SIZE AND ITS SEX ARRIVE.
@@ -3924,11 +4606,147 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
         }
       }
 
+      /**
+       * ==== AND NEITHER DOES THE HERD ==========================================
+       *
+       * The percher half of this is at the top of `updatePerchers`; see
+       * HOLD_LEVEL for why the dissolve is an override and not a factor.
+       *
+       * PUT INTO `watch` RATHER THAN GIVEN A SIXTH STATE, and that is the whole
+       * implementation. `watch` already means "stopped, body still, head round
+       * on whoever it noticed": `faceHead` swings the neck to its 100° limit and
+       * then turns the animal's whole body after it at 1.2 rad/s, the speed
+       * damps to nothing, `expression` puts the ears up and the tail down. Every
+       * one of those is exactly what is wanted, already tuned, already on the
+       * wire — `yaw`, `look` and `lookPitch` are three of the eight fields a
+       * guest reads — so a room watches the same herd turn round rather than
+       * each machine inventing its own. A new state would have had to
+       * re-implement all of it and would have needed a slot in `STATES`, which
+       * is an index that travels.
+       *
+       * WHAT IT LEAVES OUT: the three exits from `watch` are suppressed below,
+       * so it neither flees, nor decides you are boring, nor goes back to
+       * grazing. It simply stays.
+       *
+       * `climb` IS EXEMPT, and this is a correctness guard rather than a taste
+       * one. A squirrel three metres up a trunk has its position written FROM
+       * the trunk every frame by that case; taking it out of `climb` hands it to
+       * the `m.pos.y = heightAt(...)` line below and drops it to the floor
+       * instantly. It finishes its climb — two and a half seconds — and joins
+       * the rest when the recycler puts it back on the ground.
+       */
+      if (held && m.state !== 'watch' && m.state !== 'climb') {
+        m.state = 'watch';
+        m.trunk = null;
+      }
+
+      /**
+       * ==== AND THEN, ON ONE FRAME, EVERYTHING GOES ============================
+       *
+       * `released` is true on the single frame the envelope falls back through
+       * the threshold, and this is what the freeze was setup for. Twenty-three
+       * animals that have been standing motionless facing you for a minute and a
+       * half all break at the same instant, in twenty-three different directions,
+       * and — because the bark fires off the transition INTO `bolt` at the bottom
+       * of this loop, on every machine — every one of them barks.
+       *
+       * A HARD BOLT AND NOT A WALK, deliberately, and the numbers are lifted from
+       * the `hard` branch in `watch` rather than invented: `territory * 3.2` for
+       * the distance and 2.2–4.5 seconds of running. This is the one moment in
+       * the file where every animal should take the option the boldest of them
+       * normally takes, because the thing that changed is not how close you got,
+       * it is that the wood has remembered what you are.
+       *
+       * IT IS THE HOST'S, like every other decision in this block, so it travels
+       * as twenty-three state changes on the next tick and a guest's herd goes
+       * a third of a second later — which is `FAUNA_LAG_MS` and is invisible.
+       *
+       * `m.trunk` is left null rather than re-running the capuchin's tree lookup:
+       * a monkey that has just spent ninety seconds staring at you does not have
+       * a route planned, and the scatter is better here than the disappearing
+       * act.
+       */
+      if (released) {
+        m.state = 'bolt';
+        m.timer = rngRange(rng, 2.2, 4.5);
+        fleeFrom(m, eye, spec.territory * 3.2);
+      }
+
+      /**
+       * ==== THE CROSSING. ONE DAWN IN FOUR, AND YOU HAVE TO BE THERE ==========
+       *
+       * The complaint this answers is that nothing in this world is rare. Every
+       * animal event here is a function of how close you are standing, which
+       * means every one of them is available on demand: walk at a deer and it
+       * goes, every time, for ever. Nothing is ever the case that you had to be
+       * somewhere at a particular time to see.
+       *
+       * So: on about one world day in four, for the ninety minutes after sunrise,
+       * the largest herd in the wood WALKS. All of it, one bearing, together, at
+       * a walk and not a bolt — past you if you happen to be standing there, and
+       * not at all if you are not. Twelve hares crossing a clearing in file at
+       * first light is a thing you tell somebody about; it is also completely
+       * invisible if you are asleep, which is the point.
+       *
+       * DERIVED FROM THE CLOCK AND THE SEED AND NOTHING ELSE, so two people in
+       * one room get the same answer without a byte on the wire — `worldDay` and
+       * `dayHash` above, and see their notes for why the day index has to be
+       * re-derived rather than taken from `dayPhase`. It is also why it is a
+       * hash and not an `rng()` roll: a stream would give a different answer
+       * depending on how many times anything else had drawn from it that
+       * session, and the two clients do not draw in lockstep.
+       *
+       * A QUARTER, AND NOT EVERY DAWN. A world day is twenty real minutes and
+       * dawn is about seventy-five seconds of it, so every dawn would be an
+       * event you could sit and wait for — a timetable, which is the opposite of
+       * rare. A quarter puts it at roughly once every eighty minutes of play,
+       * which is often enough that two people who play together will both have
+       * seen one and seldom enough that neither can produce it on demand.
+       *
+       * THE LARGEST HERD BY `members.length` AND NEVER BY NAME. Three tapirs
+       * ambling in the same direction is not a crossing; twelve agoutis is. The
+       * rainforest and the taiga have different rosters and a third land will
+       * have another, so the herd is chosen by counting rather than by naming
+       * one — a hard-coded species has been the bug in this project twice.
+       *
+       * SEVENTY METRES AHEAD, REWRITTEN EVERY FRAME, so nothing in `walk` can
+       * turn them: that case re-aims at `fleeFrom` when the target is reached
+       * and at the dam for a juvenile, and neither can fire against a target
+       * they never arrive at. `m.timer` is held at twelve seconds for the same
+       * reason and is what ends the crossing gracefully — when the dawn window
+       * shuts, the herd walks twelve more seconds and puts its head down.
+       *
+       * It cannot fire under automation: `worldDay` returns -1 there and says
+       * why at that line.
+       */
+      if (crossing !== null && herd === thePassing && (m.state === 'graze' || m.state === 'watch')) {
+        m.state = 'walk';
+        m.timer = 12;
+        m.target.set(
+          m.pos.x + Math.sin(crossing) * 70,
+          m.pos.y,
+          m.pos.z + Math.cos(crossing) * 70
+        );
+      }
+
       switch (m.state) {
         case 'graze': {
           m.timer -= dt;
           if (m.timer <= 0) {
-            graze(m, spec);
+            /**
+             * `atan2(dz, dx)` AND NOT `atan2(dx, dz)`, WHICH IS THE ONE TRAP IN
+             * THIS FEATURE.
+             *
+             * Every other bearing in this file is a YAW — `atan2(dx, dz)`,
+             * because the models face +Z and `approach` steers with
+             * `sin(yaw), cos(yaw)`. `graze` is the exception: it lays its
+             * candidate out with `cos(a), sin(a)`, i.e. the mathematical
+             * convention, so a yaw handed to it is reflected about the
+             * 45° line. The symptom would not be an error, it would be a herd
+             * that drifts consistently toward somewhere that is not you, which
+             * is very hard to see and impossible to unsee.
+             */
+            graze(m, spec, Math.atan2(eye.z - m.pos.z, eye.x - m.pos.x), pull);
             m.timer = rngRange(rng, 3, 11);
           }
           /**
@@ -3971,6 +4789,17 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
            */
           faceHead(m, eye, dt);
           m.timer -= dt;
+          /**
+           * THE THREE EXITS, ALL SHUT. See the block above the switch: this is
+           * the half of the ego-death override that makes it an override and not
+           * a long timer. Every one of the arms below is a way for an animal to
+           * stop watching you — it wanders out of range, it runs, or it decides
+           * you were nothing — and the whole effect is that none of them happen.
+           * The timer keeps counting down into the negative and is harmless
+           * there; the release above is what ends this, and it does it by
+           * assigning the state outright.
+           */
+          if (held) break;
           if (reactDist > noticeR * 1.35) {
             m.state = 'graze';
             m.timer = 1;
@@ -4548,11 +5377,17 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
      * @param {object} p
      * @param {THREE.Camera} p.camera
      * @param {number} p.tripLevel  0..1
+     * @param {number} [p.dissolve] The ego-death envelope, 0..1 — `dissolveAt`
+     *                              in trip/state.js, a raised cosine over that
+     *                              one phase and zero everywhere else. It is an
+     *                              OVERRIDE and not a second intensity; see
+     *                              HOLD_LEVEL for what it does and why it is
+     *                              not simply more `tripLevel`.
      * @param {number} [p.timeOfDay] 0 = midnight, 0.5 = noon. Defaults to the
      *                               world clock, which is what the game passes
      *                               by passing nothing.
      */
-    update(dt, { camera, tripLevel = 0, timeOfDay = null } = {}) {
+    update(dt, { camera, tripLevel = 0, dissolve = 0, timeOfDay = null, stillness = 0 } = {}) {
       if (!camera) return;
       elapsed += dt;
 
@@ -4653,13 +5488,60 @@ export function buildFauna({ scene, seed = 'grove-01', audio = null } = {}) {
       dusk.x = damp(dusk.x, daylight * (1 + tripLevel * 0.6), 0.2, dt);
       dusk.y = damp(dusk.y, dark, 0.2, dt);
 
-      updatePerchers(dt, camera, tripLevel);
-      for (const herd of herds) updateHerd(herd, dt, camera, tripLevel);
+      /**
+       * THE EDGE, AND IT IS THE ONLY PIECE OF MEMORY THIS FEATURE HAS.
+       *
+       * `dissolve` is a raised cosine, so it crosses the threshold exactly twice
+       * per ego death: once going up, which is where the wood freezes, and once
+       * coming down, which is where it all goes at once. A function of this
+       * frame's value can see the first and not the second — "below the
+       * threshold" is also true of every frame of every sober minute — so the
+       * one bit of last frame's answer is kept.
+       *
+       * `released` is written here and cleared after the herd loop, so it is
+       * true for exactly one frame no matter how many herds read it, and
+       * cannot survive into the next.
+       */
+      const held = dissolve > HOLD_LEVEL;
+      released = heldWood && !held;
+      heldWood = held;
+
+      /**
+       * IS TODAY THE DAY, AND IS IT DAWN. Two hash evaluations and a table
+       * lookup, once a frame. See the crossing block in `updateHerd`.
+       *
+       * `dawnAt` is 1 for the ninety minutes after sunrise and 0 the rest of the
+       * day; 0.55 catches the flat top of that curve and misses its shoulders,
+       * so the herd is already moving by the time there is enough light to watch
+       * it rather than setting off in the dark. It reads the same `phase` the
+       * fireflies do rather than calling the clock a second time — one clock per
+       * frame, for the same reason the file takes `timeOfDay` as an override at
+       * all: a script photographing an hour must be able to move all of it at
+       * once.
+       */
+      const day = worldDay();
+      crossing =
+        day >= 0 && dawnAt(phase) > 0.55 && dayHash(seed, day, 17) < CROSSING_CHANCE
+          ? dayHash(seed, day, 31) * TAU
+          : null;
+
+      updatePerchers(dt, camera, tripLevel, dissolve);
+      for (const herd of herds) updateHerd(herd, dt, camera, tripLevel, dissolve, stillness);
+      released = false;
 
       wildlife?.update(dt, {
         tripLevel,
         dark,
         listener: camera.position,
+        /**
+         * HOW LONG THE PLAYER HAS BEEN STANDING STILL, 0..1, accumulated in
+         * main.js because only that file has the body's speed. `wildlife.js`
+         * spends it on the chatter's radius and on weighting the roster toward
+         * species that do not throw far — see the long block on `stillness` in
+         * that file's constructor. It changes no interval and it is exactly the
+         * identity at zero.
+         */
+        stillness,
       });
     },
     /**

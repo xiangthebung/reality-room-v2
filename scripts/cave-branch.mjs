@@ -184,6 +184,51 @@ for (const seed of SEEDS) {
           const mainFloor = parent.y[base] - parent.r[base] * parent.f[base];
           const brFloor = br.y[0] - br.r[0] * br.f[0];
 
+          /**
+           * …AND THE SAME TWO NUMBERS AT THE OTHER END, WHERE A CLOSURE HAS A
+           * SECOND OPENING AND NOTHING HAS EVER LOOKED AT IT.
+           *
+           * This gate enumerated one hole per passage, from `br.base`, because
+           * until loop closure that was all there was: every lead ended in a
+           * `closeEnd` dome. A looping branch is welded into another passage's
+           * wall at both ends, so half of its openings were ungated — and an
+           * opening a body cannot get through is not a circuit, it is a window
+           * with a passage behind it, which is the worst possible outcome for a
+           * feature whose whole point is that you can come back a different way.
+           *
+           * Measured statically rather than driven. The walk below seats at the
+           * BASE and holds W, which is the right test for "can you get in"; the
+           * far weld is not a place a player arrives at from outside, it is a
+           * place they arrive at having already walked the loop, so what matters
+           * there is the aperture and the threshold step and not whether a body
+           * bounces off it.
+           */
+          let loop = null;
+          if (br.loopEnd && br.loopToIndex >= 0) {
+            const host = paths[br.loopToIndex];
+            const lr = br.loopRing;
+            const lR = host.r[lr];
+            const lSide = br.loopSide ?? 1;
+            const lWallY = (phi) => {
+              const q = lSide > 0 ? phi : Math.PI - phi;
+              return Math.max(-host.f[lr], host.t[lr] * Math.sin(q)) * lR;
+            };
+            const lPhiC = lSide > 0 ? br.loopPhi : Math.PI - br.loopPhi;
+            const e = br.x.length - 1;
+            loop = {
+              to: br.loopToIndex,
+              ring: lr,
+              holeH: lWallY(lPhiC + br.loopSpan) - lWallY(lPhiC - br.loopSpan),
+              holeW: 2 * br.loopRings * STEP,
+              boreH: br.r[e] * (br.t[e] + br.f[e]),
+              boreW: 2 * br.r[e] * br.w[e],
+              step:
+                br.y[e] -
+                br.r[e] * br.f[e] -
+                (host.y[lr] - host.r[lr] * host.f[lr]),
+            };
+          }
+
           // The worst section anywhere a body is allowed to be, and where.
           let minH = Infinity;
           let minHAt = 0;
@@ -382,6 +427,7 @@ for (const seed of SEEDS) {
             minHAt,
             minW,
             step: brFloor - mainFloor,
+            loop,
             mainR: parent.r[base],
             brR: br.r[0],
             brF: br.f[0],
@@ -420,6 +466,14 @@ for (const seed of SEEDS) {
           `${r.mainR.toFixed(1).padStart(7)}` +
           `${String(r.lit).padStart(8)}${r.deepest.toFixed(0).padStart(8)}m${String(r.worstStuck).padStart(7)}`
       );
+      if (r.loop) {
+        console.log(
+          `        LOOP: rejoins path ${r.loop.to} at ring ${r.loop.ring} — ` +
+            `hole ${r.loop.holeH.toFixed(1)}x${r.loop.holeW.toFixed(1)} m, ` +
+            `bore ${r.loop.boreH.toFixed(1)}x${r.loop.boreW.toFixed(1)} m, ` +
+            `threshold ${(r.loop.step >= 0 ? '+' : '') + r.loop.step.toFixed(2)} m`
+        );
+      }
       if (r.deepest < IN) {
         console.log(
           `        stopped: ` +
@@ -440,7 +494,19 @@ for (const seed of SEEDS) {
   }
 }
 
+/**
+ * How tall a closure's far opening has to be for the circuit to exist, in metres.
+ *
+ * Deliberately under MIN_HEAD (2.15) rather than at it. `caveSample` guarantees
+ * the player MIN_HEAD by inflating its answer rather than the rock, so the drawn
+ * aperture at a weld is allowed to be a little tighter than the headroom the
+ * body is given, and a duck-under is a real thing a cave does. What this catches
+ * is the opening that is not an opening: a window a body cannot pass, which
+ * turns a loop back into a dead end you can see through.
+ */
+const LOOP_HOLE = 1.7;
 const blocked = rows.filter((r) => r.deepest < IN);
+const shutLoops = rows.filter((r) => r.loop && r.loop.holeH < LOOP_HOLE);
 console.log(
   `\n${rows.length} branches over ${SEEDS.length} seeds: ` +
     `${rows.length - blocked.length} entered, ${blocked.length} not.  ` +
@@ -453,6 +519,24 @@ if (blocked.length) {
   console.log(
     `FAIL: ${blocked.length} branch(es) not enterable: ` +
       blocked.map((b) => `${b.seed} k=${b.k} br${b.pi} (${b.deepest.toFixed(0)} m of ${b.len.toFixed(0)})`).join(', ')
+  );
+  process.exitCode = 1;
+}
+const looped = rows.filter((r) => r.loop);
+console.log(
+  `${looped.length} of ${rows.length} passages close a loop` +
+    (looped.length
+      ? `; mean far aperture ${(looped.reduce((s, r) => s + r.loop.holeH, 0) / looped.length).toFixed(1)} m tall, ` +
+        `worst threshold ${looped
+          .reduce((w, r) => (Math.abs(r.loop.step) > Math.abs(w) ? r.loop.step : w), 0)
+          .toFixed(2)} m`
+      : '')
+);
+if (shutLoops.length) {
+  console.log(
+    `FAIL: ${shutLoops.length} closure(s) whose far opening is under ${LOOP_HOLE} m tall — ` +
+      `a circuit you cannot walk is a dead end you can see through: ` +
+      shutLoops.map((b) => `${b.seed} k=${b.k} br${b.pi} (${b.loop.holeH.toFixed(2)} m)`).join(', ')
   );
   process.exitCode = 1;
 }

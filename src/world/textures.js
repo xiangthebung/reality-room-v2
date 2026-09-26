@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { TAU, makeRng, rngRange } from '../core/util.js';
+import { currentLand } from './lands/index.js';
 
 /**
  * Procedurally drawn textures.
@@ -34,6 +35,26 @@ function finish(c, { srgb = true, aniso = 8, wrap = false } = {}) {
 function memo(key, build) {
   if (!cache.has(key)) cache.set(key, build());
   return cache.get(key);
+}
+
+/**
+ * DOES THE FOLIAGE IN THIS WORLD HAVE SNOW ON IT.
+ *
+ * Read through a function rather than latched into a module constant, for the
+ * same reason atmosphere.js reads `currentLand()` at build time rather than at
+ * import time: the land is decided from the seed prefix before anything is
+ * built, but module evaluation order is not something this file gets to have an
+ * opinion about, and one property read is not worth a load-order rule.
+ *
+ * It is the LAND'S OWN `weather` field and not a second switch. taiga.js
+ * already declares `weather: 'snow'` and atmosphere.js already turns that into
+ * falling snow and a snow palette on the ground; a third place deciding
+ * independently what counts as winter is how a world ends up with snow in the
+ * air, snow on the floor and green trees, which is exactly the state this
+ * function exists to get out of.
+ */
+function snowLand() {
+  return currentLand().weather === 'snow';
 }
 
 /**
@@ -101,7 +122,13 @@ export function leafCluster({
   seed = 'leaf',
   adorn = null,
 } = {}) {
-  return memo(`leaf:${key ?? seed}`, () => {
+  const snowy = snowLand();
+  // The land goes in the KEY as well as in the drawing. A land is fixed for the
+  // life of a page, so today the two variants can never both be wanted — but a
+  // memo whose output depends on something outside its key is a cache that
+  // silently serves the wrong picture the first time that stops being true, and
+  // the cost of not having that bug is nine characters.
+  return memo(`leaf:${key ?? seed}${snowy ? ':snow' : ''}`, () => {
     const c = canvas(size);
     const g = c.getContext('2d');
     const rng = makeRng(seed);
@@ -608,6 +635,88 @@ export function leafCluster({
       }
     }
 
+    /**
+     * ==== SNOW ON THE BRANCHES, AND IT MAY NOT COST ONE CARD ================
+     *
+     * The winter wood had snow on the ground, snow in the air and none on the
+     * trees, which is the first thing anybody looking at a photograph of it
+     * says. The tempting fixes are all card fixes — a white shell over each
+     * crown, a second layer of foliage in white, a capped quad on every bough —
+     * and every one of them is forbidden by the same measurement this file
+     * keeps quoting: A SOLID CANOPY IS CHEAPER THAN A SEE-THROUGH ONE, DENSER
+     * TEXTURES ARE FREE, MORE CARDS ARE NOT. Raising a leaf texture's opaque
+     * coverage from 21% to 41% with card counts held fixed took a station from
+     * 3.02 ms to 2.34 ms; adding cards goes the other way and takes the shadow
+     * pass with it, which is already 84% alpha-tested leaf fill.
+     *
+     * So this is paint on the canvas that is already being drawn, and it is
+     * `source-atop`, which is the whole trick. That operator composites the new
+     * paint ONLY where the destination is already opaque AND LEAVES THE
+     * DESTINATION ALPHA EXACTLY AS IT WAS. Not approximately: the alpha channel
+     * is not a term in the source-atop formula at all except as the mask. So
+     * the silhouette is bit-identical, the `alphaTest` discard rate does not
+     * move by one texel, the shadow pass does not notice, and `featherEdges`
+     * below still has the same job to do. The entire cost of snow on every
+     * conifer in the world is one gradient fill and sixteen radial blobs, once,
+     * at load, on a canvas that already exists.
+     *
+     * TWO MARKS, BECAUSE ONE IS A GRADIENT AND A GRADIENT IS NOT SNOW.
+     *
+     *   THE LOAD is the linear wash: pale at the top of the card, gone by 82%
+     *   of the way down. Snow settles on upward-facing surfaces and a canopy
+     *   card stands in for a clump of foliage seen from the side, so "up" on
+     *   the card is "up" in the world. On its own it reads as a lighting
+     *   gradient rather than as a substance.
+     *
+     *   THE CLUMPS are what make it snow. Sixteen soft discs biased into the
+     *   top two thirds, at radii from 4% to 13% of the card, so the load has
+     *   lumps sitting in it and its lower boundary is ragged instead of level.
+     *   A conifer holds snow in pads where a spray forks and drops it
+     *   everywhere else, and a ragged edge is the only cue that separates the
+     *   two readings.
+     *
+     * HEAVIER ON NEEDLES. A needle spray is a horizontal shelf and a broadleaf
+     * clump is not; 0.82 against 0.58 at the top of the wash is that, fitted by
+     * eye rather than measured. Both are under 1 so the darkest needle marks
+     * still show through as texture rather than being painted out — a card that
+     * goes uniformly white is a white card, and a canopy of those is fog.
+     *
+     * IT IS DELIBERATELY NOT KEYED TO THE HOUR OR THE WEATHER. Falling snow
+     * comes and goes on `precipAt`; snow LYING on a branch is the standing
+     * condition of the land, the same argument taiga.js makes for its floor
+     * palette. Making it dynamic would mean regenerating this canvas at run
+     * time, which is the one thing a load-time texture may never do.
+     */
+    if (snowy) {
+      const previous = g.globalCompositeOperation;
+      g.globalCompositeOperation = 'source-atop';
+      g.globalAlpha = 1;
+      const top = needle ? 0.82 : 0.58;
+      const load = g.createLinearGradient(0, 0, 0, size * 0.82);
+      load.addColorStop(0, `rgba(238, 245, 253, ${top})`);
+      load.addColorStop(0.45, `rgba(228, 238, 250, ${top * 0.40})`);
+      load.addColorStop(1, 'rgba(216, 230, 246, 0)');
+      g.fillStyle = load;
+      g.fillRect(0, 0, size, size);
+      for (let i = 0; i < 16; i++) {
+        // Biased upward by squaring a uniform: y = size * u^2 * 0.7 puts two
+        // thirds of the pads in the top third of the card, which is where the
+        // wash they are meant to be lumps in actually is.
+        const bx = rng() * size;
+        const by = rng() * rng() * size * 0.7;
+        const br = size * rngRange(rng, 0.04, 0.13);
+        const pad = g.createRadialGradient(bx, by, 0, bx, by, br);
+        pad.addColorStop(0, `rgba(246, 250, 255, ${top * 0.9})`);
+        pad.addColorStop(0.6, `rgba(234, 243, 253, ${top * 0.45})`);
+        pad.addColorStop(1, 'rgba(228, 238, 250, 0)');
+        g.fillStyle = pad;
+        g.beginPath();
+        g.arc(bx, by, br, 0, TAU);
+        g.fill();
+      }
+      g.globalCompositeOperation = previous;
+    }
+
     // Belt and braces: the bound above is exact, this only ever touches pixels
     // the scatter already left empty.
     featherEdges(g, size, size, size * 0.06);
@@ -791,55 +900,422 @@ export function fernFrond({ key = 'fern', hue = 104, sat = 38, light = 26, seed 
 }
 
 /**
- * Bark. Tileable vertical fissures built from stacked, warped strips.
+ * ============================ BARK ==========================================
  *
- * Wrapped in both directions and used with a repeat, so a tall trunk gets many
- * metres of texture out of a 256 px tile.
+ * TRUNKS ARE 81% OF THE TRIANGLES IN THIS WORLD, so this is the single largest
+ * surface area there is and the highest-leverage texture in the project. It was
+ * also the worst: the previous drawing was 190 CONTINUOUS TOP-TO-BOTTOM strokes
+ * whose lightness ran from 0.45x to 1.70x the species' base, which on the
+ * cecropia (base 58%) meant streaks at 99% lightness — a high-contrast
+ * near-vertical smear with pale, almost white-green highlights. It read as
+ * galvanised steel or painted PVC pipe. Three separate things were wrong and
+ * all three are fixed here.
+ *
+ *
+ * 1. THE CONTRAST WAS BACKWARDS. Wood is LOW contrast.
+ *
+ * Most Neotropical boles are smooth to finely fissured mid-to-dark grey-brown,
+ * and what variation there is comes from LICHEN, MOSS AND ALGAL FILM rather
+ * than from deep grooves — a rainforest trunk is a substrate for other
+ * organisms far more than it is a sculpture. The mark lightness is now
+ * `light * (1 + d * u)` with `u` in [-1, +0.5] and `d` a per-style depth of
+ * 0.16-0.30, so the range on a cecropia is 49-63% instead of 26-99%. The
+ * asymmetry is deliberate and physical: a fissure is a shadow and can be much
+ * darker than the face, but the ridge between two fissures is the SAME wood at
+ * a slightly better angle and cannot be much brighter. Every "highlight" in the
+ * old drawing was brighter than any real bark ever is.
+ *
+ * The mean of the multiplier is 1 - 0.25d, so this also takes 4-8% off the
+ * trunks' average albedo. That is the right direction — nothing here is
+ * allowed to brighten the world — and it is small enough not to disturb the
+ * emissive ratio tree-adorn.js depends on (bark 0.05-0.10 linear against a
+ * near-1.0 glow band).
+ *
+ *
+ * 2. THE VERTICALITY WAS UNBROKEN, which is what "extruded" means.
+ *
+ * A stroke that runs the full height of a tiling canvas repeats forever up the
+ * trunk as one unbroken line. That is not a bark feature, it is an extrusion
+ * artefact, and it is the single strongest cue that a surface came out of a
+ * machine. Fissures are now SEGMENTS — 5-42% of the tile depending on species,
+ * with round caps, wrapped across both edges — so the vertical grain is
+ * interrupted and irregular. Each is drawn twice: a dark groove and a narrower,
+ * fainter lip beside it, which is the whole of what makes a groove look like a
+ * groove without a normal map.
+ *
+ *
+ * 3. FIVE SPECIES SHARED ONE LOOK, differing only in one fill colour.
+ *
+ * `trees.js` has carried per-species `bark: {hue, sat, light}` all along and
+ * this drawing threw away everything except the numbers. It now takes `key` —
+ * which the caller already passes as the species name — and picks a STRUCTURE
+ * as well, because the difference between a palm and a kapok is not a hue:
+ *
+ *   palm      stacked horizontal frond scars, few fissures. The tile is 2.857 m
+ *             of trunk over 256 px (the trunk's v is `running * 0.35`), so
+ *             89.6 px per metre and a 15 px scar pitch is 16.7 cm, which is
+ *             what a real palm leaves behind. This is the cheapest strong
+ *             silhouette cue in the file: rings at a regular pitch are
+ *             instantly a monocot and nothing else.
+ *   cecropia  smooth, pale, conspicuously RINGED with leaf scars at a 30 px /
+ *             33 cm internode. Its bark is the world's landmark — the palest
+ *             thing in the wood by a wide margin — and it now says so with
+ *             structure instead of only with lightness.
+ *   kapok     smooth grey-green with CONICAL SPINES. A ceiba spine is 2-4 cm
+ *             at the base, which is 2-4 px here, so they are drawn as a dense
+ *             stud field: a bumpy bole at 2 m and a fine mottle at 30 m, which
+ *             is exactly the right pair of readings.
+ *   fig       smoothest of the five, mottled grey, heavy film and almost no
+ *             fissure. A strangler's bole is a fused mass, not a grooved one.
+ *   brownea   the generic fissured bark, and the default for any species not
+ *             named here — an unknown tree gets a plain wood rather than
+ *             nothing.
+ *
+ * WHAT WAS REJECTED. Per-species canvases at a larger size, so a palm could
+ * have finer scars: five 512² canvases instead of five 256² ones is 4x the
+ * texture memory and 4x the build for detail that is past the mip chain at any
+ * range a player stands. And a normal map, which is the "correct" way to make a
+ * fissure look like a fissure: it doubles the fetches on 81% of the triangles
+ * in the frame, and the budget note is that Ultra stands at 4.18 ms against a
+ * 4.17 ms target. Painting the lip is free.
+ *
+ * THE TILE WRAPS IN BOTH AXES NOW, which it did not before. The trunk's u goes
+ * once around the circumference, so px 0 and px 256 are the same point on the
+ * tree and every mark that overhangs an edge has to reappear on the other one
+ * or there is a seam down every trunk in the world. `tileWrap` does it for four
+ * comparisons a mark.
+ */
+
+/** Per-species bark structure. Anything not listed falls back to `brownea`. */
+const BARK_STYLES = {
+  // pitch/shelf are in tile pixels; 89.6 px is one metre of trunk.
+  palm: {
+    fissure: 30,
+    len: [0.08, 0.2],
+    depth: 0.26,
+    ring: { pitch: 15, jitter: 0.35, depth: 0.34, width: 2.6, shelf: 5 },
+    lenticel: 20,
+    spine: 0,
+    film: 12,
+    speck: 260,
+  },
+  cecropia: {
+    fissure: 12,
+    len: [0.05, 0.12],
+    depth: 0.16,
+    ring: { pitch: 30, jitter: 0.22, depth: 0.26, width: 1.8, shelf: 0 },
+    lenticel: 30,
+    spine: 0,
+    film: 22,
+    speck: 200,
+  },
+  kapok: {
+    fissure: 22,
+    len: [0.12, 0.3],
+    depth: 0.2,
+    ring: null,
+    lenticel: 46,
+    spine: 130,
+    film: 26,
+    speck: 320,
+  },
+  fig: {
+    fissure: 18,
+    len: [0.09, 0.24],
+    depth: 0.18,
+    ring: null,
+    lenticel: 34,
+    spine: 0,
+    film: 30,
+    speck: 300,
+  },
+  brownea: {
+    fissure: 62,
+    len: [0.16, 0.42],
+    depth: 0.3,
+    ring: null,
+    lenticel: 70,
+    spine: 0,
+    film: 16,
+    speck: 340,
+  },
+};
+
+/**
+ * Draw a mark, and draw it again across whichever edges it overhangs.
+ *
+ * The same two-comparison trick `forestFloor` uses: the nine-copy version is
+ * nine times the work for a mark in the middle, which is most of them.
+ */
+function tileWrap(size, x, y, reach, draw) {
+  for (let dx = -1; dx <= 1; dx++) {
+    if (dx === -1 && x + reach < size) continue;
+    if (dx === 1 && x - reach > 0) continue;
+    for (let dy = -1; dy <= 1; dy++) {
+      if (dy === -1 && y + reach < size) continue;
+      if (dy === 1 && y - reach > 0) continue;
+      draw(x + dx * size, y + dy * size);
+    }
+  }
+}
+
+/**
+ * Paint one tileable bark square into an existing 2D context.
+ *
+ * Separated from `barkTexture` because the live consumer is `trunkAtlas` in
+ * tree-adorn.js, which needs the tile stamped into a sub-rect of a wider canvas
+ * beside its colour strip and so cannot use a finished texture. That file used
+ * to hold a VERBATIM COPY of this drawing — the two were edited apart at least
+ * once already, and a duplicated 40-line procedural texture is a bug waiting
+ * for whoever fixes only one of them.
+ *
+ * `lichen` is off for that caller only: tree-adorn draws its own pale crust
+ * pass after this returns, and its note explains why that half must go LIGHTER
+ * than the bark. The dark algal film below is the other half and is new — a
+ * rainforest trunk is stained black-green with algae wherever water runs down
+ * it, and nothing in this project drew that at all.
+ */
+export function paintBark(
+  g,
+  size,
+  { key = 'bark', hue = 26, sat = 22, light = 22, seed = 'bark', lichen = true } = {}
+) {
+  const rng = makeRng(seed);
+  const style = BARK_STYLES[key] ?? BARK_STYLES.brownea;
+
+  g.fillStyle = `hsl(${hue} ${sat}% ${light}%)`;
+  g.fillRect(0, 0, size, size);
+
+  const prevCap = g.lineCap;
+  const prevJoin = g.lineJoin;
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+
+  // ---- fissures: finite segments, a groove and a lip ------------------------
+  for (let i = 0; i < style.fissure; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const len = size * rngRange(rng, style.len[0], style.len[1]);
+    const w = rngRange(rng, 1, 4.5);
+    const d = style.depth * rngRange(rng, 0.55, 1.15);
+    const steps = Math.max(2, Math.round(len / 12));
+    const drift = [];
+    let dx = 0;
+    for (let s = 0; s <= steps; s++) {
+      drift.push(dx);
+      dx += rngRange(rng, -2, 2);
+    }
+    const grooveA = rngRange(rng, 0.22, 0.55);
+    const lipA = rngRange(rng, 0.1, 0.28);
+    const reach = len + Math.abs(dx) + w * 2;
+    tileWrap(size, x, y, reach, (px, py) => {
+      for (const [off, width, alpha, mul, dh] of [
+        [0, w, grooveA, 1 - d, -4],
+        [w * 0.75, w * 0.5, lipA, 1 + d * 0.5, 3],
+      ]) {
+        g.strokeStyle = `hsla(${hue + dh} ${sat}% ${light * mul}% / ${alpha})`;
+        g.lineWidth = width;
+        g.beginPath();
+        for (let s = 0; s <= steps; s++) {
+          const sx = px + off + drift[s];
+          const sy = py + (len * s) / steps;
+          if (s === 0) g.moveTo(sx, sy);
+          else g.lineTo(sx, sy);
+        }
+        g.stroke();
+      }
+    });
+  }
+
+  /**
+   * The dark algal/moss film. Drawn OVER the fissures, because a stain grows on
+   * a surface after the surface exists, and squashed in y because water runs
+   * down a trunk and so does everything living on one.
+   *
+   * Low alpha and soft-edged for the reason tree-adorn's lichen note gives: a
+   * hard-edged patch on a tiling texture is a shape you learn, and you then see
+   * it on nine thousand trunks.
+   */
+  for (let i = 0; i < style.film; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const r = rngRange(rng, 12, 46);
+    const ry = r * rngRange(rng, 0.55, 0.95);
+    const fh = rngRange(rng, 96, 142);
+    const fl = light * rngRange(rng, 0.7, 0.9);
+    tileWrap(size, x, y, r, (px, py) => {
+      const grad = g.createRadialGradient(px, py, 0, px, py, r);
+      grad.addColorStop(0, `hsla(${fh} ${sat + 8}% ${fl}% / 0.13)`);
+      grad.addColorStop(0.55, `hsla(${fh} ${sat + 8}% ${fl}% / 0.075)`);
+      grad.addColorStop(1, `hsla(${fh} ${sat + 8}% ${fl}% / 0)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.ellipse(px, py, r, ry, 0, 0, TAU);
+      g.fill();
+    });
+  }
+
+  /**
+   * Leaf and frond scars — the horizontal structure the old drawing had none of
+   * and the reason a palm now looks like a palm.
+   *
+   * Full width, so they wrap in x for free, with a sine sag whose period is
+   * exactly the tile so it wraps too. The sag is 1-3 px and it exists only to
+   * stop a scar being a ruler line: a real scar on an unrolled cylinder IS
+   * straight, but a perfectly straight axis-aligned line is the signature of a
+   * generated texture that this file has already had to remove once (the
+   * lenticel rectangles below).
+   *
+   * `shelf` is the palm's alone: under each scar a soft gradient band, which is
+   * the remains of the frond base rather than a line. It is what separates
+   * "stacked scars" from "hoops".
+   */
+  if (style.ring) {
+    const { pitch, jitter, depth, width, shelf } = style.ring;
+    for (let y = rng() * pitch; y < size; y += pitch * (1 + rngRange(rng, -jitter, jitter))) {
+      const sag = rngRange(rng, 1, 3);
+      const phase = rng() * TAU;
+      const line = (yy, off, lw, mul, alpha, dh) => {
+        g.strokeStyle = `hsla(${hue + dh} ${sat}% ${light * mul}% / ${alpha})`;
+        g.lineWidth = lw;
+        g.beginPath();
+        for (let px = 0; px <= size; px += 16) {
+          const py = yy + off + Math.sin((px / size) * TAU + phase) * sag;
+          if (px === 0) g.moveTo(px, py);
+          else g.lineTo(px, py);
+        }
+        g.stroke();
+      };
+      // At y and at y +- size: a scar within a few pixels of an edge has to
+      // appear on the other one or the tile seam cuts it in half.
+      for (const yy of [y - size, y, y + size]) {
+        if (shelf > 0) {
+          const grad = g.createLinearGradient(0, yy, 0, yy + shelf);
+          grad.addColorStop(0, `hsla(${hue - 4} ${sat}% ${light * (1 - depth * 0.7)}% / 0.3)`);
+          grad.addColorStop(1, `hsla(${hue - 4} ${sat}% ${light * (1 - depth * 0.7)}% / 0)`);
+          g.fillStyle = grad;
+          g.fillRect(0, yy, size, shelf);
+        }
+        line(yy, 0, width, 1 - depth, rngRange(rng, 0.45, 0.7), -4);
+        line(yy, -width * 0.9, width * 0.6, 1 + depth * 0.55, rngRange(rng, 0.2, 0.4), 2);
+      }
+    }
+  }
+
+  /**
+   * Lenticels — short horizontal pores. They were the only horizontal mark in
+   * the old drawing and there is nothing wrong with them, so they are kept
+   * exactly as they were except for the contrast, which followed everything
+   * else down: `light * (0.35..1.4)` became `light * (1 + d*[-1, +0.5])`.
+   *
+   * Still tapered strokes rather than filled rectangles. Rectangles are what
+   * they were before that, and on a pale trunk a scattering of axis-aligned
+   * rectangles is the most legible possible signature of a generated texture —
+   * the birches came out looking like they were made of tiled wallpaper.
+   */
+  for (let i = 0; i < style.lenticel; i++) {
+    const y = rng() * size;
+    const x0 = rng() * size;
+    const w = rngRange(rng, 5, 26);
+    const d = style.depth * rngRange(rng, 0.6, 1.2);
+    tileWrap(size, x0, y, w + 4, (px, py) => {
+      g.strokeStyle = `hsla(${hue - 6} ${Math.max(0, sat - 6)}% ${light * (1 + d * rngRange(rng, -1, 0.5))}% / ${rngRange(rng, 0.18, 0.45)})`;
+      g.lineWidth = rngRange(rng, 0.8, 2.4);
+      g.beginPath();
+      g.moveTo(px, py);
+      g.quadraticCurveTo(px + w * 0.5, py + rngRange(rng, -1.6, 1.6), px + w, py);
+      g.stroke();
+    });
+  }
+
+  /**
+   * Conical spines. Kapok only, and the one mark here that is a SHAPE rather
+   * than a stroke: a shadow ellipse at the base and a bright triangle above it,
+   * which is the cheapest possible lit cone. Two or three pixels each, so at
+   * range they mip down into the fine grey-green mottle a ceiba bole actually
+   * has, and up close they are studs.
+   */
+  for (let i = 0; i < style.spine; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    const r = rngRange(rng, 2.2, 5.5);
+    tileWrap(size, x, y, r * 2, (px, py) => {
+      g.fillStyle = `hsla(${hue - 4} ${sat}% ${light * (1 - style.depth)}% / 0.34)`;
+      g.beginPath();
+      g.ellipse(px, py + r * 0.35, r * 0.9, r * 0.45, 0, 0, TAU);
+      g.fill();
+      g.fillStyle = `hsla(${hue + 4} ${sat}% ${light * (1 + style.depth * 0.6)}% / 0.5)`;
+      g.beginPath();
+      g.moveTo(px - r * 0.55, py + r * 0.4);
+      g.lineTo(px + r * 0.55, py + r * 0.4);
+      g.lineTo(px, py - r * 0.6);
+      g.closePath();
+      g.fill();
+    });
+  }
+
+  /**
+   * Pale lichen crust. THE LUMA RULE, in the direction tree-adorn.js states it:
+   * lichen goes LIGHTER than the bark, never greener-and-darker, because a
+   * darker patch on a dark trunk is a hole rather than a plant. Capped at 68%
+   * so it cannot become the white streak this whole rewrite exists to delete.
+   *
+   * Skipped for `trunkAtlas`, which draws its own — see the note on `lichen`.
+   */
+  if (lichen) {
+    for (let i = 0; i < 15; i++) {
+      const x = rng() * size;
+      const y = rng() * size;
+      const r = rngRange(rng, 9, 34);
+      const pale = rng() < 0.55;
+      const bh = pale ? 74 : 46;
+      const bs = pale ? 16 : 10;
+      const bl = Math.min(68, light + rngRange(rng, 8, 20));
+      tileWrap(size, x, y, r, (px, py) => {
+        const grad = g.createRadialGradient(px, py, 0, px, py, r);
+        grad.addColorStop(0, `hsla(${bh} ${bs}% ${bl}% / 0.1)`);
+        grad.addColorStop(0.6, `hsla(${bh} ${bs}% ${bl}% / 0.055)`);
+        grad.addColorStop(1, `hsla(${bh} ${bs}% ${bl}% / 0)`);
+        g.fillStyle = grad;
+        g.beginPath();
+        g.ellipse(px, py, r, r * rngRange(rng, 0.5, 0.85), 0, 0, TAU);
+        g.fill();
+      });
+    }
+  }
+
+  // Fine grain, last. The layer that survives minification: past about fifteen
+  // metres every mark above has averaged out and this is the only thing keeping
+  // a trunk from being a flat cylinder of one colour.
+  for (let i = 0; i < style.speck; i++) {
+    const x = rng() * size;
+    const y = rng() * size;
+    g.fillStyle = `hsla(${hue} ${sat}% ${light * (1 + style.depth * rngRange(rng, -1, 0.5))}% / ${rngRange(rng, 0.1, 0.34)})`;
+    g.beginPath();
+    g.ellipse(x, y, rngRange(rng, 0.5, 1.6), rngRange(rng, 0.8, 2.6), 0, 0, TAU);
+    g.fill();
+  }
+
+  g.lineCap = prevCap;
+  g.lineJoin = prevJoin;
+}
+
+/**
+ * Bark as a finished, both-ways-wrapping texture.
+ *
+ * NOTHING IMPORTS THIS TODAY. The live trunk path is `trunkAtlas` in
+ * tree-adorn.js, which needs the tile inside a wider canvas next to its colour
+ * strip and so calls `paintBark` directly. This is kept as the plain
+ * single-tile entry point — it is how the drawing is inspected in isolation and
+ * it is what anything that wants bark WITHOUT the adornment strip should use.
+ * If it is still unused a year from now, delete it rather than leaving it: an
+ * export nobody calls is the thing that lets a duplicate drift.
  */
 export function barkTexture({ key = 'bark', hue = 26, sat = 22, light = 22, seed = 'bark' } = {}) {
   return memo(`bark:${key}`, () => {
     const size = 256;
     const c = canvas(size);
-    const g = c.getContext('2d');
-    const rng = makeRng(seed);
-    g.fillStyle = `hsl(${hue} ${sat}% ${light}%)`;
-    g.fillRect(0, 0, size, size);
-
-    for (let i = 0; i < 190; i++) {
-      const x = rng() * size;
-      const w = rngRange(rng, 1.2, 7);
-      const shade = rngRange(rng, 0.45, 1.7);
-      g.strokeStyle = `hsla(${hue + rngRange(rng, -6, 8)} ${sat}% ${light * shade}% / ${rngRange(rng, 0.25, 0.8)})`;
-      g.lineWidth = w;
-      g.beginPath();
-      let px = x;
-      g.moveTo(px, -4);
-      for (let y = 0; y <= size + 4; y += 16) {
-        px += rngRange(rng, -3.4, 3.4);
-        g.lineTo(px, y);
-      }
-      g.stroke();
-    }
-    /**
-     * Horizontal lenticels break the strict verticality; without them the trunk
-     * reads as corduroy.
-     *
-     * Drawn as tapered strokes rather than as filled rectangles. Rectangles are
-     * what they were, and on a pale trunk a scattering of axis-aligned rectangles
-     * is the most legible possible signature of a generated texture — the birches
-     * came out looking like they were made of tiled wallpaper.
-     */
-    for (let i = 0; i < 70; i++) {
-      const y = rng() * size;
-      const x0 = rng() * size;
-      const w = rngRange(rng, 5, 26);
-      g.strokeStyle = `hsla(${hue - 6} ${sat - 6}% ${light * rngRange(rng, 0.35, 1.4)}% / ${rngRange(rng, 0.18, 0.45)})`;
-      g.lineWidth = rngRange(rng, 0.8, 2.4);
-      g.beginPath();
-      g.moveTo(x0, y);
-      g.quadraticCurveTo(x0 + w * 0.5, y + rngRange(rng, -1.6, 1.6), x0 + w, y);
-      g.stroke();
-    }
+    paintBark(c.getContext('2d'), size, { key, hue, sat, light, seed });
     return finish(c, { wrap: true });
   });
 }
@@ -999,12 +1475,95 @@ export function mistBand({ key = 'mist', seed = 'mist' } = {}) {
  * fight the red bank and win, because it is on every square metre of the world.
  * There is a little warmth in the leaves and none anywhere else.
  *
- * THE MEAN MATTERS MORE THAN THE MARKS. This multiplies a surface that is
- * already lit, so its average brightness is a global exposure change on the
- * biggest object in the frame. Base lightness is 74% and the marks run 46-100%,
- * which measures a mean near 0.78 — the floor comes down about a fifth of a
- * stop, which is the right direction anyway: the old one was a pale khaki that
- * read as dust.
+ * THE MEAN IS DIVIDED OUT, SO THIS CANVAS CANNOT CHANGE THE GROUND'S COLOUR OR
+ * ITS BRIGHTNESS. WORTH SAYING FIRST, BECAUSE IT IS THE OPPOSITE OF WHAT A
+ * TEXTURE NORMALLY DOES.
+ *
+ * The bottom of this function measures the canvas's own linear mean per channel
+ * and ships it on the texture; `groundMaterial` divides by it before
+ * multiplying. So the base fill, the average lightness of the marks and any net
+ * tint are ALL removed downstream — make everything here twice as dark and the
+ * ground on screen is bit-for-bit unchanged. What survives normalisation is
+ * only the per-texel DEVIATION from the mean: the size of the marks, their
+ * spatial frequency, their contrast, and the hue spread ABOUT the average.
+ *
+ * The consequence is a division of labour that has to be respected in both
+ * directions. "The floor is too bright" and "the floor is the wrong colour" are
+ * questions for the vertex palette in terrain.js and can only be answered
+ * there. "The floor is the wrong SCALE" and "the floor is blotchy" are
+ * questions for this canvas and can only be answered here.
+ *
+ *
+ * WHAT SIZE EVERY MARK COMES OUT AT, WHICH IS THE 2026-08 FIX.
+ *
+ * The map is sampled twice, at 7.3 m and 1.31 m per tile (FLOOR_MACRO_M and
+ * FLOOR_FINE_M in forest.js). 512 px over 7.3 m is 1.43 cm per texel, so a mark
+ * drawn at a fraction f of the canvas is 7.3f metres across on the ground.
+ * Every size below is chosen from that arithmetic and not by eye:
+ *
+ *   leaves   1.8-5.2% of the canvas -> 13-38 cm at the macro scale, 2.3-6.8 cm
+ *            at the fine one. They were 3.5-10.5%, i.e. 26-77 cm, and a 77 cm
+ *            leaf on a forest floor is a banana frond. Real Neotropical litter
+ *            is 10-35 cm entire leaves, which is what these now are, and the
+ *            fine sample turns the same marks into the leaflets underneath.
+ *   blotches 5-17% radius -> 0.37-1.23 m. They were 8-29%, i.e. 0.6-2.1 m
+ *            radius, at ±0.10 of lightness on a 0.74 base — a two-metre stain
+ *            REPEATING ON A 7.3 M GRID, which is the enormous low-frequency
+ *            mottle the floor was reported for. It is the one defect on this
+ *            canvas that a viewer reads as a bug rather than as ground.
+ *   roots    60-210 px -> 0.86-3.0 m at the macro scale. Unchanged: that is
+ *            genuinely the scale a surface root runs at and it was never the
+ *            complaint.
+ *
+ * THE MARKS SHRANK AND `FLOOR_MACRO_M` DID NOT, AND THAT IS THE WHOLE POINT.
+ * Cutting the macro scale from 7.3 m to ~4 m would have shrunk the leaves by
+ * the same factor — and would also have shrunk the TILE, so the repeat period
+ * of every blotch on this canvas would have come down with it and the tiling
+ * would have become MORE visible, not less. Shrinking the marks inside a canvas
+ * whose repeat stays at 7.3 m fixes the leaves and fixes the blotching at once.
+ * Do not "fix" this by touching the two scales in forest.js.
+ *
+ * DARK IS NOT AVAILABLE HERE, ONLY CONTRAST. The mark lightnesses came down
+ * (leaves 46-100% -> 42-90%, grain 40-100% -> 38-94%) not to darken anything —
+ * see the normalisation note above, it cannot — but to stop the top of the
+ * distribution reading as bright specks against the dark red-brown the palette
+ * now paints underneath. The hue spread came in with it, 20-46° -> 12-34°, so
+ * the deviation about the mean is red-brown either side rather than running out
+ * to yellow. The yellow-olive cast the floor was reported for was the palette's
+ * and has been fixed in terrain.js.
+ *
+ *
+ * AND THEN THE SPREAD CAME DOWN AGAIN, WHICH IS THE SECOND 2026-08 FIX.
+ *
+ * Shrinking the marks fixed the scale and left the floor reading as popcorn at
+ * standing height. Measured on the canvas, in linear luma: the per-texel std was
+ * 20.4% of the mean, and the residual after a 3 px blur — marks a texel or two
+ * across, which is the salt-and-pepper band — was 6.9% of the mean. It is now
+ * 15.3% and 4.4%. Every mark size and the 7.3 m repeat are untouched; only the
+ * LIGHTNESS RANGES and two counts moved, which is the one axis normalisation
+ * leaves alive.
+ *
+ * IT WAS THE LEAVES, NOT THE GRAIN, AND THAT IS THE SURPRISE. Zeroing the 3400
+ * grain dots moved the total std from 0.0989 to 0.0990 — the fine specks are
+ * alpha-blended toward the middle of the distribution, so what they add in
+ * variance they take back in smoothing, and they are very nearly free. Zeroing
+ * the leaves moved it from 0.0989 to 0.0489. 880 leaves carrying a 42-90
+ * lightness range is where essentially all of this canvas's contrast lives, at
+ * every spatial band, and it is the only place worth touching.
+ *
+ * TWO SAMPLES MULTIPLY, SO SPREAD COMPOUNDS. groundMaterial fetches this map at
+ * 7.3 m and again at 1.31 m and multiplies the two, then applies a 1.18 contrast
+ * gain. For independent samples the product's relative spread is
+ * sqrt((1+r²)² - 1), about sqrt(2)·r — so the 20.4% above arrived on screen as
+ * 34.4% and now arrives as 25.7%. Anything chosen by eye on this canvas alone
+ * lands 40% hotter than it looked.
+ *
+ * AND THE LIGHTING NOW CARRIES THE CONTRAST. Sun to shade was rebuilt this
+ * session from 1.23 stops to 2.94, so the floor is genuinely shaded with bright
+ * sunflecks across it. High-frequency albedo variation used to substitute for
+ * that and now competes with it: the same numbers that were merely busy before
+ * the lighting change read as static after it. If the lighting ratio is ever
+ * pulled back, this is the first place that can afford to go back up.
  *
  * IT HAS TO TILE, so every mark is drawn up to four times — see `wrapped`. The
  * repeat is set at the call site (`ground.js`) rather than here, because how
@@ -1040,21 +1599,31 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
     g.fillRect(0, 0, size, size);
 
     /**
-     * The substrate: broad soft blotches, which is what makes one tile of this
-     * not look like one tile of this. Litter drifts unevenly — there are bare
+     * The substrate: soft blotches, which is what makes one tile of this not
+     * look like one tile of this. Litter drifts unevenly — there are bare
      * patches and there are ankle-deep piles — and a uniform confetti of leaves
-     * has no such structure, so at four metres a tile the repeat would be
-     * visible as a texture rather than as ground.
+     * has no such structure, so the repeat would be visible as a texture rather
+     * than as ground.
+     *
+     * SMALLER, WEAKER AND MORE OF THEM: 70 at 26-86 px and 0.34 alpha, from 46
+     * at 40-150 px and 0.5. The old ones were 0.6-2.1 m radius on a tile that
+     * repeats every 7.3 m, so there were only about three blotch-widths across
+     * a tile and the eye locked onto the period — the "enormous low-frequency
+     * blotching that reads as staining". Six across a tile at two thirds the
+     * amplitude is drift; three across a tile at full amplitude is a pattern.
+     * The lightness swing came in with the alpha (54-94 -> 62-88 against a 74
+     * base), which is ±0.09 before the 1.18 contrast gain in the shader rather
+     * than ±0.17.
      */
-    for (let i = 0; i < 46; i++) {
+    for (let i = 0; i < 70; i++) {
       const x = rng() * size;
       const y = rng() * size;
-      const r = rngRange(rng, 40, 150);
-      const light = rngRange(rng, 54, 94);
+      const r = rngRange(rng, 26, 86);
+      const light = rngRange(rng, 62, 88);
       wrapped(x, y, r, (px, py) => {
         const grad = g.createRadialGradient(px, py, 0, px, py, r);
-        grad.addColorStop(0, `hsla(${rngRange(rng, 26, 44)} 10% ${light}% / 0.5)`);
-        grad.addColorStop(1, 'hsla(36 10% 74% / 0)');
+        grad.addColorStop(0, `hsla(${rngRange(rng, 16, 36)} 10% ${light}% / 0.34)`);
+        grad.addColorStop(1, 'hsla(30 10% 74% / 0)');
         g.fillStyle = grad;
         g.beginPath();
         g.arc(px, py, r, 0, TAU);
@@ -1078,9 +1647,14 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
       const w = rngRange(rng, 2.5, 9);
       const dark = rng() < 0.5;
       wrapped(x, y, len, (px, py) => {
+        // The pale root came down from 84-96% to 78-88% and from 0.45 alpha to
+        // 0.34. A root catching a sunfleck is the brightest thing this canvas
+        // is allowed to draw, and at 96% on a 74% base it was a white cord
+        // three metres long — the one mark that survives every mip and reads,
+        // correctly for its width and wrongly for its colour, as a pipe.
         g.strokeStyle = dark
-          ? `hsla(30 12% ${rngRange(rng, 48, 60)}% / 0.6)`
-          : `hsla(34 10% ${rngRange(rng, 84, 96)}% / 0.45)`;
+          ? `hsla(26 12% ${rngRange(rng, 44, 58)}% / 0.55)`
+          : `hsla(30 10% ${rngRange(rng, 78, 88)}% / 0.34)`;
         g.lineWidth = w;
         g.beginPath();
         g.moveTo(px, py);
@@ -1113,16 +1687,39 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
      * height. This is the mark that carries the biome: a rainforest floor is
      * ankle deep in large entire leaves, not in the small toothed ones a
      * temperate wood drops, so these are long ovals with a midrib and no lobes.
+     *
+     * 780 AT 1.8-5.2% OF THE CANVAS, from 240 at 3.5-10.5%. See the size
+     * arithmetic at the top: these were 26-77 cm on the ground and are now
+     * 13-38 cm, which is what a Neotropical entire leaf actually measures.
+     *
+     * THE COUNT HAD TO GO UP TO KEEP THE FLOOR COVERED, and it costs nothing.
+     * Leaf area goes as len², and integrating the two uniform ranges gives 74k
+     * px² of lamina for 780 small leaves against 91k for the old 240 large ones
+     * — LESS paint, spread over 3.3x the paths. Rasterised area is what a
+     * canvas build costs and path setup is what it does not, so this is the
+     * same cost class or better; the blotch loop above cut its own coverage
+     * from 1.45 M px² to 756 k at the same time, and the 6.3 ms
+     * mean-measurement pass at the bottom dominates the whole function anyway.
+     *
+     * 52-80% LIGHTNESS, FROM 42-90, AND THAT IS THE WHOLE POPCORN FIX. This
+     * loop is where all of the canvas's contrast lives — see the measurement in
+     * the header: delete it and the per-texel std falls by half, delete the
+     * 3000 grain dots instead and it does not move at all. A 48-point lightness
+     * range spread over 780 small marks is a field of confetti; a 28-point one
+     * over the same marks is litter you can still pick individual leaves out of.
+     * The count came down 880 -> 780 as well, but that is worth only a fifth of
+     * the change — the RANGE is the knob and the count is the character, so the
+     * count was cut as little as the number allowed.
      */
-    for (let i = 0; i < 240; i++) {
+    for (let i = 0; i < 780; i++) {
       const x = rng() * size;
       const y = rng() * size;
-      const len = size * rngRange(rng, 0.035, 0.105);
+      const len = size * rngRange(rng, 0.018, 0.052);
       const wid = len * rngRange(rng, 0.3, 0.52);
       const rot = rng() * TAU;
-      const light = rngRange(rng, 46, 100);
-      const hue = rngRange(rng, 20, 46);
-      const sat = rngRange(rng, 6, 20);
+      const light = rngRange(rng, 52, 80);
+      const hue = rngRange(rng, 12, 34);
+      const sat = rngRange(rng, 8, 22);
       wrapped(x, y, len, (px, py) => {
         g.save();
         g.translate(px, py);
@@ -1133,10 +1730,19 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
         g.quadraticCurveTo(wid, 0, 0, len / 2);
         g.quadraticCurveTo(-wid, 0, 0, -len / 2);
         g.fill();
-        // The midrib, half a stop off the lamina either way. It is one stroke
-        // and it is what stops a field of these reading as gravel.
-        g.strokeStyle = `hsl(${hue} ${sat}% ${light > 70 ? light - 16 : light + 18}%)`;
-        g.lineWidth = 1.2;
+        // The midrib, a few points off the lamina either way. It is one stroke
+        // and it is what stops a field of these reading as gravel. 0.9 px now
+        // rather than 1.2: the leaves are 2.9x smaller in area and a midrib
+        // that does not scale with them turns the smallest ones into sticks.
+        //
+        // ±15/16 WAS A FULL STOP ON A ONE-PIXEL LINE, which is a hard edge at
+        // exactly the frequency the floor was reported noisy at, once per leaf
+        // and 780 times per tile. At ±8/9 the rib is still legible when you
+        // look at a leaf and stops being a speck when you do not. It has to
+        // scale with the lamina range: this is 8 of the 28 points the leaves
+        // now span, the same share 15 was of the old 48.
+        g.strokeStyle = `hsl(${hue} ${sat}% ${light > 68 ? light - 8 : light + 9}%)`;
+        g.lineWidth = 0.9;
         g.beginPath();
         g.moveTo(0, -len / 2);
         g.lineTo(0, len / 2);
@@ -1146,16 +1752,35 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
     }
 
     /**
-     * Fine grain, last and over everything. Two thousand specks is the layer
+     * Fine grain, last and over everything. Three thousand specks is the layer
      * that survives minification: by the time a tile is eight pixels across the
      * leaves have averaged out and this is what is left, and without it the
      * middle distance goes back to being smooth.
+     *
+     * 3000 at 0.5-1.9 px, from 2200 at 0.6-2.4. The leaves above stopped being
+     * the mark that carries detail at reading distance — they are 13-38 cm now
+     * — so this layer has to carry more of it, and it is the cheapest paint on
+     * the canvas: an unwrapped `arc` of two pixels is a handful of texels.
+     *
+     * THIS LAYER IS NOT WHERE THE SPECKLE CAME FROM, WHICH IS COUNTER-INTUITIVE
+     * AND WAS MEASURED. One dot per 77 px² at a radius of one texel sits right
+     * at the canvas's Nyquist limit and is the obvious suspect; zeroing the
+     * whole loop moved the per-texel std from 0.0989 to 0.0990, i.e. not at all.
+     * These are alpha-blended toward the middle of the distribution, so the
+     * variance they add they very nearly take back in smoothing. Do not come
+     * here first when the floor is reported noisy — go to the leaves.
+     *
+     * IT WAS STILL WORTH CALMING, at 6% of the fine band once the leaves were
+     * fixed: 46-88% lightness from 38-94, alpha 0.12-0.34 from 0.18-0.5. The
+     * count came down only 3400 -> 3000, because count is what makes this layer
+     * survive minification and spread is what made it grate; those are two
+     * different properties and only one of them was the complaint.
      */
-    for (let i = 0; i < 2200; i++) {
+    for (let i = 0; i < 3000; i++) {
       const x = rng() * size;
       const y = rng() * size;
-      const r = rngRange(rng, 0.6, 2.4);
-      g.fillStyle = `hsla(34 8% ${rngRange(rng, 40, 100)}% / ${rngRange(rng, 0.18, 0.5)})`;
+      const r = rngRange(rng, 0.5, 1.9);
+      g.fillStyle = `hsla(28 8% ${rngRange(rng, 46, 88)}% / ${rngRange(rng, 0.12, 0.34)})`;
       g.beginPath();
       g.arc(x, y, r, 0, TAU);
       g.fill();
@@ -1181,11 +1806,28 @@ export function forestFloor({ key = 'floor', seed = 'floor' } = {}) {
      * a little warmth, and normalising by a scalar would leave the map with a
      * net tint that lands on every square metre of the world.
      *
-     * MEASURED: r 0.561, g 0.527, b 0.483 — the map is warm by 16% red over
-     * blue, which is the leaves, and dividing by a scalar would have left that
-     * as a permanent warm cast on every square metre of the world. Exactly the
-     * bias this whole file's other notes warn about, arriving through a
-     * normalisation rather than through a fill colour.
+     * MEASURED AT BUILD, NEVER QUOTED AS A CONSTANT. As of the 2026-08 spread
+     * pass it reads r 0.522, g 0.479, b 0.437 — warm by 19% red over blue,
+     * which is the leaves, and dividing by a scalar would have left that as a
+     * permanent warm cast on every square metre of the world. Exactly the bias
+     * this whole file's other notes warn about, arriving through a
+     * normalisation rather than through a fill colour. It was r 0.561, g 0.527,
+     * b 0.483 before the mark pass.
+     *
+     * TREAT ANY TRIPLE WRITTEN DOWN ANYWHERE AS STALE. Every mark above has
+     * changed size, count and lightness range twice this month, so the mean has
+     * moved twice; the code reads it off the canvas and nothing depends on the
+     * number in the prose. The one place it is written down and DOES need
+     * re-reading by hand is `groundMaterial` (forest.js), which quotes the old
+     * 0.561/0.527/0.483 — read `forestFloor().userData.mean` in a live page and
+     * correct it there.
+     *
+     * THE SPREAD IS NOT SHIPPED, ONLY THE MEAN, and that is deliberate: the
+     * consumer needs the pivot to normalise about and has no use for the
+     * variance. The variance is a design decision made here, and the numbers it
+     * was made from are in the header — measure them the same way if you change
+     * a mark, because the canvas is the only place they can be read and the
+     * shader multiplies two samples of it before you get to see the result.
      *
      * 262 144 texels once at load: 6.3 ms measured, against a first frame that
      * already spends 250–320 ms compiling shaders behind the entry gate. The

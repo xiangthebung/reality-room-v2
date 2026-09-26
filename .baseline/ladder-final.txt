@@ -1,0 +1,154 @@
+gpu    ANGLE (AMD, AMD Radeon RX 9070 XT (0x00007550) Direct3D11 vs_5_0 ps_5_0, D3D11)
+seed   grove-01
+url    http://127.0.0.1:5180/
+
+ladder: low/medium/high/ultra at clearing, deep, canopy, trip=sober
+order   low medium high ultra ultra high medium low x3   (palindromic, so drift cancels)
+rig     2560x1440 logical, pixel ratio = the preset's own render scale
+
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.45  cpu   0.50  draws  121  tris   5.09M
+    deep       gpu   1.38  cpu   0.40  draws  108  tris   5.07M
+    canopy     gpu   1.63  cpu   0.40  draws  105  tris   5.50M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.20  cpu   0.60  draws  147  tris   8.38M
+    deep       gpu   1.95  cpu   0.60  draws  121  tris   7.94M
+    canopy     gpu   2.14  cpu   0.50  draws  117  tris   8.35M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.71  cpu   0.70  draws  148  tris   8.32M
+    deep       gpu   2.70  cpu   0.60  draws  120  tris   8.00M
+    canopy     gpu   2.90  cpu   0.55  draws  118  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.71  cpu   0.70  draws  150  tris   8.32M
+    deep       gpu   2.72  cpu   0.50  draws  122  tris   8.00M
+    canopy     gpu   2.95  cpu   0.60  draws  120  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.73  cpu   0.60  draws  150  tris   8.32M
+    deep       gpu   2.73  cpu   0.50  draws  122  tris   8.00M
+    canopy     gpu   2.91  cpu   0.50  draws  120  tris   8.27M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.69  cpu   0.65  draws  148  tris   8.32M
+    deep       gpu   2.83  cpu   0.50  draws  120  tris   8.00M
+    canopy     gpu   2.90  cpu   0.50  draws  118  tris   8.27M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.15  cpu   0.60  draws  147  tris   8.38M
+    deep       gpu   1.94  cpu   0.50  draws  121  tris   7.94M
+    canopy     gpu   2.13  cpu   0.65  draws  117  tris   8.35M
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.64  cpu   0.60  draws  125  tris   5.23M
+    deep       gpu   1.37  cpu   0.50  draws  108  tris   5.07M
+    canopy     gpu   1.62  cpu   0.60  draws  105  tris   5.50M
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.61  cpu   0.60  draws  125  tris   5.23M
+    deep       gpu   1.41  cpu   0.60  draws  108  tris   5.07M
+    canopy     gpu   1.61  cpu   0.50  draws  105  tris   5.50M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.19  cpu   0.80  draws  147  tris   8.38M
+    deep       gpu   1.96  cpu   0.60  draws  121  tris   7.94M
+    canopy     gpu   2.16  cpu   0.70  draws  117  tris   8.35M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.74  cpu   0.60  draws  148  tris   8.32M
+    deep       gpu   2.77  cpu   0.45  draws  120  tris   8.00M
+    canopy     gpu   2.88  cpu   0.60  draws  118  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.71  cpu   0.75  draws  150  tris   8.32M
+    deep       gpu   2.70  cpu   0.55  draws  122  tris   8.00M
+    canopy     gpu   2.91  cpu   0.55  draws  120  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.68  cpu   0.75  draws  150  tris   8.32M
+    deep       gpu   2.67  cpu   0.50  draws  122  tris   8.00M
+    canopy     gpu   2.93  cpu   0.60  draws  120  tris   8.27M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.67  cpu   0.70  draws  148  tris   8.32M
+    deep       gpu   2.77  cpu   0.50  draws  120  tris   8.00M
+    canopy     gpu   2.96  cpu   0.60  draws  118  tris   8.27M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.16  cpu   0.80  draws  147  tris   8.38M
+    deep       gpu   1.94  cpu   0.70  draws  121  tris   7.94M
+    canopy     gpu   2.13  cpu   0.70  draws  117  tris   8.35M
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.57  cpu   0.60  draws  125  tris   5.23M
+    deep       gpu   1.39  cpu   0.60  draws  108  tris   5.07M
+    canopy     gpu   1.62  cpu   0.55  draws  105  tris   5.50M
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.58  cpu   0.60  draws  125  tris   5.23M
+    deep       gpu   1.53  cpu   0.50  draws  108  tris   5.07M
+    canopy     gpu   1.62  cpu   0.60  draws  105  tris   5.50M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.21  cpu   0.60  draws  147  tris   8.38M
+    deep       gpu   1.95  cpu   0.50  draws  121  tris   7.94M
+    canopy     gpu   2.13  cpu   0.60  draws  117  tris   8.35M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.65  cpu   0.60  draws  148  tris   8.32M
+    deep       gpu   2.71  cpu   0.50  draws  120  tris   8.00M
+    canopy     gpu   2.89  cpu   0.60  draws  118  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.69  cpu   0.70  draws  150  tris   8.32M
+    deep       gpu   2.72  cpu   0.60  draws  122  tris   8.00M
+    canopy     gpu   2.97  cpu   0.60  draws  120  tris   8.27M
+  ultra   2560x1440  msaa 2  shadows 1024  bloom on   mist 5  shafts 1  motes 1  undergrowth 1
+    clearing   gpu   2.70  cpu   0.70  draws  150  tris   8.32M
+    deep       gpu   2.74  cpu   0.70  draws  122  tris   8.00M
+    canopy     gpu   2.93  cpu   0.70  draws  120  tris   8.27M
+  high    2560x1440  msaa 2  shadows 1024  bloom on   mist 3  shafts 0.75  motes 0.7  undergrowth 1
+    clearing   gpu   2.67  cpu   0.60  draws  148  tris   8.32M
+    deep       gpu   2.73  cpu   0.40  draws  120  tris   8.00M
+    canopy     gpu   2.93  cpu   0.65  draws  118  tris   8.27M
+  medium  2048x1152  msaa 0  shadows 1024  bloom on   mist 2  shafts 0.55  motes 0.42  undergrowth 0.75
+    clearing   gpu   2.16  cpu   0.70  draws  147  tris   8.38M
+    deep       gpu   1.96  cpu   0.55  draws  121  tris   7.94M
+    canopy     gpu   2.12  cpu   0.70  draws  117  tris   8.35M
+  low     1664x936  msaa 0  shadows off   bloom off  mist 1  shafts 0.3  motes 0.22  undergrowth 0.5
+    clearing   gpu   1.66  cpu   0.50  draws  125  tris   5.23M
+    deep       gpu   1.40  cpu   0.50  draws  108  tris   5.07M
+    canopy     gpu   1.63  cpu   0.55  draws  105  tris   5.50M
+
+what each preset costs, per station
+────────────────────────────────────────
+station    preset      gpu    cpu   scene   post  shadow  vs high  draws     tris
+clearing   low        1.59   0.60    1.57      —       —     -41%    125    5.23M
+clearing   medium     2.18   0.70    2.03   0.16    0.79     -19%    147    8.38M
+clearing   high       2.68   0.65    2.51   0.16    0.91       0%    148    8.32M
+clearing   ultra      2.69   0.70    2.53   0.17    0.85       0%    150    8.32M
+
+deep       low        1.39   0.50    1.38      —       —     -49%    108    5.07M
+deep       medium     1.94   0.50    1.85   0.10    0.85     -29%    121    7.94M
+deep       high       2.75   0.50    2.57   0.16    0.90       0%    120    8.00M
+deep       ultra      2.70   0.60    2.58   0.14    0.93      -2%    122    8.00M
+
+canopy     low        1.62   0.50    1.60      —       —     -44%    105    5.50M
+canopy     medium     2.13   0.65    2.04   0.09    0.81     -26%    117    8.35M
+canopy     high       2.89   0.60    2.74   0.16    0.80       0%    118    8.27M
+canopy     ultra      2.93   0.60    2.77   0.15    0.80      +1%    120    8.27M
+
+  gpu      the frame as a standing player pays for it: shadow map cached.
+  scene    the world pass into the scene target, no post at all.
+  post     gpu - scene, paired. Includes the MSAA resolve, so it is a
+           slight over-estimate on High/Ultra and exact on Low/Medium.
+  shadow   what re-rendering the shadow map costs — the price of MOVING,
+           and nothing at Low, which has no shadows at all.
+  cpu      main thread per frame with the GPU queue drained.
+  —        the interval straddles zero: smaller than this rig can resolve.
+
+what the ladder is worth
+────────────────────────────────────────
+step                    gpu saved  of the frame
+  clearing
+    ultra -> high            0.01            0%
+    high -> medium           0.50           19%
+    medium -> low            0.59           27%
+    ultra -> low             1.10           41%
+  deep
+    ultra -> high           -0.05           -2%
+    high -> medium           0.81           29%
+    medium -> low            0.55           28%
+    ultra -> low             1.31           48%
+  canopy
+    ultra -> high            0.03            1%
+    high -> medium           0.76           26%
+    medium -> low            0.51           24%
+    ultra -> low             1.31           45%
+
+──────────────────────────────────────────────────────────────────────────────
+.perf/presets.json
+

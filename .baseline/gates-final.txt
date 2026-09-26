@@ -1,0 +1,703 @@
+
+========================================================================
+  cave gate: check  (cave-check.mjs)
+========================================================================
+seed         caves<1400  nearest    seam      ray step   gully    flank    bad
+grove-01     17          49 m       1.3 cm    0.20 m     8.9 m    0.328    0
+check-1      16          168 m      5.0 cm    0.18 m     6.2 m    0.214    0
+check-2      16          281 m      1.8 cm    0.31 m     11.2 m   0.426    0
+check-3      14          212 m      2.3 cm    0.19 m     9.7 m    0.367    0
+check-4      16          124 m      1.4 cm    0.23 m     11.4 m   0.432    0
+check-5      16          70 m       2.0 cm    0.26 m     6.3 m    0.222    0
+check-6      15          117 m      1.9 cm    0.16 m     5.7 m    0.199    0
+check-7      15          217 m      1.4 cm    0.23 m     11.7 m   0.446    0
+check-8      17          154 m      2.1 cm    0.31 m     7.0 m    0.278    0
+check-9      16          209 m      2.0 cm    0.21 m     12.8 m   0.466    0
+check-10     16          251 m      2.3 cm    0.19 m     14.1 m   0.523    0
+check-11     16          195 m      8.4 cm    0.36 m     8.5 m    0.318    0
+check-12     16          67 m       1.7 cm    0.38 m     10.8 m   0.383    0
+check-13     17          105 m      1.1 cm    0.31 m     6.3 m    0.230    0
+check-14     16          200 m      3.4 cm    0.23 m     11.4 m   0.444    0
+check-15     17          132 m      1.5 cm    0.26 m     13.1 m   0.447    0
+check-16     14          172 m      2.2 cm    0.22 m     11.7 m   0.406    0
+check-17     15          174 m      6.1 cm    0.24 m     12.8 m   0.466    0
+check-18     16          148 m      3.9 cm    0.35 m     7.2 m    0.261    0
+check-19     17          90 m       1.5 cm    0.27 m     8.2 m    0.309    0
+check-20     16          115 m      2.9 cm    0.33 m     9.9 m    0.384    0
+check-21     17          178 m      3.1 cm    0.39 m     5.7 m    0.187    0
+check-22     17          117 m      1.7 cm    0.34 m     14.3 m   0.530    0
+check-23     17          166 m      1.2 cm    0.38 m     9.4 m    0.345    0
+
+nearest mouth: 49–281 m over 24 seeds (there is no keep-out; this is wherever the ridge put it)
+
+PASS: no step in the ground anywhere, every mouth is dry and on a slope
+
+========================================================================
+  cave gate: normals  (cave-normals.mjs)
+========================================================================
+
+grove-01
+  k=  0 cave          136148 vertices  every normal is a unit vector
+  k=  0 cave-shafts      924 vertices  every normal is a unit vector
+  k= -1 cave           66048 vertices  every normal is a unit vector
+  k= -1 cave-shafts      504 vertices  every normal is a unit vector
+
+grove-03
+  k=  0 cave           84576 vertices  every normal is a unit vector
+  k=  0 cave-shafts      252 vertices  every normal is a unit vector
+  k=  1 cave          115676 vertices  every normal is a unit vector
+  k=  1 cave-shafts      840 vertices  every normal is a unit vector
+
+8 meshes, 404968 vertices
+
+PASS: no cave vertex carries a normal the shader cannot normalize
+
+========================================================================
+  cave gate: roof  (cave-roof.mjs)
+========================================================================
+k=0  fully buried past the hood
+k=-1  fully buried past the hood
+k=1  fully buried past the hood
+
+PASS: no passage breaks the hillside past its own hood
+
+========================================================================
+  cave gate: mouth  (cave-mouth.mjs)
+========================================================================
+
+k=0  blind at 78.3 m  0 rings with terrain in the passage, 0 of them where the ground is still drawn
+  terrain first clears the ceiling at ring 6 (4.5 m)
+
+k=-1  blind at 28.9 m  0 rings with terrain in the passage, 0 of them where the ground is still drawn
+  terrain first clears the ceiling at ring 4 (3 m)
+
+0 lit rings have the height field standing inside the passage; worst +0.00 m
+0 rings are BREACHED — no ground drawn where the hillside stands clear of the roof (bar: 0)
+
+PASS cave-mouth  2 mouths measured
+
+========================================================================
+  cave gate: floor  (cave-floor.mjs)
+========================================================================
+
+k=0  2397 probes  166 disagree by > 0.45 m  (58 hovering, 106 wading; 0 of them standing on a breakdown block)  worst hover +1.41 m, worst sunk -5.79 m
+   breakdown blocks: 177 columns with a slab in them  2 hovering / 0 wading over 0.45 m  mean |gap| 0.10 m  worst +0.59 / -0.45
+   p6 ring  98 across -0.75  analytic   -42.76  nearest drawn   -36.97  gap -5.79   | passage floor, rock floor off by -5.79  | sample said ring  96 floor   -42.76 inside 1  (this ring: axis -39.38 r 6.92 f 0.52)
+   p6 ring  95 across -0.75  analytic   -42.26  nearest drawn   -37.85  gap -4.41   | passage floor, rock floor off by -4.41  | sample said ring  93 floor   -42.26 inside 1  (this ring: axis -38.48 r 7.97 f 0.52)
+   p4 ring  98 across   0.4  analytic    -6.09  nearest drawn    -2.91  gap -3.18   | passage floor, rock floor off by -3.18  | sample said ring 100 floor    -6.09 inside 1  (this ring: axis -3.76 r 4.09 f 0.43)
+   p4 ring 101 across   0.4  analytic    -6.07  nearest drawn    -3.13  gap -2.94   | passage floor, rock floor off by -2.94  | sample said ring 100 floor    -6.07 inside 1  (this ring: axis -4.66 r 4.2 f 0.43)
+   p1 ring  86 across  0.75  analytic     -2.2  nearest drawn     0.48  gap -2.68   | passage floor, rock floor off by -2.68  | sample said ring  85 floor     -2.2 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p7 ring  65 across -0.75  analytic   -29.86  nearest drawn    -27.3  gap -2.56   | passage floor, rock floor off by -2.56  | sample said ring  69 floor   -29.86 inside 1  (this ring: axis -24.78 r 8.66 f 0.55)
+   p1 ring  89 across -0.75  analytic    -2.35  nearest drawn    -0.15  gap -2.2   | passage floor, rock floor off by -2.2  | sample said ring  86 floor    -2.35 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p1 ring  89 across  0.75  analytic    -2.29  nearest drawn     -0.1  gap -2.19   | passage floor, rock floor off by -2.19  | sample said ring  86 floor    -2.29 inside 1  (this ring: axis 0.63 r 6.2 f 0.5)
+   p3 ring 104 across -0.75  analytic    -23.7  nearest drawn   -21.93  gap -1.77   | passage floor, rock floor off by -1.77  | sample said ring 101 floor    -23.7 inside 1  (this ring: axis -21.37 r 4.45 f 0.53)
+   p7 ring  92 across  0.75  analytic   -30.48  nearest drawn   -28.79  gap -1.68   | passage floor, rock floor off by -1.68  | sample said ring  90 floor   -30.48 inside 1  (this ring: axis -25.28 r 7.52 f 0.7)
+   p2 ring  32 across  0.75  analytic     2.99  nearest drawn     4.53  gap -1.54   | passage floor, rock floor off by -1.54  | sample said ring  35 floor     2.99 inside 1  (this ring: axis 4.91 r 2.33 f 0.79)
+   p1 ring  86 across  -0.4  analytic    -2.46  nearest drawn    -0.96  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.46 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p1 ring  86 across   0.4  analytic    -2.43  nearest drawn    -0.94  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring  88 floor    -2.43 inside 1  (this ring: axis 1.43 r 7.81 f 0.48)
+   p4 ring  98 across  0.75  analytic    -5.71  nearest drawn    -4.22  gap -1.5   | passage floor, rock floor off by -1.5  | sample said ring 100 floor    -5.71 inside 1  (this ring: axis -3.76 r 4.09 f 0.43)
+
+k=-1  1141 probes  79 disagree by > 0.45 m  (31 hovering, 48 wading; 0 of them standing on a breakdown block)  worst hover +1.52 m, worst sunk -20.61 m
+   breakdown blocks: 112 columns with a slab in them  2 hovering / 0 wading over 0.45 m  mean |gap| 0.08 m  worst +0.75 / -0.35
+   p0 ring 242 across  0.75  analytic   -10.69  nearest drawn     9.92  gap -20.61   | passage floor, rock floor off by -20.61  | sample said ring 242 floor   -10.69 inside 1  (this ring: axis -6 r 15.86 f 0.29)
+   p0 ring 263 across  0.75  analytic   -12.42  nearest drawn    -9.72  gap -2.7   | passage floor, rock floor off by -2.7  | sample said ring 260 floor   -12.42 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+   p0 ring 266 across  0.75  analytic   -12.49  nearest drawn    -9.89  gap -2.6   | passage floor, rock floor off by -2.6  | sample said ring 263 floor   -12.49 inside 1  (this ring: axis -8.82 r 8.9 f 0.41)
+   p0 ring 266 across -0.75  analytic   -12.38  nearest drawn    -9.88  gap -2.5   | passage floor, rock floor off by -2.5  | sample said ring 263 floor   -12.38 inside 1  (this ring: axis -8.82 r 8.9 f 0.41)
+   p3 ring 194 across  0.75  analytic   -44.67  nearest drawn   -42.57  gap -2.1   | passage floor, rock floor off by -2.1  | sample said ring 192 floor   -44.67 inside 1  (this ring: axis -41.95 r 5.37 f 0.5)
+   p3 ring  95 across  -0.4  analytic   -17.39  nearest drawn   -15.33  gap -2.06   | passage floor, rock floor off by -2.06  | sample said ring  95 floor   -17.39 inside 1  (this ring: axis -14.84 r 5.16 f 0.51)
+   p3 ring 194 across -0.75  analytic   -44.62  nearest drawn   -42.65  gap -1.97   | passage floor, rock floor off by -1.97  | sample said ring 192 floor   -44.62 inside 1  (this ring: axis -41.95 r 5.37 f 0.5)
+   p4 ring 101 across -0.75  analytic      -26  nearest drawn   -24.08  gap -1.92   | passage floor, rock floor off by -1.92  | sample said ring  98 floor      -26 inside 1  (this ring: axis -23.41 r 5.5 f 0.48)
+   p0 ring 269 across  0.75  analytic   -12.42  nearest drawn   -10.66  gap -1.76   | passage floor, rock floor off by -1.76  | sample said ring 266 floor   -12.42 inside 1  (this ring: axis -10.09 r 5.79 f 0.41)
+   p0 ring 269 across -0.75  analytic   -12.44  nearest drawn    -10.7  gap -1.75   | passage floor, rock floor off by -1.75  | sample said ring 266 floor   -12.44 inside 1  (this ring: axis -10.09 r 5.79 f 0.41)
+   p0 ring 212 across -0.75  analytic    -2.36  nearest drawn    -3.88  gap +1.52   | passage floor, rock floor off by 1.52  | sample said ring   0 floor    -2.36 inside 1  (this ring: axis 1.9 r 9.7 f 0.52)
+   p0 ring 212 across  0.75  analytic    -2.28  nearest drawn     -3.8  gap +1.52   | passage floor, rock floor off by 1.52  | sample said ring   0 floor    -2.28 inside 1  (this ring: axis 1.9 r 9.7 f 0.52)
+   p0 ring 263 across  -0.4  analytic   -12.45  nearest drawn   -10.94  gap -1.52   | passage floor, rock floor off by -1.52  | sample said ring 266 floor   -12.45 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+   p0 ring 263 across   0.4  analytic   -12.38  nearest drawn   -10.92  gap -1.46   | passage floor, rock floor off by -1.46  | sample said ring 266 floor   -12.38 inside 1  (this ring: axis -7.99 r 10.94 f 0.41)
+
+245 disagreements over 0.45 m (89 hovering, 154 wading); worst hover +1.52 m  <-- the body stands in mid-air here
+breakdown blocks alone: 289 columns, 4 hovering + 0 wading = 4 bad, mean |gap| 0.09 m, worst +0.75 / -0.45 m
+flying probes (over 1.00 m): 6 of 3538 = 1.7 per 1000, bar 5.0
+
+PASS cave-floor  2 caves probed, worst hover +1.52 m against a 1.80 m bar, 1.7 flying per 1000 against 5.0
+
+========================================================================
+  cave gate: walk  (cave-walk.mjs)
+========================================================================
+k=0   built=true  deepest 66.0 m at 40 s  25 of 81 samples past 18 m  longest stall 137 frames
+          0s  depth     0  in    0  ring   0  off 41.9/5.2  head  21.8  overfloor -15.9  speed  0.04/ 0.36 x1  aim -1  yaw -0.31/-0.31  ground
+          2s  depth     0  in    0  ring   0  off 36.2/5.2  head  19.8  overfloor -13.8  speed  2.79/ 2.74 x1  aim -1  yaw -0.31/-0.31  ground
+          4s  depth     0  in    0  ring   0  off   31/5.2  head  16.8  overfloor -10.9  speed  2.62/ 2.58 x1  aim -1  yaw -0.31/-0.31  ground
+          6s  depth     0  in    0  ring   0  off   26/5.2  head  13.9  overfloor  -7.9  speed   2.5/ 2.58 x1  aim -1  yaw -0.31/-0.31  ground
+          8s  depth     0  in    0  ring   0  off   19/5.2  head  12.9  overfloor  -6.9  speed   3.8/ 3.79 x1  aim -1  yaw -0.31/-0.31  ground
+         10s  depth     0  in    0  ring   0  off 13.2/5.2  head  10.5  overfloor  -4.5  speed  2.49/ 2.48 x1  aim -1  yaw -0.31/-0.31  ground
+         12s  depth     0  in    0  ring   0  off  8.2/5.2  head   7.8  overfloor  -1.8  speed  2.53/ 2.53 x1  aim -1  yaw -0.31/-0.31  ground
+         14s  depth     0  in    0  ring   0  off  2.6/5.2  head   5.7  overfloor   0.3  speed  2.89/  2.9 x1  aim -1  yaw -0.31/-0.31  ground
+         16s  depth   2.2  in    1  ring   3  off  0.3/5.1  head   4.2  overfloor   1.7  speed  1.94/ 1.91 x1  aim 3  yaw -0.32/-0.32  ground
+         18s  depth     3  in    1  ring   4  off  0.5/5.1  head   4.2  overfloor   1.7  speed  1.85/ 1.85 x1  aim 4  yaw -0.35/-0.35  ground
+         20s  depth     3  in    1  ring   4  off  0.7/5.1  head   4.2  overfloor   1.7  speed  1.85/ 1.85 x1  aim 4  yaw -0.37/-0.37  ground
+         22s  depth   5.3  in    1  ring   6  off  1.2/5.1  head   4.1  overfloor   1.8  speed  1.81/  1.8 x1  aim 6  yaw -0.45/-0.45  ground
+         24s  depth   9.6  in    1  ring  14  off  0.6/4.9  head   4.1  overfloor   1.5  speed  3.22/ 2.53 x1  aim 14  yaw -0.4/-0.41  ground
+         26s  depth  14.3  in    1  ring  20  off  0.4/4.3  head   3.2  overfloor   1.8  speed  2.53/ 2.48 x1  aim 20  yaw -0.38/-0.38  ground
+         28s  depth  18.7  in    1  ring  26  off  0.7/4.3  head   3.1  overfloor   1.9  speed  2.33/ 4.22 x1  aim 26  yaw -0.4/-0.4  ground
+         30s  depth  26.8  in    1  ring  37  off  0.4/4.1  head   2.9  overfloor   1.9  speed   4.4/  4.4 x1  aim 37  yaw -0.35/-0.36  ground
+         32s  depth  34.7  in    1  ring  48  off  0.2/3.5  head   2.3  overfloor   1.8  speed  3.59/ 3.42 x1  aim 48  yaw -0.34/-0.35  ground
+         34s  depth  41.3  in    1  ring  57  off  0.6/3.6  head   2.3  overfloor   1.7  speed  4.18/ 4.02 x1  aim 57  yaw -0.31/-0.31  ground
+         36s  depth  48.1  in    1  ring  66  off  0.1/3.9  head   2.7  overfloor   1.8  speed   3.3/ 3.28 x1  aim 66  yaw -0.2/-0.21  ground
+         38s  depth  54.6  in    1  ring  75  off  0.2/4.3  head   3.3  overfloor   1.7  speed  3.13/ 3.63 x1  aim 75  yaw -0.5/-0.47  ground
+         40s  depth    66  in    1  ring  92  off  2.1/4.3  head   2.9  overfloor     2  speed  4.28/ 4.38 x1  aim 92  yaw -1.91/-1.89  ground
+k=-1  built=true  deepest 99.5 m at 40 s  40 of 81 samples past 18 m  longest stall 0 frames
+          0s  depth     0  in    0  ring   0  off 43.2/5  head   5.7  overfloor   0.1  speed  0.04/  0.4 x1  aim -1  yaw 2.74/2.74  ground
+          2s  depth     0  in    0  ring   0  off 36.7/5  head   4.5  overfloor   1.2  speed  3.39/ 3.37 x1  aim -1  yaw 2.74/2.74  ground
+          4s  depth     0  in    0  ring   0  off   29/5  head   5.6  overfloor   0.1  speed  1.28/  4.4 x1  aim -1  yaw 2.74/2.74  air
+          6s  depth     0  in    0  ring   0  off 21.5/5  head   8.2  overfloor  -2.4  speed  4.37/  4.4 x1  aim -1  yaw 2.68/2.69  ground
+          8s  depth     0  in    0  ring   0  off 13.6/5  head   7.6  overfloor  -1.9  speed  3.37/ 3.34 x1  aim -1  yaw 2.68/2.68  ground
+         10s  depth     0  in    0  ring   0  off  6.8/5  head   6.3  overfloor  -0.5  speed  3.02/  2.9 x1  aim -1  yaw 2.68/2.68  ground
+         12s  depth     0  in 0.01  ring   0  off  0.4/5  head     4  overfloor   1.8  speed  2.53/ 2.32 x1  aim -1  yaw 2.68/2.68  ground
+         14s  depth   3.8  in    1  ring   5  off  0.4/4.2  head   3.1  overfloor   1.7  speed   1.8/ 1.79 x1  aim 5  yaw 2.57/2.64  ground
+         16s  depth   6.9  in    1  ring   9  off  0.3/5.4  head   4.6  overfloor   1.7  speed  1.77/ 1.78 x1  aim 9  yaw 2.52/2.53  ground
+         18s  depth   9.9  in    1  ring  13  off  1.8/4.7  head   3.7  overfloor   1.6  speed  1.94/ 1.87 x1  aim 13  yaw 2.64/2.36  ground
+         20s  depth  17.4  in    1  ring  23  off  0.7/4.4  head   3.2  overfloor   1.8  speed  4.09/ 4.33 x1  aim 23  yaw 2.02/2.02  ground
+         22s  depth  28.8  in    1  ring  39  off  0.7/4.2  head     3  overfloor   1.8  speed  2.88/  4.4 x1  aim 40  yaw 2.69/2.69  air
+         24s  depth  37.1  in    1  ring  51  off  0.1/3.9  head   2.6  overfloor   1.8  speed   4.4/  4.4 x1  aim 51  yaw 2.66/2.66  ground
+         26s  depth  45.3  in    1  ring  61  off  0.4/3.6  head   2.1  overfloor     2  speed  3.87/  4.4 x1  aim 61  yaw 2.4/2.42  ground
+         28s  depth  53.2  in    1  ring  72  off  1.6/3.5  head   2.3  overfloor   1.7  speed  1.69/  3.2 x1  aim 72  yaw 2.17/2.17  ground
+         30s  depth    60  in    1  ring  82  off  0.4/4.1  head   4.5  overfloor   0.2  speed  1.71/ 3.05 x1  aim 82  yaw 2.16/2.16  ground
+         32s  depth  66.7  in    1  ring  91  off  0.1/4.5  head   5.3  overfloor  -0.1  speed  1.47/ 3.15 x1  aim 91  yaw 2.18/2.18  ground
+         34s  depth  73.4  in    1  ring 101  off  0.4/4.8  head   5.1  overfloor   0.4  speed  2.48/ 3.77 x1  aim 101  yaw 2.2/2.2  ground
+         36s  depth  81.6  in    1  ring 113  off  0.3/5.1  head   5.7  overfloor   0.1  speed  2.71/  4.4 x1  aim 113  yaw 2.2/2.2  ground
+         38s  depth  90.6  in    1  ring 125  off  0.5/5.3  head   6.3  overfloor  -0.2  speed  2.67/  4.4 x1  aim 124  yaw 2.17/2.17  ground
+         40s  depth  99.5  in    1  ring 136  off  0.3/5.1  head   6.2  overfloor  -0.3  speed  4.34/  4.4 x1  aim 136  yaw 2.15/2.15  ground
+k=1   built=true  deepest 89.7 m at 40 s  35 of 81 samples past 18 m  longest stall 0 frames
+          0s  depth     0  in    0  ring   0  off 46.7/4.6  head   8.6  overfloor  -3.3  speed  0.04/ 0.36 x1  aim -1  yaw -0.41/-0.41  ground
+          2s  depth     0  in    0  ring   0  off 40.5/4.6  head   7.3  overfloor    -2  speed  3.26/ 3.25 x1  aim -1  yaw -0.41/-0.41  ground
+          4s  depth     0  in    0  ring   0  off 32.8/4.6  head   7.9  overfloor  -2.6  speed  0.36/  4.4 x1  aim -1  yaw -0.41/-0.41  air
+          6s  depth     0  in    0  ring   0  off   24/4.6  head  10.4  overfloor  -5.1  speed  4.21/ 4.02 x1  aim -1  yaw -0.41/-0.41  ground
+          8s  depth     0  in    0  ring   0  off 18.4/4.6  head   7.9  overfloor  -2.6  speed  2.44/ 2.49 x1  aim -1  yaw -0.41/-0.41  ground
+         10s  depth     0  in    0  ring   0  off 12.7/4.6  head   5.8  overfloor  -0.5  speed  3.15/ 3.17 x1  aim -1  yaw -0.41/-0.41  ground
+         12s  depth     0  in    0  ring   0  off  5.4/4.6  head     5  overfloor   0.3  speed  4.33/ 4.38 x1  aim -1  yaw -0.41/-0.41  ground
+         14s  depth   1.4  in    1  ring   1  off  0.4/4.8  head   3.7  overfloor   1.8  speed  1.89/ 1.84 x1  aim 2  yaw -0.41/-0.4  ground
+         16s  depth   3.8  in    1  ring   5  off  0.6/5.4  head   4.5  overfloor   1.7  speed  1.76/ 1.76 x1  aim 5  yaw -0.49/-0.49  ground
+         18s  depth   7.6  in    1  ring  10  off  0.4/4.3  head   3.3  overfloor   1.6  speed  1.77/ 1.79 x1  aim 10  yaw -0.48/-0.48  ground
+         20s  depth  10.6  in    1  ring  15  off  0.7/4.7  head   3.7  overfloor   1.8  speed  2.25/ 2.42 x1  aim 15  yaw -0.41/-0.41  ground
+         22s  depth  15.9  in    1  ring  22  off    0/5.1  head   4.6  overfloor   1.3  speed  1.63/ 2.17 x1  aim 22  yaw -0.48/-0.48  ground
+         24s  depth  22.4  in    1  ring  30  off  0.5/5.3  head   5.3  overfloor   0.8  speed  1.62/ 4.11 x1  aim 30  yaw -0.44/-0.44  ground
+         26s  depth  31.7  in    1  ring  41  off  0.8/5.3  head   6.4  overfloor  -0.2  speed  1.73/  4.4 x1  aim 41  yaw -0.43/-0.43  air
+         28s  depth  40.4  in    1  ring  54  off  0.7/4.5  head   5.2  overfloor   0.1  speed  2.11/  4.4 x1  aim 53  yaw -0.47/-0.47  air
+         30s  depth  49.3  in    1  ring  65  off  0.1/4.7  head   5.4  overfloor     0  speed  2.66/  4.4 x1  aim 65  yaw -0.43/-0.44  ground
+         32s  depth    58  in    1  ring  76  off  1.2/4.9  head   5.5  overfloor   0.1  speed  2.88/  4.4 x1  aim 76  yaw -0.04/-0.06  ground
+         34s  depth  66.2  in    1  ring  90  off  0.2/4.4  head   4.3  overfloor   0.7  speed  3.19/ 3.19 x1  aim 90  yaw 1.03/1.03  ground
+         36s  depth  72.9  in    1  ring  99  off  0.2/4  head   3.7  overfloor   0.9  speed  2.53/  3.5 x1  aim 99  yaw 1.02/1.02  ground
+         38s  depth  80.6  in    1  ring 109  off  0.2/3.9  head   3.3  overfloor   1.1  speed  3.12/  4.4 x1  aim 109  yaw 1/1.01  ground
+         40s  depth  89.7  in    1  ring 121  off  0.2/3.7  head   3.1  overfloor   1.2  speed  2.02/  4.4 x1  aim 121  yaw 0.98/0.98  ground
+
+PASS: every mouth walked into, past 18 m, holding W
+
+========================================================================
+  cave gate: branch  (cave-branch.mjs)
+========================================================================
+
+grove-01 k=0  main 343 m, 9 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1       131    67m     2.1x10.6     3.7x20.2    2.9   13.8   -0.1    5.2      25      61m      0
+  2       222    72m      3.5x1.8      6.0x3.2    3.1    1.8   +0.0    2.7      18      24m     88
+  3       293    77m      0.8x2.1      7.3x3.9    4.1    2.3   +0.0    4.5      22      48m      0
+  4       269   120m      0.5x4.5      5.2x8.5    1.9    3.6   +0.0    5.1      16      38m      1
+  5       340    31m      4.1x3.9      6.4x7.3    5.2    3.1   +0.0    3.4      14      31m      2
+  6       444   108m      5.7x4.8      7.6x8.7    2.1    3.6   +0.0   15.9      21      43m      0
+  7       419   142m      6.5x5.1      8.3x9.5    2.0    2.9   +0.0   10.6      33      59m      0
+  8<4      29    59m      2.5x1.8      6.4x3.4    3.9    2.0   +0.0    2.9      15      52m     38
+  9<6      34    57m      1.0x2.4      8.4x4.5    4.2    2.0   +0.0    4.4       5      30m      0
+
+grove-01 k=-1  main 193 m, 4 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1        94    63m      2.1x4.2      4.9x8.0    2.0    2.7   +0.0    3.5      20      52m      0
+  2       242    27m      3.9x4.7      4.8x7.9    3.6    6.2   +0.0   15.9      10      27m      2
+  3       210   140m      5.1x4.2      6.7x7.7    3.4    2.3   +0.0    9.2      34      33m      0
+  4       210    72m      2.9x5.3      6.0x9.8    3.5    5.5   +0.0    9.2      17      55m      0
+
+grove-02 k=1  main 281 m, 9 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1        40    98m      2.8x1.9      6.6x3.5    3.5    1.7   +0.0    3.0      22      52m     28
+  2       215   143m      2.2x4.4      5.2x8.5    2.4    3.4   +0.0    3.9      37      31m      1
+  3       363   123m      3.6x4.1      4.6x7.5    3.2    5.4   +0.0   15.2      44      42m      0
+  4       340    81m      5.5x4.7      7.5x8.6    4.1    2.3   -0.0   10.6      17      47m      0
+  5       340    35m      1.0x9.4     2.9x17.0    2.3   13.8   +0.1   10.6      10      35m      2
+  6<1      28    76m      4.4x2.0      7.1x3.8    4.7    2.1   +0.0    3.2      25      54m      0
+  7<2      26    99m      1.8x4.0      4.5x7.4    3.5    5.5   +0.0    3.2      30      62m      0
+  8<3      26    68m      1.6x3.4      3.8x6.2    3.2    5.7   +0.0    2.7      30      55m     32
+  9<4      26    48m      4.8x2.0      6.9x3.7    2.7    1.6   +0.0    3.1      15      48m      0
+
+grove-02 k=-1  main 541 m, 13 branches
+  br       at    len     hole HxW     bore HxW   minH   minW   step  mainR  lights   walked  stall
+  1        49    86m      2.8x1.8      6.4x3.4    4.2    1.9   +0.0    3.8      25      39m    124
+  2       132    57m      1.9x3.9      4.5x7.4    2.5    3.9   +0.0    3.3       8      56m      0
+  3       196    38m      2.5x1.7      6.1x3.2    4.2    2.3   -0.0    2.7       4      38m      2
+  4       262    69m      1.7x3.6      4.2x6.8    2.4    4.5   +0.0    3.0      19      54m      0
+  5       321    48m      1.9x4.0      4.6x7.5    2.7    4.8   +0.0    3.3       6      47m      0
+  6       518    26m     2.5x12.0     4.0x21.8    2.4   12.8   -0.0    9.0      14      26m      2
+  7       421   118m      2.7x5.0     6.4x10.6    2.3    1.7   +0.0    8.0      27      49m      0
+  8       579    45m      5.0x2.1      7.4x4.0    2.7    1.4   +0.0    3.3      10      45m      1
+  9       698   107m      6.3x5.1     9.0x10.2    2.6    2.3   +0.0   13.0      10      58m      0
+  10      665   194m      4.6x4.3      7.1x8.1    3.0    2.8   +0.0    5.8      61      57m      0
+  11      665    65m      2.4x4.9      5.6x9.1    2.7    4.6   +0.0    5.8      11      26m      0
+  12<1     57    83m      4.7x1.9      6.7x3.6    4.1    2.0   +0.0    3.1       9      38m    253
+  13<7     34    24m      1.0x2.3      8.1x4.3    5.1    2.3   +0.0    4.9      10      24m      2
+
+35 branches over 2 seeds: 35 entered, 0 not.  mean walked 43.9 m of 79 m mean length.  mean aperture 3.1 m tall, mean lights 19.8
+0 of 35 passages close a loop
+
+========================================================================
+  cave gate: junction  (cave-junction.mjs)
+========================================================================
+grove-01-k0-br1.png  junction at ring 131, 13.1 m away, bore 19.2 m wide, 67 m of passage behind it
+    open: 8 of 576 rays met no rock, 0 of them escaping within 20 m; control looking back 0 — 21,7 out@22m 22,7 out@22m 23,7 out@22m 24,7 out@22m 25,7 out@22m 26,7 out@22m
+grove-01-k0-br2.png  junction at ring 222, 9.3 m away, bore 3.1 m wide, 72 m of passage behind it  sealed (576 rays)
+grove-01-k0-br3.png  junction at ring 293, 13.2 m away, bore 3.7 m wide, 77 m of passage behind it  sealed (576 rays)
+grove-01-k0-br4.png  junction at ring 269, 4.7 m away, bore 8.1 m wide, 120 m of passage behind it  sealed (576 rays)
+grove-01-k0-br5.png  junction at ring 340, 9.6 m away, bore 7.0 m wide, 31 m of passage behind it
+    open: 3 of 576 rays met no rock, 0 of them escaping within 20 m; control looking back 0 — 17,11 out@22m 17,12 out@22m 17,13 out@24m
+grove-01-k0-br6.png  junction at ring 444, 22.7 m away, bore 8.3 m wide, 108 m of passage behind it  sealed (576 rays)
+grove-01-k0-br7.png  junction at ring 419, 13.3 m away, bore 9.0 m wide, 142 m of passage behind it  sealed (576 rays)
+grove-01-k0-br8.png  junction at ring 29, 12.0 m away, bore 3.3 m wide, 59 m of passage behind it  sealed (576 rays)
+grove-01-k0-br9.png  junction at ring 34, 8.1 m away, bore 4.3 m wide, 57 m of passage behind it
+    open: 4 of 576 rays met no rock, 0 of them escaping within 20 m; control looking back 0 — 12,7 out@34m 9,8 out@26m 10,8 out@34m 11,8 out@34m
+
+PASS: every junction is a hole in a wall and not a hole in the mountain
+
+========================================================================
+  cave gate: seal  (cave-seal.mjs)
+========================================================================
+passage k=0, 328 m in at (114.8, -13.9)
+
+{
+  "cave": {
+    "inCave": 1,
+    "depth": 329,
+    "roofed": true,
+    "rockOverhead": 45.5,
+    "prompt": null,
+    "patchStillThere": true,
+    "dosesUnchanged": true
+  },
+  "surface": {
+    "inCave": 0,
+    "roofed": false,
+    "prompt": "E eat"
+  },
+  "rain": {
+    "wetAge": 1632,
+    "surfaceLevel": 0.38,
+    "surfaceVisible": true,
+    "caveLevel": 0.38,
+    "caveVisible": false,
+    "caveDepth": 329,
+    "caveRoofed": true
+  }
+}
+
+PASS
+
+========================================================================
+  cave gate: end  (cave-end.mjs)
+========================================================================
+grove-01 k=0   346 m, 474 rings, end at 471, 10 passage(s), 230 lights, 393 formations, 250 blocks
+    terminus  half-width 24.01 m vs 3.78 m feed (6.35x), 29.3 m floor to ceiling, at ring 444
+    drive     1201 frames, inCave low 1, worst frame rise 0.053 m, stopped 0 m past the end plane, on the ground 91%
+        0.2s  ring 436  in    1  past-end  -20.1  y     -23  rock over   41.1  rise 0.018  off 0/17.5  post 0  v 2.11
+        0.4s  ring 437  in    1  past-end -19.61  y     -23  rock over   41.3  rise 0.004  off 0/17.4  post 0  v 2.64
+        0.6s  ring 439  in    1  past-end -19.06  y   -22.9  rock over   41.5  rise 0.013  off 0/17.5  post 0  v 2.77
+        0.8s  ring 439  in    1  past-end  -18.5  y   -23.2  rock over   41.9  rise 0.003  off 0/18.1  post 0  v 2.81
+          1s  ring 440  in    1  past-end -17.94  y   -23.3  rock over   42.2  rise 0.006  off 0/18.7  post 0  v 2.84
+        1.2s  ring 440  in    1  past-end -17.37  y   -23.5  rock over   42.6  rise 0.012  off 0/18.6  post 0  v 2.87
+        1.4s  ring 441  in    1  past-end -16.79  y   -23.5  rock over   42.9  rise 0.024  off 0/19.1  post 0  v 2.91
+        1.6s  ring 441  in    1  past-end  -16.2  y   -23.7  rock over   43.2  rise 0.004  off 0/19.1  post 0  v 2.96
+        1.8s  ring 442  in    1  past-end  -15.6  y   -23.8  rock over   43.5  rise 0.019  off 0/19.5  post 0  v 3.02
+          2s  ring 443  in    1  past-end -14.99  y   -23.9  rock over   43.7  rise 0.025  off 0/19.9  post 0  v 3.09
+        2.2s  ring 443  in    1  past-end -14.37  y   -23.8  rock over   43.8  rise 0.017  off 0/19.9  post 0  v 3.16
+        2.4s  ring 444  in    1  past-end -13.72  y   -23.7  rock over   43.9  rise 0.009  off 0/19.9  post 0  v 3.24
+        2.6s  ring 445  in    1  past-end -13.07  y   -23.8  rock over   44.1  rise 0.013  off 0/19.8  post 0  v 3.31
+        2.8s  ring 446  in    1  past-end  -12.4  y     -24  rock over   44.4  rise 0.001  off 0/19.8  post 0  v 3.39
+          3s  ring 446  in    1  past-end -11.71  y   -24.1  rock over   44.6  rise 0.036  off 0/19.7  post 0  v 3.49
+        3.2s  ring 447  in    1  past-end    -11  y   -24.3  rock over   44.9  rise 0.007  off 0/19.5  post 0  v 3.6
+        3.4s  ring 449  in    1  past-end -10.27  y   -24.4  rock over   45.1  rise 0.006  off 0/19.4  post 0  v 3.7
+        3.6s  ring 450  in    1  past-end  -9.52  y   -24.4  rock over   45.2  rise 0.006  off 0/19.1  post 0  v 3.79
+        3.8s  ring 451  in    1  past-end  -8.75  y   -24.3  rock over   45.2  rise 0.019  off 0/19  post 0  v 3.88
+          4s  ring 452  in    1  past-end  -7.97  y   -24.6  rock over   45.5  rise 0.003  off 0/18.7  post 0  v 3.95
+        4.2s  ring 454  in    1  past-end  -7.17  y   -24.6  rock over   45.6  rise 0.027  off 0/18.2  post 0  v 4
+        4.4s  ring 455  in    1  past-end  -6.37  y   -24.8  rock over   45.8  rise 0.012  off 0/17.6  post 0  v 4.03
+        4.6s  ring 457  in    1  past-end  -5.56  y   -24.9  rock over     46  rise 0.007  off 0/17.2  post 0  v 4.03
+        4.8s  ring 459  in    1  past-end  -4.76  y   -24.8  rock over   45.9  rise 0.015  off 0/16.8  post 0  v 4.02
+          5s  ring 460  in    1  past-end  -3.96  y   -24.9  rock over     46  rise 0.012  off 0/15.9  post 2.4  v 3.98
+        5.2s  ring 461  in    1  past-end  -3.17  y   -25.2  rock over   46.4  rise 0.02  off 0/14.8  post 2.4  v 3.93
+        5.4s  ring 463  in    1  past-end  -2.38  y   -25.2  rock over   46.4  rise 0.014  off 0/13.4  post 2.1  v 3.91
+        5.6s  ring 465  in    1  past-end  -1.63  y   -25.2  rock over   46.5  rise 0.006  off 0.1/11.7  post 2.1  v 3.88
+        5.8s  ring 467  in    1  past-end  -0.86  y   -25.2  rock over   46.6  rise 0  off 0.1/9.3  post 0  v 3.84
+          6s  ring 470  in    1  past-end   -0.1  y   -25.2  rock over   46.6  rise 0.005  off 0/7.7  post 0  v 3.79
+        6.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0/7.7  post 0  v 1.45
+        6.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.47
+        6.6s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0.1/7.7  post 1.7  v 2.39
+        6.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0.1/7.7  post 1.7  v 3.44
+          7s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0.1/7.7  post 0  v 3.72
+        7.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 3.49
+        7.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 3.66
+        7.6s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 1.28
+        7.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.6  rise 0.002  off 0.1/7.7  post 0  v 1.89
+          8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.6  rise 0.003  off 0.1/7.7  post 0  v 2.37
+        8.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0/7.7  post 0  v 0.63
+        8.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0/7.7  post 0  v 0.86
+        8.6s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.55
+        8.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.03
+          9s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 1.07
+        9.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0.1/7.7  post 0  v 3.08
+        9.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 3.63
+        9.6s  ring 471  in    1  past-end  -0.04  y   -25.2  rock over   46.7  rise 0.001  off 0.1/7.7  post 0  v 0.95
+        9.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.6  rise 0.001  off 0/7.7  post 0  v 0.7
+         10s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.21
+       10.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0/7.7  post 0  v 0.69
+       10.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0
+       10.6s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.37
+       10.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 0.53
+         11s  ring 471  in    1  past-end  -0.02  y   -25.2  rock over   46.6  rise 0.002  off 0.1/7.7  post 0  v 1.38
+       11.2s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.6  rise 0  off 0.2/7.7  post 0  v 2.95
+       11.4s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.6  rise 0.001  off 0.1/7.7  post 0  v 3.55
+       11.6s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0.001  off 0/7.7  post 0  v 3.7
+       11.8s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 3.19
+         12s  ring 471  in    1  past-end      0  y   -25.2  rock over   46.7  rise 0  off 0/7.7  post 0  v 3.65
+
+grove-01 k=-1  195 m, 272 rings, end at 269, 5 passage(s), 143 lights, 186 formations, 114 blocks
+    terminus  half-width 23.4 m vs 4.1 m feed (5.71x), 29.4 m floor to ceiling, at ring 242
+    drive     1201 frames, inCave low 1, worst frame rise 0.062 m, stopped 0 m past the end plane, on the ground 91%
+        0.2s  ring 234  in    1  past-end -20.57  y    -7.8  rock over     39  rise 0.001  off 0/17.2  post 0  v 2.62
+        0.4s  ring 235  in    1  past-end -19.97  y    -7.8  rock over   39.2  rise 0.006  off 0/17.6  post 0  v 3.27
+        0.6s  ring 236  in    1  past-end -19.29  y    -7.9  rock over   39.4  rise 0.006  off 0/17.6  post 0  v 3.44
+        0.8s  ring 237  in    1  past-end  -18.6  y    -8.1  rock over   39.7  rise 0.03  off 0/18  post 0  v 3.5
+          1s  ring 238  in    1  past-end -17.89  y    -8.1  rock over   39.8  rise 0.006  off 0/18  post 0  v 3.53
+        1.2s  ring 238  in    1  past-end -17.18  y    -8.3  rock over   40.1  rise 0.014  off 0/18.4  post 0  v 3.57
+        1.4s  ring 239  in    1  past-end -16.46  y    -8.5  rock over   40.3  rise 0.038  off 0/18.8  post 0  v 3.62
+        1.6s  ring 240  in    1  past-end -15.73  y    -8.7  rock over   40.7  rise 0.018  off 0/19.1  post 0  v 3.68
+        1.8s  ring 241  in    1  past-end -14.99  y    -8.9  rock over   40.9  rise 0.013  off 0/19.3  post 0  v 3.75
+          2s  ring 241  in    1  past-end -14.23  y    -9.1  rock over   41.2  rise 0  off 0/19.3  post 0  v 3.84
+        2.2s  ring 242  in    1  past-end -13.45  y    -9.1  rock over   41.3  rise 0.01  off 0/19.3  post 0  v 3.94
+        2.4s  ring 243  in    1  past-end -12.64  y    -9.1  rock over   41.3  rise 0.007  off 0/19.3  post 0  v 4.06
+        2.6s  ring 244  in    1  past-end -11.82  y    -9.3  rock over   41.5  rise 0.013  off 0/19.1  post 0  v 4.21
+        2.8s  ring 245  in    1  past-end -10.96  y    -9.4  rock over   41.6  rise 0.024  off 0/19  post 0  v 4.35
+          3s  ring 247  in    1  past-end -10.08  y    -9.5  rock over   41.6  rise 0.003  off 0/18.9  post 0  v 4.39
+        3.2s  ring 248  in    1  past-end  -9.21  y    -9.8  rock over   41.8  rise 0.006  off 0/18.6  post 0  v 4.4
+        3.4s  ring 250  in    1  past-end  -8.32  y    -9.8  rock over   41.7  rise 0.012  off 0/18.2  post 0  v 4.4
+        3.6s  ring 251  in    1  past-end  -7.45  y   -10.2  rock over   41.8  rise 0.017  off 0/17.9  post 0  v 4.4
+        3.8s  ring 253  in    1  past-end  -6.57  y   -10.3  rock over   41.6  rise 0.018  off 0/17.4  post 0  v 4.4
+          4s  ring 255  in    1  past-end  -5.68  y   -10.3  rock over   41.4  rise 0.021  off 0/16.7  post 0  v 4.4
+        4.2s  ring 256  in    1  past-end  -4.81  y   -10.6  rock over   41.3  rise 0.006  off 0/16.3  post 0  v 4.4
+        4.4s  ring 258  in    1  past-end  -3.93  y   -10.7  rock over     41  rise 0.017  off 0/15.4  post 0  v 4.4
+        4.6s  ring 260  in    1  past-end  -3.05  y   -10.7  rock over   40.6  rise 0.012  off 0/14.4  post 0  v 4.4
+        4.8s  ring 261  in    1  past-end  -2.17  y   -10.8  rock over   40.2  rise 0  off 0/13  post 0  v 4.4
+          5s  ring 264  in    1  past-end  -1.29  y   -10.7  rock over   39.7  rise 0.003  off 0/10.3  post 0  v 4.4
+        5.2s  ring 267  in    1  past-end  -0.41  y   -10.7  rock over   39.3  rise 0.002  off 0/7.5  post 0  v 4.4
+        5.4s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 2.21
+        5.6s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 0.63
+        5.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 2.67
+          6s  ring 269  in    1  past-end  -0.01  y   -10.7  rock over   39.1  rise 0.004  off 0/7.5  post 0  v 1.21
+        6.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0  off 0.1/7.5  post 0  v 3.41
+        6.4s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0.1/7.5  post 0  v 4.15
+        6.6s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0  off 0/7.5  post 0  v 3.04
+        6.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0  off 0/7.5  post 0  v 1.97
+          7s  ring 269  in    1  past-end  -0.03  y   -10.7  rock over   39.1  rise 0.005  off 0.1/7.5  post 0  v 1.56
+        7.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.2/7.5  post 0  v 2.62
+        7.4s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0.1/7.5  post 0  v 0.87
+        7.6s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0/7.5  post 0  v 0.73
+        7.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.003  off 0/7.5  post 0  v 0.76
+          8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 3.3
+        8.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 1
+        8.4s  ring 269  in    1  past-end  -0.02  y   -10.7  rock over   39.2  rise 0.003  off 0.1/7.5  post 0  v 1.91
+        8.6s  ring 269  in    1  past-end      0  y   -10.8  rock over   39.1  rise 0  off 0.2/7.5  post 0  v 2.47
+        8.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.1/7.5  post 0  v 0.76
+          9s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 0.21
+        9.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.003  off 0/7.5  post 0  v 0.8
+        9.4s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0/7.5  post 0  v 0.41
+        9.6s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0  off 0/7.5  post 0  v 1.64
+        9.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0  off 0/7.5  post 0  v 0.18
+         10s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.2/7.5  post 0  v 2.51
+       10.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.2/7.5  post 0  v 3.9
+       10.4s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.1/7.5  post 0  v 0.75
+       10.6s  ring 269  in    1  past-end      0  y   -10.8  rock over   39.1  rise 0.002  off 0.2/7.5  post 0  v 2.1
+       10.8s  ring 269  in    1  past-end      0  y   -10.8  rock over   39.1  rise 0  off 0.3/7.5  post 0  v 3.67
+         11s  ring 269  in    1  past-end      0  y   -10.8  rock over   39.1  rise 0  off 0.2/7.5  post 0  v 4.22
+       11.2s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.001  off 0.1/7.5  post 0  v 0.52
+       11.4s  ring 268  in    1  past-end  -0.14  y   -10.7  rock over   39.2  rise 0.01  off 0.1/7.5  post 0  v 2.31
+       11.6s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.002  off 0.5/7.5  post 0  v 3.33
+       11.8s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.2  rise 0.001  off 0.5/7.5  post 0  v 4.11
+         12s  ring 269  in    1  past-end      0  y   -10.7  rock over   39.1  rise 0.012  off 0.1/7.5  post 0  v 3.45
+
+grove-01 k=1   215 m, 295 rings, end at 290, 4 passage(s), 102 lights, 190 formations, 100 blocks
+    terminus  half-width 10.46 m vs 2.51 m feed (4.17x), 8.7 m floor to ceiling, at ring 262
+    drive     1201 frames, inCave low 1, worst frame rise 0.134 m, stopped 0 m past the end plane, on the ground 84%
+        0.2s  ring 259  in    1  past-end -21.61  y   -10.8  rock over   19.7  rise 0.006  off 0.1/8.9  post 1.4  v 3.32
+        0.4s  ring 261  in    1  past-end -20.86  y   -10.8  rock over   19.6  rise 0.012  off 0.1/9  post 1.4  v 4.13
+        0.6s  ring 262  in    1  past-end -20.04  y     -11  rock over   19.6  rise 0.012  off 0.2/9  post 0  v 4.33
+        0.8s  ring 263  in    1  past-end -19.18  y   -11.1  rock over   19.6  rise 0.019  off 0.3/8.9  post 0  v 4.38
+          1s  ring 264  in    1  past-end -18.33  y   -11.2  rock over   19.6  rise 0.017  off 0.5/8.7  post 0  v 4.4
+        1.2s  ring 265  in    1  past-end -17.47  y   -11.4  rock over   19.7  rise 0.024  off 0.6/8.4  post 0  v 4.4
+        1.4s  ring 266  in    1  past-end -16.61  y   -11.5  rock over   19.7  rise 0.034  off 0.7/8.2  post 0  v 4.4
+        1.6s  ring 267  in    1  past-end -15.75  y   -11.5  rock over   19.7  rise 0.001  off 0.8/8.1  post 0  v 4.4
+        1.8s  ring 268  in    1  past-end -14.89  y   -11.6  rock over   19.7  rise 0.004  off 0.8/8  post 0  v 4.4
+          2s  ring 269  in    1  past-end -14.03  y   -11.6  rock over   19.6  rise 0.012  off 0.9/8.1  post 0  v 4.4
+        2.2s  ring 270  in    1  past-end -13.17  y   -11.7  rock over   19.7  rise 0.015  off 0.9/8.1  post 0  v 4.4
+        2.4s  ring 272  in    1  past-end  -12.3  y   -11.7  rock over   19.7  rise 0.002  off 1/8.1  post 0  v 4.4
+        2.6s  ring 273  in    1  past-end -11.44  y   -11.8  rock over   19.7  rise 0.018  off 1/8.1  post 0  v 4.4
+        2.8s  ring 275  in    1  past-end -10.58  y   -11.8  rock over   19.7  rise 0.003  off 1/7.9  post 0  v 4.4
+          3s  ring 276  in    1  past-end  -9.72  y   -11.7  rock over   19.6  rise 0.002  off 1.1/7.8  post 0  v 4.4
+        3.2s  ring 277  in    1  past-end  -8.86  y   -11.7  rock over   19.5  rise 0.012  off 1.1/7.1  post 0  v 4.4
+        3.4s  ring 278  in    1  past-end     -8  y   -11.6  rock over   19.4  rise 0.002  off 1.1/6.8  post 0  v 4.4
+        3.6s  ring 279  in    1  past-end  -7.13  y   -11.6  rock over   19.3  rise 0.001  off 1/6.3  post 0  v 4.4
+        3.8s  ring 281  in    1  past-end  -6.27  y   -11.6  rock over   19.2  rise 0.006  off 1/5.9  post 0  v 4.4
+          4s  ring 281  in    1  past-end  -5.41  y   -11.4  rock over     19  rise 0.134  off 0.9/5.6  post 0  v 4.4
+        4.2s  ring 283  in    1  past-end  -4.55  y   -11.4  rock over   18.9  rise 0.002  off 0.8/6  post 0  v 4.4
+        4.4s  ring 284  in    1  past-end  -3.68  y   -11.4  rock over   18.8  rise 0.003  off 0.7/6  post 0  v 4.4
+        4.6s  ring 286  in    1  past-end  -2.82  y   -11.4  rock over   18.8  rise 0.002  off 0.5/6.1  post 0  v 4.4
+        4.8s  ring 287  in    1  past-end  -1.96  y   -11.4  rock over   18.6  rise 0.003  off 0.4/6.3  post 0  v 4.4
+          5s  ring 288  in    1  past-end   -1.1  y   -11.3  rock over   18.4  rise 0.009  off 0.2/6.5  post 0  v 4.4
+        5.2s  ring 290  in    1  past-end  -0.24  y   -11.3  rock over   18.2  rise 0.006  off 0.1/6.4  post 0  v 4.4
+        5.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 2
+        5.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.47
+        5.8s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.28
+          6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.24
+        6.2s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 2.2
+        6.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.21
+        6.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0.1/6.5  post 0  v 2.78
+        6.8s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.012  off 0.1/6.5  post 0  v 3.99
+          7s  ring 290  in    1  past-end  -0.01  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.98
+        7.2s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0.1/6.5  post 0  v 3.21
+        7.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.015  off 0/6.5  post 0  v 4.1
+        7.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.81
+        7.8s  ring 290  in    1  past-end  -0.05  y   -11.2  rock over   18.2  rise 0.001  off 0/6.5  post 0  v 1.31
+          8s  ring 290  in    1  past-end      0  y   -11.3  rock over   18.2  rise 0  off 0.3/6.5  post 0  v 2.86
+        8.2s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.1  rise 0.033  off 0.3/6  post 0  v 3.99
+        8.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.013  off 0.2/6.5  post 0  v 3.89
+        8.6s  ring 290  in    1  past-end   -0.1  y   -11.2  rock over   18.2  rise 0  off 0.1/6.5  post 0  v 1.83
+        8.8s  ring 290  in    1  past-end  -0.12  y   -11.3  rock over   18.3  rise 0  off 0.4/6.4  post 0  v 2.86
+          9s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.005  off 0.6/6  post 0  v 3.71
+        9.2s  ring 290  in    1  past-end      0  y   -11.3  rock over   18.3  rise 0.011  off 0.5/6.5  post 0  v 3.27
+        9.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.001  off 0/6.5  post 0  v 3.75
+        9.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 2.05
+        9.8s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 0.52
+         10s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 1.02
+       10.2s  ring 290  in    1  past-end  -0.05  y   -11.2  rock over   18.2  rise 0.001  off 0/6.5  post 0  v 1.35
+       10.4s  ring 290  in    1  past-end      0  y   -11.3  rock over   18.2  rise 0  off 0.2/6.5  post 0  v 3.1
+       10.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.012  off 0.2/6.5  post 0  v 4.06
+       10.8s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.012  off 0.1/6.5  post 0  v 4.32
+         11s  ring 290  in    1  past-end  -0.03  y   -11.2  rock over   18.2  rise 0  off 0/6.5  post 0  v 1.22
+       11.2s  ring 290  in    1  past-end      0  y   -11.3  rock over   18.2  rise 0  off 0.2/6.5  post 0  v 2.97
+       11.4s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.011  off 0.2/6.5  post 0  v 4.03
+       11.6s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.006  off 0.1/6.5  post 0  v 4.31
+       11.8s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0  off 0.1/6.5  post 0  v 1.41
+         12s  ring 290  in    1  past-end      0  y   -11.2  rock over   18.2  rise 0.033  off 0.1/6  post 0  v 3.6
+
+check-3 k=1   614 m, 842 rings, end at 839, 9 passage(s), 339 lights, 439 formations, 233 blocks
+    terminus  half-width 19.25 m vs 3.81 m feed (5.06x), 47 m floor to ceiling, at ring 786
+    drive     1201 frames, inCave low 1, worst frame rise 0.64 m, stopped 0 m past the end plane, on the ground 93%
+        0.2s  ring 809  in    1  past-end -10.78  y   -60.6  rock over     60  rise 0.003  off 0.2/5.6  post 0  v 3.08
+        0.4s  ring 810  in    1  past-end -11.04  y   -60.5  rock over   59.9  rise 0.006  off 0.5/4.7  post 0  v 3.84
+        0.6s  ring 811  in    1  past-end -11.32  y   -60.3  rock over   59.7  rise 0.002  off 0.8/2.4  post 0  v 4.02
+        0.8s  ring 812  in    1  past-end -11.61  y   -60.4  rock over   59.8  rise 0.002  off 1.2/1.8  post 0  v 4.06
+          1s  ring 813  in    1  past-end  -12.1  y   -60.4  rock over   59.9  rise 0.003  off 1.2/1.2  post 0  v 4.06
+        1.2s  ring 814  in    1  past-end -13.01  y   -59.8  rock over   59.3  rise 0.019  off 1/2.2  post 0  v 3.4
+        1.4s  ring 823  in    1  past-end -12.62  y   -59.9  rock over   59.4  rise 0.045  off 1.4/1.8  post 0  v 3.59
+        1.6s  ring 824  in    1  past-end -11.85  y   -60.6  rock over   60.1  rise 0  off 1.2/1.3  post 0  v 4.18
+        1.8s  ring 825  in    1  past-end -10.99  y   -60.8  rock over   60.3  rise 0.047  off 1.1/1.1  post 0  v 4.34
+          2s  ring 826  in    1  past-end -10.11  y     -61  rock over   60.5  rise 0.031  off 0.9/1  post 0  v 4.39
+        2.2s  ring 827  in    1  past-end  -9.24  y   -61.2  rock over   60.7  rise 0.025  off 0.8/0.9  post 0  v 4.4
+        2.4s  ring 828  in    1  past-end  -8.36  y   -61.3  rock over   60.8  rise 0.017  off 0.7/0.9  post 0  v 4.4
+        2.6s  ring 829  in    1  past-end  -7.48  y   -61.6  rock over   61.1  rise 0.029  off 0.6/0.9  post 0  v 4.4
+        2.8s  ring 830  in    1  past-end   -6.6  y   -61.8  rock over   61.3  rise 0.023  off 0.5/1  post 1.1  v 4.4
+          3s  ring 831  in    1  past-end  -6.18  y   -61.9  rock over   61.3  rise 0.001  off 0.8/0.9  post 1.1  v 4.4
+        3.2s  ring 832  in    1  past-end   -5.5  y   -61.9  rock over   61.3  rise 0.004  off 1/0.9  post 1.1  v 4.4
+        3.4s  ring 833  in    1  past-end  -4.62  y     -62  rock over   61.4  rise 0.003  off 0.9/1  post 1.1  v 4.4
+        3.6s  ring 834  in    1  past-end  -3.75  y   -62.2  rock over   61.6  rise 0.019  off 0.7/0.9  post 0  v 4.39
+        3.8s  ring 835  in    1  past-end  -2.89  y   -62.3  rock over   61.7  rise 0.001  off 0.6/0.9  post 0  v 4.37
+          4s  ring 836  in    1  past-end  -2.03  y   -62.3  rock over   61.7  rise 0.002  off 0.4/0.9  post 0  v 4.35
+        4.2s  ring 837  in    1  past-end  -1.18  y   -62.3  rock over   61.8  rise 0.001  off 0.2/0.8  post 0  v 4.33
+        4.4s  ring 838  in    1  past-end  -0.34  y   -62.4  rock over   61.8  rise 0.003  off 0.1/0.7  post 0  v 4.31
+        4.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 1.88
+        4.8s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.46
+          5s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 3.13
+        5.2s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 3.09
+        5.4s  ring 839  in    1  past-end  -0.04  y   -62.3  rock over   61.8  rise 0.001  off 0.1/0.6  post 0  v 1.7
+        5.6s  ring 839  in    1  past-end      0  y   -62.3  rock over   61.8  rise 0  off 0.2/0.6  post 0  v 2.97
+        5.8s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 0.77
+          6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0.001  off 0/0.6  post 0  v 1.26
+        6.2s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.29
+        6.4s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.26
+        6.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 2.61
+        6.8s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 1.33
+          7s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.2/0.6  post 0  v 2.07
+        7.2s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.2/0.6  post 0  v 3.68
+        7.4s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 1.15
+        7.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 1.11
+        7.8s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.32
+          8s  ring 839  in    1  past-end  -0.01  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.96
+        8.2s  ring 839  in    1  past-end      0  y   -62.3  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 3.16
+        8.4s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 4.09
+        8.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 1.71
+        8.8s  ring 839  in    1  past-end  -0.01  y   -62.4  rock over   61.8  rise 0.001  off 0/0.6  post 0  v 1.2
+          9s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.56
+        9.2s  ring 839  in    1  past-end  -0.01  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.55
+        9.4s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 3.08
+        9.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 4.01
+        9.8s  ring 839  in    1  past-end  -0.04  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 1.51
+         10s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.2/0.6  post 0  v 2.03
+       10.2s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0.001  off 0/0.6  post 0  v 1.45
+       10.4s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.71
+       10.6s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.82
+       10.8s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.12
+         11s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 2.44
+       11.2s  ring 839  in    1  past-end  -0.02  y   -62.4  rock over   61.8  rise 0  off 0/0.6  post 0  v 0.85
+       11.4s  ring 839  in    1  past-end      0  y   -62.3  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 3.01
+       11.6s  ring 839  in    1  past-end      0  y   -62.3  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 4.05
+       11.8s  ring 839  in    1  past-end  -0.02  y   -62.4  rock over   61.8  rise 0  off 0.1/0.6  post 0  v 1.36
+         12s  ring 839  in    1  past-end      0  y   -62.4  rock over   61.8  rise 0  off 0.2/0.6  post 0  v 3.28
+
+check-3 k=2   775 m, 1067 rings, end at 1064, 13 passage(s), 378 lights, 631 formations, 378 blocks
+    terminus  half-width 36.93 m vs 3.99 m feed (9.26x), 92.1 m floor to ceiling, at ring 1020
+    drive     1201 frames, inCave low 1, worst frame rise 0.35 m, stopped 0 m past the end plane, on the ground 90%
+        0.2s  ring 1025  in    1  past-end -19.02  y  -112.9  rock over  129.9  rise 0.051  off 0/28.4  post 0  v 2.6
+        0.4s  ring 1026  in    1  past-end -18.42  y  -113.4  rock over  130.5  rise 0.028  off 0/28.3  post 0  v 3.24
+        0.6s  ring 1027  in    1  past-end -17.74  y  -113.5  rock over  130.8  rise 0.026  off 0/28.3  post 0  v 3.4
+        0.8s  ring 1028  in    1  past-end -17.06  y  -113.6  rock over  130.9  rise 0.005  off 0/28.2  post 0  v 3.43
+          1s  ring 1029  in    1  past-end -16.38  y  -113.4  rock over  130.9  rise 0.018  off 0/28.2  post 0  v 3.43
+        1.2s  ring 1030  in    1  past-end -15.69  y  -113.8  rock over  131.4  rise 0.031  off 0/28.1  post 0  v 3.41
+        1.4s  ring 1030  in    1  past-end -15.01  y  -113.9  rock over  131.6  rise 0.043  off 0/28  post 0  v 3.39
+        1.6s  ring 1031  in    1  past-end -14.33  y  -114.3  rock over  132.1  rise 0.047  off 0/27.9  post 0  v 3.37
+        1.8s  ring 1032  in    1  past-end -13.66  y  -114.4  rock over  132.4  rise 0.002  off 0/27.7  post 0  v 3.34
+          2s  ring 1033  in    1  past-end    -13  y  -114.6  rock over  132.7  rise 0.014  off 0/27.6  post 0  v 3.31
+        2.2s  ring 1034  in    1  past-end -12.34  y  -114.6  rock over  132.9  rise 0.005  off 0/27.4  post 0  v 3.28
+        2.4s  ring 1035  in    1  past-end -11.69  y  -114.7  rock over  133.2  rise 0.013  off 0/27.3  post 0  v 3.24
+        2.6s  ring 1036  in    1  past-end -11.04  y  -114.7  rock over  133.4  rise 0.018  off 0/27.1  post 0  v 3.2
+        2.8s  ring 1037  in    1  past-end -10.41  y  -114.6  rock over  133.4  rise 0.006  off 0/26.9  post 1.1  v 3.15
+          3s  ring 1037  in    1  past-end -10.25  y  -114.6  rock over  133.4  rise 0  off 0/26.9  post 1.1  v 3.12
+        3.2s  ring 1037  in    1  past-end -10.24  y  -114.6  rock over  133.4  rise 0.002  off 0.1/26.9  post 1.1  v 3.11
+        3.4s  ring 1037  in    1  past-end -10.26  y  -114.7  rock over  133.5  rise 0.006  off 0.3/26.9  post 1.1  v 3.5
+        3.6s  ring 1037  in    1  past-end -10.09  y  -114.5  rock over  133.3  rise 0.012  off 1/26.9  post 1.1  v 4.13
+        3.8s  ring 1038  in    1  past-end  -9.89  y  -114.7  rock over  133.5  rise 0.044  off 1.8/26.7  post 0  v 4.14
+          4s  ring 1038  in    1  past-end  -9.64  y  -114.8  rock over  133.7  rise 0.008  off 2.6/26.7  post 0  v 3.06
+        4.2s  ring 1039  in    1  past-end  -9.16  y    -115  rock over    134  rise 0.035  off 2.7/26.4  post 0  v 2.72
+        4.4s  ring 1040  in    1  past-end  -8.59  y  -115.2  rock over  134.3  rise 0.005  off 2.6/26.1  post 0  v 3
+        4.6s  ring 1041  in    1  past-end     -8  y  -115.3  rock over  134.6  rise 0.003  off 2.5/25.9  post 0  v 3.05
+        4.8s  ring 1042  in    1  past-end  -7.42  y  -115.2  rock over  134.7  rise 0.011  off 2.3/25.6  post 0  v 3.03
+          5s  ring 1043  in    1  past-end  -6.85  y  -115.1  rock over  134.8  rise 0.008  off 2.1/25.3  post 0  v 2.99
+        5.2s  ring 1044  in    1  past-end  -6.28  y  -115.1  rock over    135  rise 0.012  off 1.9/24.6  post 0  v 2.96
+        5.4s  ring 1045  in    1  past-end  -5.71  y    -115  rock over  135.1  rise 0.012  off 1.8/24.6  post 0  v 2.94
+        5.6s  ring 1046  in    1  past-end  -5.16  y  -114.9  rock over  135.2  rise 0.007  off 1.6/24.2  post 0  v 2.92
+        5.8s  ring 1047  in    1  past-end   -4.6  y    -115  rock over  135.5  rise 0.003  off 1.4/23.8  post 0  v 2.9
+          6s  ring 1048  in    1  past-end  -4.05  y    -115  rock over  135.7  rise 0  off 1.3/23.3  post 0  v 2.89
+        6.2s  ring 1049  in    1  past-end   -3.5  y    -115  rock over  135.9  rise 0.002  off 1.1/22.8  post 0  v 2.88
+        6.4s  ring 1050  in    1  past-end  -2.95  y    -115  rock over  136.1  rise 0.002  off 0.9/21.7  post 0  v 2.87
+        6.6s  ring 1051  in    1  past-end   -2.4  y  -115.1  rock over  136.3  rise 0.002  off 0.7/20.5  post 0  v 2.87
+        6.8s  ring 1052  in    1  past-end  -1.85  y    -115  rock over  136.5  rise 0.01  off 0.6/18.1  post 0  v 2.88
+          7s  ring 1054  in    1  past-end   -1.3  y  -114.9  rock over  136.6  rise 0.003  off 0.4/13.5  post 0  v 2.9
+        7.2s  ring 1056  in    1  past-end  -0.74  y  -115.1  rock over    137  rise 0.007  off 0.2/9.8  post 0  v 2.91
+        7.4s  ring 1061  in    1  past-end  -0.19  y  -115.1  rock over  137.2  rise 0.004  off 0.1/9.8  post 0  v 2.94
+        7.6s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0  off 0/9.8  post 0  v 1.17
+        7.8s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0/9.8  post 0  v 0.81
+          8s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0.003  off 0.1/9.8  post 0  v 1.53
+        8.2s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0  off 0.2/9.8  post 0  v 2.58
+        8.4s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0.001  off 0.2/9.8  post 0  v 2.93
+        8.6s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0.002  off 0.1/9.8  post 0  v 2.05
+        8.8s  ring 1063  in    1  past-end  -0.07  y  -115.1  rock over  137.2  rise 0  off 0.2/9.8  post 0  v 1.9
+          9s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0.4/9.8  post 0  v 2.37
+        9.2s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0.3/9.8  post 0  v 2.82
+        9.4s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0.003  off 0.3/9.8  post 0  v 0.84
+        9.6s  ring 1060  in    1  past-end  -0.32  y  -115.1  rock over  137.2  rise 0.005  off 0/9.8  post 0  v 2.98
+        9.8s  ring 1059  in    1  past-end  -0.38  y  -115.1  rock over  137.2  rise 0.011  off 0.5/9.8  post 0  v 2.58
+         10s  ring 1063  in    1  past-end  -0.01  y  -115.1  rock over  137.3  rise 0.005  off 0.8/9.8  post 0  v 2.6
+       10.2s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0.001  off 0.8/9.8  post 0  v 2.48
+       10.4s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0.009  off 0.1/9.8  post 0  v 3.84
+       10.6s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0.1/9.8  post 0  v 1.46
+       10.8s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0.001  off 0/9.8  post 0  v 1.74
+         11s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0/9.8  post 0  v 0.1
+       11.2s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0/9.8  post 0  v 0.39
+       11.4s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0  off 0/9.8  post 0  v 1.95
+       11.6s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0.001  off 0.1/9.8  post 0  v 1.48
+       11.8s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.2  rise 0  off 0.1/9.8  post 0  v 2.58
+         12s  ring 1064  in    1  past-end      0  y  -115.1  rock over  137.3  rise 0  off 0.1/9.8  post 0  v 2.89
+
+check-3 k=-3  217 m, 298 rings, end at 293, 7 passage(s), 158 lights, 224 formations, 127 blocks
+    terminus  half-width 10.05 m vs 4.34 m feed (2.31x), 6.3 m floor to ceiling, at ring 282
+    drive     1201 frames, inCave low 1, worst frame rise 0.41 m, stopped 0 m past the end plane, on the ground 98%
+        0.2s  ring 263  in    1  past-end -12.18  y     1.1  rock over   16.5  rise 0.004  off 0.1/0.8  post 0  v 2.67
+        0.4s  ring 264  in    1  past-end -11.77  y     0.9  rock over   16.7  rise 0.001  off 0.2/1  post 0  v 3.36
+        0.6s  ring 265  in    1  past-end -11.32  y     0.9  rock over   16.8  rise 0.013  off 0.5/1.5  post 0  v 3.56
+        0.8s  ring 266  in    1  past-end -10.85  y     1.4  rock over   16.5  rise 0.012  off 0.9/1.9  post 0  v 3.65
+          1s  ring 266  in    1  past-end -10.37  y     1.4  rock over   16.6  rise 0  off 3.6/8.1  post 0  v 3.71
+        1.2s  ring 267  in    1  past-end  -9.89  y     1.3  rock over   16.7  rise 0.007  off 2.8/8.1  post 0  v 3.76
+        1.4s  ring 281  in    1  past-end  -9.39  y     1.3  rock over   16.8  rise 0.009  off 2.1/8.1  post 0  v 3.65
+        1.6s  ring 282  in    1  past-end   -8.7  y     1.3  rock over   16.8  rise 0.002  off 1.5/8  post 0  v 3.89
+        1.8s  ring 282  in    1  past-end  -7.88  y     1.3  rock over   16.6  rise 0.002  off 0.9/8.1  post 0  v 4.26
+          2s  ring 283  in    1  past-end  -7.04  y     1.3  rock over   16.4  rise 0.001  off 0.4/7.9  post 0  v 4.36
+        2.2s  ring 284  in    1  past-end  -6.19  y     1.4  rock over   16.1  rise 0.005  off 0.1/7.9  post 0  v 4.39
+        2.4s  ring 285  in    1  past-end  -5.34  y     1.5  rock over   15.9  rise 0.002  off 0.4/7.8  post 0  v 4.4
+        2.6s  ring 286  in    1  past-end  -4.48  y     1.5  rock over   15.7  rise 0.001  off 0.7/7.6  post 0  v 4.4
+        2.8s  ring 288  in    1  past-end  -3.63  y     1.5  rock over   15.5  rise 0.001  off 0.7/7.5  post 0  v 4.4
+          3s  ring 289  in    1  past-end  -2.77  y     1.5  rock over   15.3  rise 0.001  off 0.6/7.5  post 0  v 4.4
+        3.2s  ring 290  in    1  past-end  -1.92  y     1.5  rock over   15.1  rise 0.006  off 0.4/7.5  post 0  v 4.4
+        3.4s  ring 292  in    1  past-end  -1.07  y     1.6  rock over   14.8  rise 0.002  off 0.3/7.5  post 0  v 4.4
+        3.6s  ring 293  in    1  past-end  -0.21  y     1.6  rock over   14.5  rise 0.002  off 0.1/7.3  post 0  v 4.4
+        3.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 1.67
+          4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.43
+        4.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.37
+        4.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 1.07
+        4.6s  ring 293  in    1  past-end  -0.17  y     1.6  rock over   14.5  rise 0  off 0.1/7.3  post 0  v 1.85
+        4.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.5  rise 0  off 0.4/6.9  post 0  v 3.09
+          5s  ring 293  in    1  past-end      0  y     1.6  rock over   14.5  rise 0  off 0.5/6.9  post 0  v 4.01
+        5.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.5  rise 0  off 0.4/6.9  post 0  v 2.46
+        5.4s  ring 293  in    1  past-end  -0.14  y     1.6  rock over   14.5  rise 0.009  off 0.3/7.3  post 0  v 1.95
+        5.6s  ring 292  in    1  past-end  -0.51  y     1.6  rock over   14.6  rise 0.004  off 0.1/7.3  post 0  v 3.33
+        5.8s  ring 293  in    1  past-end  -0.35  y     1.6  rock over   14.4  rise 0.002  off 0.8/7.2  post 0  v 3.58
+          6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.2  rise 0  off 1/6.9  post 0  v 2.02
+        6.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.3  rise 0.001  off 0.6/6.9  post 0  v 2.67
+        6.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0.002  off 0/6.9  post 0  v 3.15
+        6.6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 1.43
+        6.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.74
+          7s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.43
+        7.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.14
+        7.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 2.21
+        7.6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.27
+        7.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.5  rise 0  off 0.1/6.9  post 0  v 2.74
+          8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 3.98
+        8.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.83
+        8.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 3.38
+        8.6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 1.3
+        8.8s  ring 293  in    1  past-end  -0.02  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 1.92
+          9s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0.001  off 0/6.9  post 0  v 2.06
+        9.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 0.3
+        9.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.41
+        9.6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.36
+        9.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 2.47
+         10s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 3.92
+       10.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 2.13
+       10.4s  ring 293  in    1  past-end  -0.06  y     1.6  rock over   14.5  rise 0  off 0.1/6.9  post 0  v 0.95
+       10.6s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 0.6
+       10.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.46
+         11s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 0.36
+       11.2s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 1.92
+       11.4s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 2.93
+       11.6s  ring 293  in    1  past-end  -0.02  y     1.6  rock over   14.4  rise 0  off 0.1/6.9  post 0  v 1.55
+       11.8s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0.2/6.9  post 0  v 3.45
+         12s  ring 293  in    1  past-end      0  y     1.6  rock over   14.4  rise 0  off 0/6.9  post 0  v 2.57
+
+PASS: 6 termini walked into at running speed — never left containment, never teleported, stopped at the end wall, and every one opens out
+
+========================================================================
+  CAVE GATES — 10 run in 1010s
+========================================================================
+  pass  check         1s
+  pass  normals      26s
+  pass  roof         18s
+  pass  mouth        15s
+  pass  floor        22s
+  pass  walk        141s
+  pass  branch      538s
+  pass  junction     82s
+  pass  seal         20s
+  pass  end         147s
+
+all 10 cave gates passed

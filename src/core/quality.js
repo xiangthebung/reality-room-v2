@@ -178,8 +178,57 @@ export const KNOBS = [
      * camera stations the level-consistency work measures, so it is one of the
      * few graphics knobs that changes the frame's cost without changing what
      * the frame is a picture of.
+     *
+     *
+     * ULTRA DROPPED FROM 4 TO 2, WHICH IS THE SECOND TIME ULTRA HAS PAID FOR A
+     * DIFFERENCE NOBODY CAN SEE. The first was the 4096 shadow map above.
+     *
+     * `perf:why` undoes one lever at a time against the shipping config and
+     * reports what the frame costs without it. At the canopy station on a
+     * 9070 XT at 2560x1440, on a 4.97 ms frame:
+     *
+     *     instance culling off   +2.51 ms   (+50%)
+     *     render scale 1.4x      +2.35 ms   (+46%)
+     *     shadow cache off       +1.89 ms   (+38%)
+     *     MSAA 2 -> MSAA 4       below the noise floor
+     *     bloom off              below the noise floor
+     *
+     * "Below the noise floor" as a LEVER is not the same as free: measured as
+     * an absolute, the fourth and fifth samples cost 0.31-0.82 ms depending on
+     * the station. What it means is that `perf:why` — which is the instrument
+     * that decides what a frame is made of — cannot tell the two pictures
+     * apart, and neither can anybody looking at them. The extra samples land on
+     * alpha-tested leaf edges that are already 85-99% fogged and already
+     * softened by the glow.
+     *
+     * SO WHY NOT SPEND THE MILLISECOND ON SOMETHING VISIBLE, which is what the
+     * shadow-map block did with its 2.78 ms. Because there is nothing left to
+     * spend it on that fits, and because Ultra is not currently meeting the
+     * target it exists for. The brief is a stable 240 fps on this part, which is
+     * 4.17 ms; measured, Ultra is 4.06 / 5.12 / 4.08 ms standing at clearing /
+     * deep / canopy and about 7.15 ms deep while moving, because walking is what
+     * makes the sun anchor step and re-renders the shadow map. A preset that
+     * misses its own target at two stations out of three standing still, and at
+     * every station in motion, has no business buying scenery — and every knob
+     * Ultra could buy scenery WITH is already at its ceiling here (shafts 100%,
+     * mist 5 layers, motes 100%, tree distance 384 m). The one that is not is
+     * `shadowMapSize`, and 4096 was measured at +2.78 ms, which is six times the
+     * budget this change reclaims.
+     *
+     * WHAT ULTRA STILL IS, so that it remains a tier: 100% of the sun-shaft
+     * lattice against High's 75%, five mist layers against three, and the whole
+     * mote cloud against 70% of it. Those are the differences you can see from
+     * across the room and they are what the shadow-map millisecond already
+     * bought. What Ultra no longer is, is High with more samples on the same
+     * edges.
+     *
+     * 4x IS STILL IN THE OPTION LIST above and is one click away, deliberately.
+     * This is a statement about what the ladder should DEFAULT to on a machine
+     * that has not been asked, not a claim that nobody may ever want it. If the
+     * shadow-cadence work frees two milliseconds, putting the 4 back is a
+     * one-character revert and it is the first thing to try.
      */
-    presets: [0, 0, 0, 2, 4],
+    presets: [0, 0, 0, 2, 2],
     hint: 'Multisampling on the scene buffer. Off makes the canopy fizz.',
   },
   {
@@ -226,13 +275,52 @@ export const KNOBS = [
      * the frame to begin with, which is exactly where a shadow is doing the
      * most work.
      *
-     * The long-term answer is two 2048 cascades, near and far — roughly double
-     * today's near crispness for about half today's cost — and it is a bigger
-     * change than this pass should carry.
+     * THE CASCADE PLAN THAT USED TO BE RECOMMENDED HERE IS WITHDRAWN, and it is
+     * worth saying why rather than deleting it, because the reasoning that
+     * produced it was correct at the time and is now exactly backwards.
+     *
+     * "Two 2048 cascades, near and far — roughly double today's near crispness
+     * for about half today's cost" was written while Ultra ran a 4096 map:
+     * 2 x 4.2 M texels against 16.8 M really is half. This preset is a single
+     * 2048 now, so the same proposal is 8.4 M against 4.2 M. It doubles the pass.
+     * The shadow pass is pure fill over the map's texels (see the block on the
+     * ortho box in atmosphere.js for the cancellation that proves it), so a
+     * second cascade is a second full-price map however tightly it is fitted.
+     *
+     * What is left is the one lever the fill argument does NOT kill: removing
+     * CASTERS while leaving the box where it is, so the texels they vacate stay
+     * empty. That is forest.js's to make, not this file's.
+     *
+     *
+     * ==== AND THEN ULTRA DROPPED AGAIN, 2048 -> 1024, FOR 240 fps ==========
+     *
+     * The requirement moved: 240 fps, which is 4.166 ms, and the frame that has
+     * to fit it is the one the sun's ANCHOR STEP LANDS ON — `gpu + shadow`
+     * rather than `gpu`. A standing player was already inside budget at 3.95 ms;
+     * the frame in which the map refreshes was 5.77 ms at the deep station,
+     * which on a 240 Hz panel is a dropped frame the player sees as a hitch
+     * every metre and a half of walking. Averaging that away would be cheating.
+     *
+     * So the ladder no longer has a shadow rung at all — every preset is 1024 —
+     * and the row above is left standing because the reasoning in it is still
+     * why 4096 is not coming back. What the four rungs differ by now is the
+     * BOX, which the cancellation in atmosphere.js says is free, and the reach
+     * band, which is `treeReach` below.
+     *
+     * THE PICTURE DID NOT COST WHAT HALVING A MAP USUALLY COSTS, because the
+     * box came down with it: 58 -> 40 m holds the texel at 7.81 cm instead of
+     * letting it stretch to 11.33. `shadow-visible.mjs` measured the whole
+     * change at 0.14 of 255 mean over four ground stations, against 0.22 for
+     * halving the map alone. What is actually lost is 18 m of shadow RANGE.
+     *
+     * 2048 AND 4096 STAY IN THE MENU. This is an Advanced knob and a player who
+     * would rather have the sharper dapple than the 240 can still say so — the
+     * options list is not the preset row, and taking a choice away from the
+     * panel is not the same as taking it off the ladder.
      */
-    presets: [1024, 1024, 1024, 2048, 2048],
+    presets: [1024, 1024, 1024, 1024, 1024],
     dependsOn: 'shadows',
-    hint: 'Shadow map resolution across a 116 m box.',
+    hint: 'Shadow map resolution across an 80 m box.',
   },
   {
     /**
@@ -524,6 +612,57 @@ export const KNOBS = [
      * anti-aliasing off" and nothing else. Three of the five rungs were the same
      * scene. The knob existed by then; the rungs simply were not using it.
      */
+    /**
+     * ULTRA'S ROW IS NO LONGER THE ROW WITH NO ASYMMETRY IN IT, and that is the
+     * single biggest cut the 240 fps requirement made to the picture.
+     *
+     * Every rung but the top paired a short `leafReach` with a longer `reach`,
+     * on the measured fact that a leaf triangle costs about ten times a trunk
+     * one. Ultra alone read `{ lod: 170, leafReach: 384 }` — canopy geometry all
+     * the way to the edge of the world, and therefore an impostor band of
+     * `(384, 384]`, empty. So the one rung that could least afford it was the
+     * one rung drawing full crowns at 380 m.
+     *
+     * It now reads `{ lod: 120, leafReach: 160 }`: full trunk detail to 120 m,
+     * the reduced sweep from there to 160, full canopy to 160, and past that
+     * each tree is one quad reading a 64-view atlas of itself. Measured by
+     * `ultracut.mjs` at the perf rig, preset pinned at ultra, A-B-B-A, on the
+     * ARMED frame (scene + post + shadow):
+     *
+     *     station    leafReach 384->170   and then lod 170->120
+     *     deep                 +1.46 ms                 +0.49 to +0.74
+     *     clearing             +0.85                    +0.32
+     *     canopy               +0.34                    +0.32
+     *
+     * THE SECOND STEP IS `lod`, AND THAT IS WHERE THE LAST HALF-MILLISECOND
+     * CAME FROM once the canopy had already been cut. `lod` is the near/far
+     * trunk handover, and the trunk it removes is 2160-5940 triangles against
+     * the reduced sweep's 216-594 — so moving it from 170 to 120 m deletes ten
+     * times its own weight in vertex work from the ring where the trees are
+     * still numerous. `branch-visible.mjs` measured the pixel cost of exactly
+     * this move at the bottom of the ladder: `lod 30` is 0.02 of 255 and
+     * `lod 12` is 0.41, against a `lod` of 120 here, which is far above either.
+     *
+     * WHAT IT COSTS TO LOOK AT is already in the table this block opens with,
+     * and it is the reason this was the first cut rather than the last: at every
+     * eye-level station `reach-visible.mjs` puts a reach change at 0.00-0.05% of
+     * pixels, because the wood occludes itself and a rainforest does not contain
+     * a 160 m sightline. It is visible from ABOVE the canopy, where the band
+     * takes over — measured at 4.50% of pixels and 0.41 of 255 mean at the
+     * `leafReach` handover, against 14.69% and 2.69 for a reach cut without a
+     * band. The trees past 160 m are billboards, and between 120 and 160 m they
+     * are boles carved from a coarser sweep. From the ground you cannot tell;
+     * from a hilltop looking down, the far wood is slightly flatter.
+     *
+     * AND THE TOP TWO RUNGS ARE STILL THE SAME PICTURE, which this change had a
+     * chance to fix and did not. A 300 m row was written for High and then taken
+     * out again: once Ultra's own row had to come down to `lod 120` to make
+     * 4.166 ms, there was nowhere left between Medium and Ultra to put High that
+     * was worth a menu entry. Every lever large enough to separate them is spent
+     * on the ceiling. `ultra -> high` therefore still measures 0.00 ms, and the
+     * honest reading is that Ultra's extra mist, shafts and motes are free
+     * rather than that High is missing something.
+     */
     presets: [120, 180, 250, 384, 384],
     hint: 'How deep the wood is drawn. The only setting here that removes geometry rather than pixels.',
   },
@@ -580,6 +719,150 @@ export const KNOBS = [
     kind: 'toggle',
     presets: [false, true, true, true, true],
     hint: 'Midges, fireflies and butterflies. Birds and animals are not affected.',
+  },
+  {
+    /**
+     * HOW OFTEN THE CULLER RE-DECIDES WHAT IS BEHIND YOU — the first knob on
+     * this page whose whole purpose is to trade GPU time for MAIN-THREAD time,
+     * in that direction, on purpose.
+     *
+     * WHY THIS EXISTS. `npm run perf:weak` throttles the main thread, which is
+     * the half of the budget a Chromebook runs out of first, and its table is
+     * the reason every other knob on this page had run out of things to say:
+     *
+     *     level    station     cpu   p50 ms   fps    late   draws     tris
+     *     potato   deep         4x    16.70   59.9     1%      96    2.21M
+     *     potato   deep         8x    33.30   30.0    64%      96    2.21M
+     *     low      deep         8x    33.30   30.0    62%     111    5.24M
+     *
+     * Potato and Low are INDISTINGUISHABLE under throttle. Both hold 60 Hz at
+     * 4x and both fall to exactly half rate at 8x, despite Potato drawing 58%
+     * fewer triangles — because the ladder above removes triangles and pixels
+     * and neither of those is what a slow core is paying for. Setting
+     * `shaftDensity`, `mistLayers` and `particleDensity` to zero and
+     * `instanceDensity` to 0.25 all at once, i.e. everything the menu could
+     * still take away below potato, saved 0.00 ms.
+     *
+     * WHAT A SLOW CORE IS ACTUALLY PAYING FOR is the repack. `InstanceCuller`
+     * re-derives the visible set after 2.5 m of travel or ~3 degrees of turn,
+     * and `perf:uploads` records a median of 6 735 and a p99 of 14 285 instances
+     * re-copied per repack across thirty-odd layers — plus a distance test over
+     * every bucket of every layer, thousands of them, whether or not anything
+     * changed. Three degrees is a flick of the wrist: while a player is looking
+     * around, that fires every second or third frame.
+     *
+     * SO THIS SLOWS THE CADENCE DOWN, AND PAYS FOR IT IN MARGIN. The two are
+     * inseparable and that is the only interesting thing about this knob. The
+     * packer tests each bucket sphere with a margin wide enough to cover
+     * everything that can happen between repacks, so a repack that fires a third
+     * as often has three times as much drift to absorb. See `setCadence` in
+     * world/culling.js for the arithmetic, which is: translation drift grows
+     * linearly with the cadence, and rotational drift grows as
+     * `distance x sin(turn)` — so the extra margin is applied PER BUCKET in
+     * proportion to how far away it is, and cadence 1 reproduces today's flat
+     * 12 m exactly, to the bit.
+     *
+     * WHAT THE MARGIN COSTS is instances submitted that the frustum would have
+     * rejected, and it is much less than it sounds, because the bucket's own
+     * radius already dominates. At potato's 120 m reach the buckets are 18-44 m
+     * across, so the effective accepted cone is already about 155 degrees rather
+     * than the frustum's 100; cadence 3 widens it to about 183, which is of the
+     * order of a fifth more instances. On the machine this rung exists for that
+     * is a fifth more of 2.21 M triangles against a third of the repacks, and
+     * the GPU on that machine is not the thing that is late.
+     *
+     * REJECTED: DROPPING THE FRUSTUM TEST ENTIRELY AT POTATO. It is the tidy
+     * version of this idea — with no frustum test, TURNING STOPS TRIGGERING A
+     * REPACK AT ALL and the cadence becomes a pure function of walking. It is
+     * also about 3.5x the instances, because a 100-degree frustum is
+     * roughly 28% of the circle, and `perf:why` prices submitting everything at
+     * +2.51 ms on a 9070 XT. A Chromebook would not survive it. The frustum test
+     * stays; only how often it is re-run moves.
+     *
+     * HIGH AND ULTRA ARE PINNED AT 1 AND THE ARITHMETIC IS EXACT THERE. At
+     * cadence 1 the thresholds are 2.5 m and 3 degrees and the margin is a flat
+     * 12 m, which is what this project has shipped and what `check:cull`'s
+     * zero-pixel-diff requirement has been standing over. Nothing about the
+     * frame those two rungs draw moves.
+     */
+    id: 'cullCadence',
+    group: 'graphics',
+    advanced: true,
+    label: 'Visibility updates',
+    kind: 'enum',
+    options: [
+      { value: 1, label: 'Every step' },
+      { value: 2, label: 'Relaxed' },
+      { value: 3, label: 'Sparing' },
+    ],
+    /**
+     * Medium is 2 rather than 1, and that is the one row here that is a judgment
+     * rather than a measurement. `probeLevel` above clamps a four-thread machine
+     * and a 4 GB machine to `medium` whatever their GPU says, so Medium is not
+     * only "an integrated graphics part" — it is also the rung every
+     * CPU-constrained machine that is not quite a Chromebook lands on, and those
+     * are exactly the machines with a GPU that can absorb a wider margin and a
+     * core that cannot absorb the repack.
+     */
+    presets: [3, 2, 2, 1, 1],
+    hint:
+      'How often the game re-decides what is behind you and need not be drawn. ' +
+      'Fewer updates is much less work for a slow processor and a little more work for the graphics card.',
+  },
+  {
+    /**
+     * THE FAR BAND OF THE WOOD, AND THE FIRST KNOB THAT REMOVES A WHOLE SYSTEM
+     * RATHER THAN THINNING ONE.
+     *
+     * Past `leafReach` every tree is one camera-facing quad reading a
+     * hemi-octahedral atlas of itself (src/render/impostor.js). It exists for
+     * exactly one failure: above the canopy, a shortened reach deletes the
+     * TREELINE, and fog cannot put a silhouette where there is no surface.
+     * Measured by `impostor-ab.mjs` at +70 m, differing pixels against a
+     * full-reach reference:
+     *
+     *     rung      before             after
+     *     medium    14.69%  mean 2.69   4.64%  mean 0.43
+     *     low       25.39%       4.28  13.02%       1.09
+     *     potato    31.27%       6.01  18.42%       1.65
+     *
+     * and 0.00-0.04% at every eye-level station, before and after. It is a large
+     * fix to a view a player is rarely at, and nothing at the view they are
+     * always at.
+     *
+     * WHICH IS WHY POTATO GIVES IT UP. Fifteen archetypes is fifteen more
+     * `InstancedMesh`es for the scene graph to walk, fifteen more render-list
+     * inserts, fifteen more draws when they hold anything, and fifteen more
+     * bucket lists for every repack to scan — on the rung whose measured problem
+     * is that it submits 96 draws to a core that cannot afford them. It is also
+     * fifteen 1024x1024 RGBA atlases, 60 MB of VRAM, on the machine with the
+     * least of it; `bakeRendererReady` in impostor.js declines to hand the
+     * forest a renderer while this is off, so a session that starts on potato
+     * never bakes them at all and never spends the fifteen frames doing it.
+     *
+     * THE PRICE IS STATED PLAINLY: potato's above-canopy view goes back to
+     * 31.27% of pixels wrong — a bare heightfield running to the horizon with no
+     * treeline on it. The owner's brief for this rung is "missing visuals is
+     * perfectly fine on potato — better being able to chat with your friends and
+     * see them rather than 10 fps", and a skyline you see when you climb beats
+     * nothing only if the game is running when you get there.
+     *
+     * TRUE AT HIGH AND ULTRA COSTS NOTHING WHATEVER, and that is not an
+     * approximation. At those two rungs `leafReach` EQUALS `treeReach`, so the
+     * band is empty by construction; `packSlab.update` early-outs on
+     * `minDistance >= maxDistance` before it touches a bucket, and the mesh is
+     * never visible. The value is `true` there so that moving `treeReach` down
+     * by hand still gets the band back.
+     */
+    id: 'impostorBand',
+    group: 'graphics',
+    advanced: true,
+    label: 'Distant treeline',
+    kind: 'toggle',
+    presets: [false, true, true, true, true],
+    hint:
+      'Trees past the canopy distance, drawn as one flat sprite each. ' +
+      'Only visible from above the canopy; off saves fifteen draw calls and 60 MB of texture.',
   },
   {
     id: 'particleDensity',
@@ -1390,7 +1673,18 @@ export class Settings {
      * than like a settings bug. Under webdriver the level stays wherever it was
      * seeded and nothing moves it.
      */
-    this.automated = Boolean(navigator.webdriver);
+    /**
+     * `typeof` rather than a bare read, because this module is now imported by
+     * one that a NODE script imports directly: `scripts/perf/slab-equiv.mjs`
+     * pulls `packSlab` out of world/culling.js, culling.js registers its own
+     * knobs here (see the registry note at the top of this file), and importing
+     * this module therefore runs this constructor outside a browser. `navigator`
+     * is a global from Node 21 and is not one on Node 20, which package.json
+     * still declares as the floor — so the bare read is a ReferenceError that
+     * takes out `npm run check:slab` on exactly the machines that read the
+     * engines field.
+     */
+    this.automated = typeof navigator !== 'undefined' && Boolean(navigator.webdriver);
   }
 
   /* ---- values --------------------------------------------------------- */
